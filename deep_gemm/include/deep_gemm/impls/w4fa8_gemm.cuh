@@ -31,7 +31,7 @@ using deep_gemm::GemmType;
 template <int ShapeN, int ShapeK, int BlockM, int BlockN, int BlockK, int WarpM, int WarpN, int WarpK, int kNumGroups,
           int kNumStages, GemmType kGemmType, int N_EXPAND = 1, bool ApplyInvScale = false,
           deep_gemm::w4fa8::NativeStrategy Strategy = deep_gemm::w4fa8::NativeStrategy::Default,
-          class SchedulerAdapter = void>
+          class SchedulerAdapter = void, bool AffineRows = false>
 class W4A8GEMM_MMA {
 public:
   static constexpr bool Routed = Strategy == deep_gemm::w4fa8::NativeStrategy::Routed;
@@ -43,6 +43,7 @@ public:
   static constexpr int DecodeN = Routed ? 1 : SharedPrefix ? 2 : WarpN / 16;
   // A narrow ring bounds live A operands for wide routed tiles.
   static constexpr int ADistance = Routed ? 1 : -1;
+  static constexpr bool EarlyA = Routed && (Fused || BlockM == 160);
   static_assert(!Compact || (N_EXPAND == 1 && BlockK == WarpK));
   static_assert(WarpN == 16 || WarpN == 32 || WarpN == 48 || WarpN == 64);
   static_assert(N_EXPAND >= 1 && N_EXPAND <= 4);
@@ -116,12 +117,15 @@ public:
 
   // sA
   static constexpr int AlignA = 128 / cutlass::sizeof_bits<ElementA>::value;
+  static constexpr int ACopyThreadsK = cute::min(MaxThreadsPerBlock, cute::min(BlockK, 128) / AlignA);
+  static constexpr int ACopyRows = MaxThreadsPerBlock / ACopyThreadsK;
+  static constexpr int AStorageM = Routed ? ((BlockM + ACopyRows - 1) / ACopyRows) * ACopyRows : BlockM;
   using ACopyInst = cute::PPU_CP_ASYNC_CACHEALWAYS_ZFILL<cutlass::uint128_t>;
   using FusedOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<ArchTag, ElementA, false, AlignA, Int<BlockK>,
-                                                                   MaxThreadsPerBlock, ACopyInst, Int<BlockM>>;
+                                                                   MaxThreadsPerBlock, ACopyInst, Int<AStorageM>>;
   using DefaultOperandA =
       cute::conditional_t<Fused, FusedOperandA,
-                          cutlass::gemm::config::DefaultGemm_AIU_Operand<ArchTag, ElementA, false, Int<BlockM>,
+                          cutlass::gemm::config::DefaultGemm_AIU_Operand<ArchTag, ElementA, false, Int<AStorageM>,
                                                                          Int<BlockK>, false, 0, true>>;
   using SmemLayoutAtomA = typename DefaultOperandA::SmemLayoutAtom;
   using SmemCopyAtomA = typename DefaultOperandA::SmemCopyAtom;
@@ -129,7 +133,7 @@ public:
   using TilerA = typename GmemTiledCopyA::Tiler_MN;
   using CopyAConfig = deep_gemm::CopyAToTsmConfig<ElementA, TilerA, BlockM, BlockK, MaxThreadsPerBlock>;
   using SmemLayoutA =
-      decltype(tile_to_shape(SmemLayoutAtomA{}, make_shape(Int<BlockM>{}, Int<BlockK>{}, Int<ASlots>{})));
+      decltype(tile_to_shape(SmemLayoutAtomA{}, make_shape(Int<AStorageM>{}, Int<BlockK>{}, Int<ASlots>{})));
 
   // sW => fp4 weights
   using TilerB = Shape<Int<BlockN>, Int<BlockK2>>;
@@ -200,6 +204,17 @@ public:
     const int* sorted_token_ids;
     typename TileScheduler::Params scheduler;
   };
+
+  template <int AffineStages>
+  CUTLASS_DEVICE static void run_affine(Params const& p, char* smem) {
+    using Fast = W4A8GEMM_MMA<ShapeN, ShapeK, BlockM, BlockN, BlockK, WarpM, WarpN, WarpK,
+                             kNumGroups, AffineStages, kGemmType, N_EXPAND, ApplyInvScale,
+                             Strategy, SchedulerAdapter, true>;
+    static_assert(sizeof(typename Fast::SharedStorage) <= sizeof(SharedStorage));
+    typename Fast::Params args{p.ptr_a, p.ptr_b, p.ptr_scale, p.ptr_d, p.ptr_a_scale,
+                               p.num_token, p.inv_scale, p.sorted_token_ids, p.scheduler};
+    Fast{}(args, smem);
+  }
 
   // for constexpr patial initialize
   struct NoTensor {};
@@ -408,6 +423,13 @@ public:
 
       Tensor cD = make_identity_tensor(make_shape(Int<BlockM>{}, Int<BlockN>{}));
       uint32_t token_offsets[CopyAConfig::M_ITER];
+      constexpr bool use_affine_a = AffineRows && Fused && Routed;
+      cute::AiuDesc affine_desc;
+      const ElementA* affine_base = nullptr;
+      if constexpr (use_affine_a) {
+        affine_desc.init(nullptr, deep_scheduler.valid_m_in_block, K, deep_scheduler.affine_stride * K);
+        affine_base = params.ptr_a + int64_t(deep_scheduler.affine_first) * K;
+      }
       auto [tAgA, residual_m, gD] = [&]() {
         if constexpr (!Fused) {
           int M = deep_scheduler.curr_group_m;
@@ -433,6 +455,7 @@ public:
             else
               return deep_scheduler.cumsum_m_block_idx * BlockM;
           }();
+          if constexpr (!use_affine_a) {
           if constexpr (Routed) {
             // Internal tiles can extend beyond the original expert padding.
             // Never read token metadata for those rows.
@@ -450,6 +473,7 @@ public:
           }
           deep_gemm::clear_invalid_A_to_tsm<ElementA, TilerA, BlockM, BlockK, K, kNumStages>(
               tAsA, params.ptr_a, token_offsets, params.num_token, thread_idx, Int<MaxThreadsPerBlock>{});
+          }
           Tensor mD_mn = make_tensor(make_gmem_ptr(params.ptr_d + int64_t(deep_scheduler.curr_block_m_offset) * N),
                                      make_shape(Int<BlockM>{}, Int<N>{}), strideD); // (m,n)
           Tensor gD =
@@ -464,6 +488,7 @@ public:
       const ElementA* token_rows[CopyAConfig::M_ITER];
       bool valid_tokens[CopyAConfig::M_ITER];
       if constexpr (Fused && Routed) {
+        if constexpr (!use_affine_a)
 #pragma unroll
         for (int mi = 0; mi < CopyAConfig::M_ITER; ++mi) {
           valid_tokens[mi] = token_offsets[mi] < uint32_t(params.num_token);
@@ -479,7 +504,9 @@ public:
           const bool valid = thread_idx < residual_m;
           int64_t scale_row = 0;
           if (valid) {
-            if constexpr (Fused)
+            if constexpr (use_affine_a)
+              scale_row = deep_scheduler.affine_first + int64_t(thread_idx) * deep_scheduler.affine_stride;
+            else if constexpr (Fused)
               scale_row = params.sorted_token_ids[deep_scheduler.token_base + thread_idx];
             else
               scale_row = deep_scheduler.curr_offset_a() / K + m_block_idx * BlockM + thread_idx;
@@ -489,7 +516,14 @@ public:
         }
 
       auto g2s_copy_A = [&](int k_tile_iter, int k_pipe) {
-        if constexpr (!Fused) { // aiu copy
+        if constexpr (use_affine_a) {
+          if (warp_idx == 0) {
+            using Copy = cute::PPU0015_AIU_LOAD<Int<AStorageM * BlockK * 8>, ElementA,
+                                              false, AStorageM, BlockK, true>;
+            Copy::copy(storage.smem_a.data() + AStorageM * BlockK * k_pipe,
+                       affine_base, affine_desc, k_tile_iter * BlockK, 0);
+          }
+        } else if constexpr (!Fused) { // aiu copy
           if (warp_idx == 0) {
             copy(gmem_tiled_copy_A, tAgA(_, _, _, k_tile_iter), tAsA(_, _, _, k_pipe));
           }
@@ -516,10 +550,15 @@ public:
               for (int ki = cohort; ki < CopyAConfig::K_ITER; ki += CopyAConfig::KCohorts) {
                 const auto* src = reinterpret_cast<const cutlass::uint128_t*>(
                     row + ki * CopyAConfig::TILER_N + tk * CopyAConfig::KPerThread +
-                    BlockK * k_tile_iter);
+                    (Routed ? 0 : BlockK * k_tile_iter));
                 auto* dst = reinterpret_cast<cutlass::uint128_t*>(raw_pointer_cast(tAsA(_, mi, ki, k_pipe).data()));
                 deep_gemm::FusedACopyInst::copy(*src, *dst, valid);
               }
+              // The routed pipeline issues K tiles in order, including the
+              // prologue. Carry each row pointer forward instead of forming
+              // a wide multiply-add from the tile index for every copy.
+              if constexpr (Routed)
+                token_rows[mi] += BlockK;
             }
           }
         }
@@ -837,7 +876,7 @@ public:
                 constexpr int kb = decltype(ki)::value;
                 if constexpr (kb % 2 == 0)
                   s2r_copy_B_and_scale_slice(stage_idx, kb / 2);
-                if constexpr (ADistance > 0 && BlockM == 160) {
+                if constexpr (ADistance > 0 && EarlyA) {
 #pragma unroll
                   for (int mb = 0; mb < ADistance && mb < UsedM; ++mb)
                     copy(smem_tiled_copy_A, tCsA(_, mb, kb, stage_idx), tCrA_copy_view(_, mb, Int<0>{}));
@@ -886,7 +925,7 @@ public:
                   };
 #pragma unroll
                   for (int mb = 0; mb < ADistance && mb < UsedM; ++mb)
-                    if constexpr (BlockM != 160)
+                    if constexpr (!EarlyA)
                       load_a(mb);
 #pragma unroll
                   for (int mb = 0; mb < UsedM; ++mb) {
