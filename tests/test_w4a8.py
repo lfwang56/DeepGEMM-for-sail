@@ -1092,6 +1092,72 @@ def test_streamed_n_tail():
     assert calc_diff(output, reference()) < .003
 
 
+def test_routed_fused_partition_replay_updates():
+    # Enough K-tile work to admit both internal routed tiles. Routes cross
+    # lower-only, mixed, upper-only and empty-expert cases in the same Graph.
+    torch.manual_seed(202611010719)
+    groups, tokens, topk, n, k = 193, 3860, 8, 768, 3584
+    lhs, rhs, output, call, reference, packed, scales, _, reroute = _streamed_fused_problem(
+        groups, tokens, topk, n, k)
+    call()
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        call()
+    slots = torch.arange(tokens * topk, device='cuda').reshape(tokens, topk)
+    for active in (groups, groups - 1, groups // 2, 1):
+        routes = (slots % active).int()
+        packed.random_(0, 256)
+        scales.random_(119, 133)
+        weights, weight_scales, inv_scale = deep_gemm.preprocess_weights_and_scales(
+            deep_gemm.PreprocessMode.W4A8_MXFP4_MMA, False, packed, scales)
+        assert inv_scale == 1.
+        rhs[0].copy_(weights)
+        rhs[1].copy_(weight_scales)
+        lhs[0].copy_(torch.randn_like(lhs[0].float()).to(lhs[0].dtype))
+        lhs[1].uniform_(.25, 1.25)
+        reroute(routes)
+        output.fill_(float('nan'))
+        graph.replay()
+        torch.cuda.synchronize()
+        assert torch.isfinite(output).all()
+        assert calc_diff(output, reference(routing=routes)) < .003
+
+
+def test_routed_affine_copy_replay_updates():
+    # E192/Top8 is affine, E191/Top8 changes the stride between rows.
+    # E128/E160 exercise partial paired tiles, E96 full paired tiles,
+    # and E1 moves all work to the other queue.
+    # The same captured graph must observe each route and tensor update.
+    torch.manual_seed(202611010923)
+    groups, tokens, topk, n, k = 192, 3840, 8, 768, 3584
+    lhs, rhs, output, call, reference, packed, scales, _, reroute = _streamed_fused_problem(
+        groups, tokens, topk, n, k)
+    call()
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        call()
+    slots = torch.arange(tokens * topk, device='cuda').reshape(tokens, topk)
+    for active in (groups, groups - 1, 128, 160, groups // 2, 1):
+        routes = (slots % active).int()
+        packed.random_(0, 256)
+        scales.random_(119, 133)
+        weights, weight_scales, inv_scale = deep_gemm.preprocess_weights_and_scales(
+            deep_gemm.PreprocessMode.W4A8_MXFP4_MMA, False, packed, scales)
+        assert inv_scale == 1.
+        rhs[0].copy_(weights)
+        rhs[1].copy_(weight_scales)
+        lhs[0].copy_(torch.randn_like(lhs[0].float()).to(lhs[0].dtype))
+        lhs[1].uniform_(.25, 1.25)
+        reroute(routes)
+        output.fill_(float('nan'))
+        graph.replay()
+        torch.cuda.synchronize()
+        assert torch.isfinite(output).all()
+        assert calc_diff(output, reference(routing=routes)) < .003
+
+
 if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -1119,6 +1185,8 @@ if __name__ == '__main__':
         test_streamed_fused_compile_only_capture_fallback()
         test_streamed_nopad_replay_updates()
         test_streamed_compile_only_capture_fallback()
+        test_routed_fused_partition_replay_updates()
+        test_routed_affine_copy_replay_updates()
         test_routed_fused_metadata_layout()
         test_routed_fused_small_expert_set()
         test_nopad_expert_limit()

@@ -10,12 +10,16 @@
 #include "../../utils/utils.hpp"
 
 namespace deep_gemm::w4fa8 {
+
 struct W4A8Config {
     int num_sms;
     int block_m, block_n, block_k;
     int warp_m, warp_n, warp_k;
     int num_stages, n_expand;
 };
+// AIU rows avoid the software gather latency that requires a deeper A ring.
+static int routed_affine_stages(const W4A8Config& c) { return std::min(2, c.num_stages); }
+
 using W4A8ConfigTuple = std::tuple<int, int, int, int, int, int, int, int, int>;
 
 static W4A8Config unpack_config(const W4A8ConfigTuple& tuple) {
@@ -123,8 +127,13 @@ static W4A8Config small_m_config(int expected_m, int n = 256, GemmType kind = Ge
 
 static int specialized_smem_size(const W4A8Config& c, int k, bool routed, bool prefix = true) {
     const int base = get_smem_size(c, k);
-    if (routed)
-        return base + ((2 * c.block_m * int(sizeof(float)) + 127) / 128) * 128;
+    if (routed) {
+        const int threads = get_num_threads(c);
+        const int copy_rows = threads / std::min(threads, std::min(c.block_k, 128) / 16);
+        const int a_rows = ceil_div(c.block_m, copy_rows) * copy_rows;
+        return base + (a_rows - c.block_m) * c.block_k * c.num_stages +
+               ((2 * c.block_m * int(sizeof(float)) + 127) / 128) * 128;
+    }
     return base + (prefix && c.block_m == 32 ? 2 * 64 * int(sizeof(uint32_t)) : 0);
 }
 
@@ -152,9 +161,18 @@ static NativeStrategy small_m_strategy(const W4A8Config& c, GemmType kind) {
                                                                                 : NativeStrategy::Compact;
 }
 
-static W4A8Config routed_config(bool small) {
-    const int bm = small ? 160 : 192;
-    return {get_num_sms(), bm, 256, 128, bm, 32, 128, small ? 2 : 3, 1};
+static W4A8Config routed_config(bool small, GemmType kind = GemmType::MGroupedNoPad) {
+    const int bm = small ? 160 : kind == GemmType::MGroupedFused ? 176 : 192;
+    const int stages = kind == GemmType::MGroupedFused ? (small ? 3 : 2) : (small ? 2 : 3);
+    return {get_num_sms(), bm, 256, 128, bm, 32, 128, stages, 1};
+}
+
+// A second persistent launch must have enough K-tile work to amortize its
+// empty-queue cost. This bound is independent of the current routing values.
+static bool routed_partition_eligible(const W4A8Config& c, int m, int n, int k) {
+    constexpr int min_k_steps_per_cu = 256;
+    const int64_t steps = int64_t(ceil_div(m, c.block_m)) * ceil_div(n, c.block_n) * (k / c.block_k);
+    return steps >= int64_t(c.num_sms) * min_k_steps_per_cu;
 }
 
 static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, const W4A8Config& original) {
@@ -167,29 +185,34 @@ static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, cons
     // Small expert sets need several waves to repay the device metadata pass.
     if (groups <= 64 && int64_t(ceil_div(m, 192)) * (n / 256) < int64_t(get_num_sms()) * 4)
         return false;
-    // Avoid wide tiles when extra padding outweighs their decode reuse.
-    if (kind == GemmType::MGroupedFused &&
-        ceil_div(expected_m, 160) * 160 * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
-        return false;
+    // Cost both queues that runtime can select, retaining the original padding bound.
+    if (kind == GemmType::MGroupedFused) {
+        const auto lower = routed_config(true, kind), upper = routed_config(false, kind);
+        int routed_rows = ceil_div(expected_m, lower.block_m) * lower.block_m;
+        if (routed_partition_eligible(lower, m, n, k) && fits_strategy(upper, k, true))
+            routed_rows = std::min(routed_rows, ceil_div(expected_m, upper.block_m) * upper.block_m);
+        if (routed_rows * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
+            return false;
+    }
     // The token layout belongs to this public config, not to the internal tile.
     // Metadata records preserve its padded expert offsets explicitly.
     if (kind == GemmType::MGroupedFused &&
         pack_config(original) != pack_config(get_best_configs(expected_m, n, k, groups, kind)))
         return false;
-    return fits_strategy(routed_config(true), k, true) &&
+    return fits_strategy(routed_config(true, kind), k, true) &&
            (kind == GemmType::MGroupedFused || fits_strategy(routed_config(false), k, true));
 }
 
 // Limit the per-call selection tax relative to the calibrated native kernel.
 inline constexpr float kMaxAdaptiveSelectionOverhead = 0.05f;
 
-static bool adaptive_rows_eligible(int groups, int m, int n, int k) {
+static bool adaptive_rows_eligible(int groups, int m, int n, int k, GemmType kind = GemmType::MGroupedNoPad) {
     if (!supports_native_strategy() || groups < 1 || groups > 1024 || n < 256 || n % 256 || k < 512 || k % 128)
         return false;
     const int rows = ceil_div(m, groups);
     if (rows <= 256 || rows >= 512)
         return false;
-    const auto c = routed_config(true);
+    const auto c = routed_config(true, kind);
     const int64_t work = int64_t(groups) * ceil_div(rows, c.block_m) * (n / c.block_n);
     return work >= int64_t(get_num_sms()) * (groups <= 64 ? 4 : 1) && fits_strategy(c, k, true);
 }

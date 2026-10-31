@@ -62,11 +62,19 @@ template <class Scheduler> class Runtime final : public LaunchRuntime<Runtime<Sc
         int device = 0;
         bool conditional = false;
         const int32_t* enabled = nullptr;
-        std::pair<int, int> cache_variant() const { return {int(strategy) + 4 * int(conditional), int(kind)}; }
+        bool affine_dispatch = false;
+        std::pair<int, int> cache_variant() const { return {int(strategy) + 4 * int(conditional) + 8 * int(affine_dispatch), int(kind)}; }
     };
     static const char* name() { return "m_grouped_gemm_w4fa8_mma"; }
     static std::string generate_impl(const Args& a) {
         const auto& c = a.config;
+        const std::string body = a.affine_dispatch ? fmt::format(R"(
+    if (__ldg(reinterpret_cast<const int32_t*>(params.scheduler.meta) + deep_gemm::w4fa8::kRoutedAffineRows) != 0) {{
+        Kernel::run_affine<{}>(params, smem);
+        return;
+    }}
+    Kernel{{}}(params, smem);
+)", routed_affine_stages(c)) : "Kernel{}(params, smem);";
         return fmt::format(
             R"(
 #include <deep_gemm/impls/w4fa8_gemm.cuh>
@@ -78,7 +86,7 @@ extern "C" __global__ __launch_bounds__(Kernel::MaxThreadsPerBlock, Kernel::MinB
 void m_grouped_gemm_w4fa8_mma(Kernel::Params params{}) {{
     extern __shared__ char smem[];
     {}
-    Kernel{{}}(params, smem);
+    {}
 }}
 )",
             a.n, a.k, c.block_m, c.block_n, c.block_k, c.warp_m, c.warp_n, c.warp_k, a.groups, c.num_stages,
@@ -87,12 +95,12 @@ void m_grouped_gemm_w4fa8_mma(Kernel::Params params{}) {{
             : a.strategy == NativeStrategy::Compact ? "Compact"
                                                     : "Default",
             a.strategy == NativeStrategy::Routed
-                ? fmt::format("deep_gemm::w4fa8::W4A8RoutedScheduler<{}, {}, {}, {}{}>", a.n, a.k, c.block_m, c.block_n,
-                              a.kind == GemmType::MGroupedFused ? ", true" : "")
+                ? fmt::format("deep_gemm::w4fa8::W4A8RoutedScheduler<{}, {}, {}, {}, {}>", a.n, a.k, c.block_m, c.block_n,
+                              a.kind == GemmType::MGroupedFused ? "true" : "false")
                 : "void",
             a.launch_args.smem_size, get_num_threads(c), sizeof(Arguments<Scheduler>),
             a.conditional ? ", const int32_t* enabled" : "",
-            a.conditional ? "if (__ldg(enabled) == 0) return;" : "");
+            a.conditional ? "if (__ldg(enabled) == 0) return;" : "", body);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         if (args.conditional)
@@ -278,24 +286,42 @@ class RoutedMetadataRuntime final : public LaunchRuntime<RoutedMetadataRuntime> 
         LaunchArgs launch_args;
         RoutedMetadataArguments params;
         bool force_small = false;
-        std::pair<int, int> cache_variant() const { return {variant + 2 * int(force_small), token_block_m}; }
+        bool affine_probe = false;
+        bool affine_upper = false;
+        const int32_t* tokens = nullptr;
+        int num_tokens = 0;
+        std::pair<int, int> cache_variant() const { return {variant + 2 * int(force_small) + 4 * int(affine_probe) + 8 * int(affine_upper), token_block_m}; }
     };
     static const char* name() { return "w4a8_routed_metadata"; }
     static std::string generate_impl(const Args& a) {
-        const auto lo = routed_config(true), hi = routed_config(false);
+        const auto kind = a.variant == 0 ? GemmType::MGroupedFused : GemmType::MGroupedNoPad;
+        const auto lo = routed_config(true, kind), hi = routed_config(false, kind);
         return fmt::format(R"(
 #include <deep_gemm/scheduler/w4a8_routed_scheduler.cuh>
 extern "C" __global__ __launch_bounds__(256)
-void w4a8_routed_metadata(deep_gemm::w4fa8::RoutedMetadataArguments p) {{
-    deep_gemm::w4fa8::build_w4a8_routed_metadata<{}, {}, {}, {}>(
-        p.rows, p.lower, p.upper);
+void w4a8_routed_metadata(deep_gemm::w4fa8::RoutedMetadataArguments p, const int32_t* tokens, int num_tokens) {{
+    deep_gemm::w4fa8::{}<{}, {}, {}, {}>(p.rows, p.lower, p.upper);
+    if (threadIdx.x == 0) {{
+        reinterpret_cast<int32_t*>(p.lower)[deep_gemm::w4fa8::kRoutedAffineRows] = 1;
+        reinterpret_cast<int32_t*>(p.lower)[deep_gemm::w4fa8::kRoutedAffineWitness] = 1;
+        if constexpr ({}) {{
+            reinterpret_cast<int32_t*>(p.upper)[deep_gemm::w4fa8::kRoutedAffineRows] = 1;
+            reinterpret_cast<int32_t*>(p.upper)[deep_gemm::w4fa8::kRoutedAffineWitness] = 1;
+        }}
+    }}
+    if constexpr ({})
+        deep_gemm::w4fa8::probe_w4a8_affine_witness<{}, {}>(p.lower, tokens, num_tokens);
+    if constexpr ({})
+        deep_gemm::w4fa8::probe_w4a8_affine_witness<{}, {}>(p.upper, tokens, num_tokens);
 }}
 // device={}
 )",
-                           a.groups, lo.block_m, a.force_small ? lo.block_m : hi.block_m, a.token_block_m, a.device);
+                           a.variant == 0 && !a.force_small ? "build_w4a8_partitioned_metadata" : "build_w4a8_routed_metadata",
+                           a.groups, lo.block_m, a.force_small ? lo.block_m : hi.block_m, a.token_block_m, a.affine_upper ? "true" : "false", a.affine_probe ? "true" : "false", lo.block_m, a.k,
+                           a.affine_upper ? "true" : "false", hi.block_m, a.k, a.device);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
+        DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params, args.tokens, args.num_tokens));
     }
 };
 
@@ -328,12 +354,43 @@ static bool run_compact(const W4A8Config& c, int m, int n, int k, int groups, Ge
     return true;
 }
 
+class RoutedAffineRuntime final : public LaunchRuntime<RoutedAffineRuntime> {
+  public:
+    struct Args {
+        W4A8Config config;
+        int n, k, groups, device;
+        LaunchArgs launch_args;
+        uint8_t* meta = nullptr;
+        uint8_t* upper = nullptr;
+        int upper_m = 0;
+        const int32_t* tokens = nullptr;
+        int num_tokens = 0;
+        std::pair<int, int> cache_variant() const { return {upper_m, 0}; }
+    };
+    static const char* name() { return "w4a8_routed_affine_tiles"; }
+    static std::string generate_impl(const Args& a) {
+        return fmt::format(R"(
+#include <deep_gemm/scheduler/w4a8_routed_scheduler.cuh>
+extern "C" __global__ __launch_bounds__(256)
+void w4a8_routed_affine_tiles(uint8_t* meta, uint8_t* upper, const int32_t* tokens, int num_tokens) {{
+    deep_gemm::w4fa8::build_w4a8_affine_tiles<{}, {}>(meta, tokens, num_tokens);
+    if (upper != nullptr)
+        deep_gemm::w4fa8::build_w4a8_affine_tiles<{}, {}>(upper, tokens, num_tokens);
+}}
+// device={}
+)", a.config.block_m, a.k, a.upper_m, a.k, a.device);
+    }
+    static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args a) {
+        DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, a.meta, a.upper, a.tokens, a.num_tokens));
+    }
+};
+
 static bool run_routed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
                        const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
                        const torch::Tensor& tokens, GemmType kind, const W4A8Config& original, bool capturing) {
     const int n = b.size(1), k = a.size(-1), groups = b.size(0), m = d.size(0), device = a.get_device();
     const bool fused = kind == GemmType::MGroupedFused;
-    const auto lo = routed_config(true), hi = routed_config(false);
+    const auto lo = routed_config(true, kind), hi = routed_config(false, kind);
     RoutedMetadataRuntime::Args meta{lo, n, k, groups, device, int(!fused), original.block_m, {dim3(1), dim3(256), 0},
                                      {}};
     RoutedRuntime::Args low{lo,    n,
@@ -347,24 +404,54 @@ static bool run_routed(const torch::Tensor& a, const torch::Tensor& a_scale, con
                              {},    NativeStrategy::Routed,
                              device};
     const auto low_kernel = prepare_specialized<RoutedRuntime>(low, capturing);
-    // Fused bounds live operand state with M160; NoPad can also use M192.
-    const auto high_kernel =
-        fused ? std::optional<SpecializedKernel>{} : prepare_specialized<RoutedRuntime>(high, capturing);
+    // The larger tile is optional: retain the lower tile when its resources do not fit.
+    const bool split = !fused || routed_partition_eligible(lo, m, n, k);
+    const auto high_kernel = split && fits_strategy(hi, k, true)
+                                 ? prepare_specialized<RoutedRuntime>(high, capturing)
+                                 : std::optional<SpecializedKernel>{};
     if (!low_kernel)
         return false;
+    const bool affine_candidate = fused && lo.block_m == 160 && routed_partition_eligible(lo, m, n, k);
+    auto fast = low;
+    auto fast_high = high;
+    fast.affine_dispatch = fast_high.affine_dispatch = true;
+    auto fast_kernel = affine_candidate ? prepare_specialized<RoutedRuntime>(fast, capturing)
+                                       : std::optional<SpecializedKernel>{};
+    auto fast_high_kernel = affine_candidate && high_kernel ? prepare_specialized<RoutedRuntime>(fast_high, capturing)
+                                                           : std::optional<SpecializedKernel>{};
+    RoutedAffineRuntime::Args affine{lo, n, k, groups, device, {dim3(lo.num_sms * 4), dim3(256), 0}};
+    affine.upper_m = hi.block_m;
+    const auto affine_kernel = fast_kernel || fast_high_kernel ? prepare_specialized<RoutedAffineRuntime>(affine, capturing)
+                                                               : std::optional<SpecializedKernel>{};
+    if (!affine_kernel) {
+        fast_kernel.reset();
+        fast_high_kernel.reset();
+    }
     meta.force_small = !high_kernel;
+    meta.affine_probe = bool(fast_kernel || fast_high_kernel);
+    meta.affine_upper = bool(fast_high_kernel);
+    meta.tokens = fused ? tokens.data_ptr<int32_t>() : nullptr;
+    meta.num_tokens = fused ? int(a.size(0)) : 0;
     const auto metadata = prepare_specialized<RoutedMetadataRuntime>(meta, capturing);
     if (!metadata)
         return false;
     auto buffer = [&](int bm) {
         return at::empty({int64_t(kRoutedMetadataBytes) + int64_t(32) * (ceil_div(m, bm) + groups)}, b.options());
     };
-    auto lower = buffer(lo.block_m), upper = buffer(hi.block_m);
+    auto lower = buffer(lo.block_m);
+    auto upper = high_kernel ? buffer(hi.block_m) : at::empty({int64_t(2 * sizeof(int32_t))}, b.options());
     meta.params = {rows.data_ptr<int32_t>(), lower.data_ptr<uint8_t>(), upper.data_ptr<uint8_t>()};
     auto prof = make_profile(kind, groups, fused ? a.size(0) : m, n, k, ceil_div(m, groups),
                              fused ? d.size(0) / a.size(0) : 0, rows.data_ptr<int32_t>());
     ProfilingInterface::Instance().instrument(true, prof);
     RoutedMetadataRuntime::launch(metadata->runtime, meta);
+    if (affine_kernel) {
+        affine.meta = lower.data_ptr<uint8_t>();
+        affine.upper = fast_high_kernel ? upper.data_ptr<uint8_t>() : nullptr;
+        affine.tokens = tokens.data_ptr<int32_t>();
+        affine.num_tokens = int(a.size(0));
+        RoutedAffineRuntime::launch(affine_kernel->runtime, affine);
+    }
     auto invoke = [&](RoutedRuntime::Args& args, const SpecializedKernel& prepared, const torch::Tensor& layout) {
         args.params = {a.data_ptr(),
                        b.data_ptr<uint8_t>(),
@@ -378,8 +465,13 @@ static bool run_routed(const torch::Tensor& a, const torch::Tensor& a_scale, con
         args.launch_args.grid_dim = dim3(args.config.num_sms * std::min(8, prepared.active_blocks));
         RoutedRuntime::launch(prepared.runtime, args);
     };
-    invoke(low, *low_kernel, lower);
-    if (high_kernel)
+    if (fast_kernel)
+        invoke(fast, *fast_kernel, lower);
+    else
+        invoke(low, *low_kernel, lower);
+    if (fast_high_kernel)
+        invoke(fast_high, *fast_high_kernel, upper);
+    else if (high_kernel)
         invoke(high, *high_kernel, upper);
     ProfilingInterface::Instance().instrument(false, prof);
     return true;
@@ -446,7 +538,7 @@ static bool run_adaptive_rows(const torch::Tensor& a, const torch::Tensor& a_sca
     using Native = Runtime<NativeScheduler>;
     const int m = d.size(0), n = b.size(1), k = a.size(-1), groups = b.size(0), device = a.get_device();
     const bool fused = kind == GemmType::MGroupedFused;
-    const auto wide_config = routed_config(true);
+    const auto wide_config = routed_config(true, kind);
     using CostKey = std::tuple<int, int, int, int, int, int, int, W4A8ConfigTuple>;
     struct Costs {
         float native_rate, wide_rate;
@@ -579,7 +671,7 @@ static bool try_run_specialized(const torch::Tensor& a, const torch::Tensor& a_s
                        !(kind == GemmType::MGroupedNoPad && c.block_m == 128);
     const bool routed = routed_eligible(groups, d.size(0), n, k, kind, c) &&
                         (kind != GemmType::MGroupedFused || (tokens.dim() == 2 && tokens.size(1) == c.block_m));
-    const bool adaptive = fused_layout && adaptive_rows_eligible(groups, d.size(0), n, k);
+    const bool adaptive = fused_layout && adaptive_rows_eligible(groups, d.size(0), n, k, kind);
     if (!small && !routed && !adaptive)
         return false;
     hggcStreamCaptureStatus status = hggcStreamCaptureStatusNone;
