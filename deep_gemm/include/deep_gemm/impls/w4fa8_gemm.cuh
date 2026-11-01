@@ -43,7 +43,7 @@ public:
   static constexpr int DecodeN = Routed ? 1 : SharedPrefix ? 2 : WarpN / 16;
   // A narrow ring bounds live A operands for wide routed tiles.
   static constexpr int ADistance = Routed ? 1 : -1;
-  static constexpr bool EarlyA = Routed && (Fused || BlockM == 160);
+  static constexpr bool EarlyA = Routed;
   static_assert(!Compact || (N_EXPAND == 1 && BlockK == WarpK));
   static_assert(WarpN == 16 || WarpN == 32 || WarpN == 48 || WarpN == 64);
   static_assert(N_EXPAND >= 1 && N_EXPAND <= 4);
