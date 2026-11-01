@@ -8,7 +8,6 @@
 #include <set>
 #include <tuple>
 #include <vector>
-#include <c10/cuda/CUDAGuard.h>
 #include <cstddef>
 #include <cstdint>
 #include <deep_gemm/common/w4a8_arguments.cuh>
@@ -433,7 +432,6 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
 static bool run_streamed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
                          const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows, int tile_n,
                          int num_sms, bool allow_sparse, const FusedInputs& fused = {}) {
-    const c10::cuda::CUDAGuard device_guard(a.device());
     hggcStreamCaptureStatus capture = hggcStreamCaptureStatusNone;
     DG_HGGC_RUNTIME_CHECK(hggcStreamIsCapturing(current_stream(), &capture));
     if (!tile_n || tile_n != streamed_tile_n(b.size(1), a.size(1), b.size(0)) || is_compile_only())
