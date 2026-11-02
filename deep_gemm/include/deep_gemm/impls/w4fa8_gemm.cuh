@@ -12,7 +12,6 @@
 #include <cute/algorithm/ppu_copy.hpp>
 #include <deep_gemm/impls/dequant_w4a16.cuh>
 #include <deep_gemm/common/profiling_interface.cuh>
-#include <deep_gemm/scheduler/w4a8_small_m_scheduler.cuh>
 #include <deep_gemm/scheduler/w4a8_routed_scheduler.cuh>
 #include <deep_gemm/scheduler/fused_scheduler.cuh>
 #include <deep_gemm/impls/fused_gemm_util.cuh>
@@ -38,10 +37,8 @@ class W4A8GEMM_MMA {
 public:
   static constexpr bool Routed = Schedule == deep_gemm::w4fa8::SchedulerPolicy::Queue;
   static constexpr bool Fused = (kGemmType == GemmType::MGroupedFused);
-  static constexpr bool Prefix = Schedule == deep_gemm::w4fa8::SchedulerPolicy::Prefix;
-  static constexpr bool SharedPrefix = Prefix && BlockM == 32;
   static constexpr bool Compact = Fragment == deep_gemm::w4fa8::FragmentPolicy::RollingK32;
-  static constexpr int DecodeN = Routed ? 1 : SharedPrefix ? 2 : WarpN / 16;
+  static constexpr int DecodeN = Routed ? 1 : WarpN / 16;
   // A narrow ring bounds live A operands for wide routed tiles.
   static constexpr int ADistance = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2 ? 1 : -1;
   static constexpr bool EarlyA = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2;
@@ -84,15 +81,7 @@ public:
                                                         kNumGroups, N_Blocks, scheduler_swizzle>,
                           deep_gemm::DeepGemmScheduler<kGemmType, ShapeN, ShapeK, BlockM, BlockN * N_EXPAND, kNumGroups,
                                                        N_Blocks, scheduler_swizzle>>;
-  using PrefixScheduler = cute::conditional_t<
-      BlockM == 16,
-      deep_gemm::WarpPrefixPairScheduler<kGemmType, ShapeN, ShapeK, BlockM, BlockN, kNumGroups, N_Blocks, 2, true>,
-      cute::conditional_t<
-          SharedPrefix,
-          deep_gemm::SharedWarpPrefixScheduler<kGemmType, ShapeN, ShapeK, BlockM, BlockN, kNumGroups, N_Blocks, 2>,
-          deep_gemm::WarpPrefixScheduler<kGemmType, ShapeN, ShapeK, BlockM, BlockN, kNumGroups, N_Blocks, 2>>>;
-  using TileScheduler =
-      cute::conditional_t<Routed, SchedulerAdapter, cute::conditional_t<Prefix, PrefixScheduler, DefaultScheduler>>;
+  using TileScheduler = cute::conditional_t<Routed, SchedulerAdapter, DefaultScheduler>;
   using ArchTag = cutlass::arch::PPU0015;
   static constexpr int WarpsOnM = BlockM / WarpM;
   static constexpr int WarpsOnN = BlockN / WarpN; // WarpN = 64
@@ -180,8 +169,7 @@ public:
     };
   };
 
-  using SchedulerStorage = deep_gemm::SmallMSchedulerStorage<MainloopStorage, TileScheduler, SharedPrefix>;
-  using SharedStorage = deep_gemm::w4fa8::RowScaleStorage<SchedulerStorage, Routed ? BlockM : 0>;
+  using SharedStorage = deep_gemm::w4fa8::RowScaleStorage<MainloopStorage, Routed ? BlockM : 0>;
 
   struct NormalArguments {
     int* block_m_info;
@@ -269,12 +257,7 @@ public:
     int lane_idx = thread_idx % NumThreadsPerWarp;
     Tensor tCrID = init_identity(lane_idx);
     SharedStorage& storage = *reinterpret_cast<SharedStorage*>(smem_buf);
-    auto deep_scheduler = [&]() {
-      if constexpr (SharedPrefix)
-        return TileScheduler{params.scheduler, storage.scheduler_state};
-      else
-        return TileScheduler{params.scheduler};
-    }();
+    TileScheduler deep_scheduler{params.scheduler};
     Tensor sA = make_tensor(make_smem_ptr(storage.smem_a.data()), SmemLayoutA{});             // (BLK_M,BLK_K,PIPE)
     Tensor sB = make_tensor(make_smem_ptr(storage.smem_b.data()), SmemLayoutB{});             // (BLK_N,BLK_K2,PIPE)
     Tensor sScale = make_tensor(make_smem_ptr(storage.smem_scale.data()), SmemLayoutScale{}); // (BLN/64,BLK*2,PIPE)

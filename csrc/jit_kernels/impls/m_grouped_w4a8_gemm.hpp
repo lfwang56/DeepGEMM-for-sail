@@ -87,7 +87,7 @@ void m_grouped_gemm_w4fa8_mma(Kernel::Params params) {{
 )",
             a.n, a.k, c.block_m, c.block_n, c.block_k, c.warp_m, c.warp_n, c.warp_k, a.groups, c.num_stages,
             get_gemm_type_name(a.kind), c.n_expand, a.params.inv_scale != 1.0f ? "true" : "false",
-            kernel.scheduler == SchedulerPolicy::Queue ? "Queue" : kernel.scheduler == SchedulerPolicy::Prefix ? "Prefix" : "Standard",
+            kernel.scheduler == SchedulerPolicy::Queue ? "Queue" : "Standard",
             kernel.scheduler == SchedulerPolicy::Queue
                 ? fmt::format("deep_gemm::w4fa8::W4A8RoutedScheduler<{}, {}, {}, {}, {}>", a.n, a.k, c.block_m, c.block_n,
                               a.kind == GemmType::MGroupedFused ? "true" : "false")
@@ -343,11 +343,11 @@ static bool run_routed(const torch::Tensor& a, const torch::Tensor& a_scale, con
                                      {}};
     RoutedRuntime::Args low{lo,    n,
                             k,     groups,
-                            kind,  {dim3(lo.num_sms), dim3(get_num_threads(lo)), specialized_smem_size(lo, k, true)},
+                            kind,  {dim3(lo.num_sms), dim3(get_num_threads(lo)), get_smem_size(lo, k, SchedulerPolicy::Queue)},
                             {}, device};
     RoutedRuntime::Args high{hi,    n,
                              k,     groups,
-                             kind,  {dim3(hi.num_sms), dim3(get_num_threads(hi)), specialized_smem_size(hi, k, true)},
+                             kind,  {dim3(hi.num_sms), dim3(get_num_threads(hi)), get_smem_size(hi, k, SchedulerPolicy::Queue)},
                              {}, device};
     low.kernel_config = plan.kernels.front();
     high.kernel_config = plan.kernels.back();

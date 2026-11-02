@@ -3,7 +3,7 @@
 namespace deep_gemm::w4fa8 {
 enum class FragmentPolicy { FullK, RollingK32 };
 enum class ALoadPolicy { Bulk, Ring2 };
-enum class SchedulerPolicy { Standard, Prefix, Queue };
+enum class SchedulerPolicy { Standard, Queue };
 
 template <class Storage, int Rows> struct RowScaleStorage : Storage {
   alignas(128) float row_scales[2][Rows];

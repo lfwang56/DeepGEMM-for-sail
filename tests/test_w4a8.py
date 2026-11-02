@@ -1166,9 +1166,9 @@ def test_explicit_execution_configs():
     lhs, rhs, out, call, reference, _, _, rows, indices = _w4a8_nopad_problem([0, 1, 17, 65], 256, 768, True)
     expected = reference()
     tile = (sms, 32, 256, 128, 32, 64, 128, 2, 1)
-    prefix_tile = tile[:5] + (32,) + tile[6:]
+    narrow_warp_tile = tile[:5] + (32,) + tile[6:]
     wide_tile = (sms, 64, 256, 128, 64, 64, 128, 2, 1)
-    for config in (tile, prefix_tile, wide_tile):
+    for config in (tile, narrow_warp_tile, wide_tile):
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows, config, inv_scale=.3)
         assert calc_diff(out, expected * .3) < .003, (config, calc_diff(out, expected * .3))
     oversized = (sms, 128, 1 << 30, 128, 16, 64, 128, 2, 4)

@@ -101,8 +101,6 @@ static int get_smem_size(const W4A8Config& c, int k, SchedulerPolicy scheduler =
                             int64_t(c.block_n) * (c.block_k / 2 + c.block_k / 32) * c.num_stages;
     const int64_t reduction = int64_t(16 * 64) * (c.block_n / c.warp_n) * (c.block_k / c.warp_k) * sizeof(float);
     int64_t bytes = std::max(mainloop, reduction);
-    if (scheduler == SchedulerPolicy::Prefix && c.block_m == 32)
-        bytes += 2 * 64 * sizeof(uint32_t);
     if (scheduler == SchedulerPolicy::Queue)
         bytes = ceil_div(bytes, int64_t(128)) * 128 + ceil_div(int64_t(2 * c.block_m * sizeof(float)), int64_t(128)) * 128;
     DG_HOST_ASSERT(bytes <= INT32_MAX);
@@ -156,7 +154,7 @@ static const char* get_gemm_type_name(GemmType kind) {
 }
 
 // Strategy domains follow the scheduler capacity, alignment and minimum work
-// needed to amortize prefix/metadata construction. They contain no model shapes.
+// needed to amortize metadata construction. They contain no model shapes.
 static bool supports_native_strategy() { return is_ppu1v5_device() && get_num_sms() > 0; }
 
 static W4A8Config small_m_config(int expected_m, int n = 256, GemmType kind = GemmType::MGroupedNoPad, int groups = 1) {
@@ -169,14 +167,10 @@ static W4A8Config small_m_config(int expected_m, int n = 256, GemmType kind = Ge
     return {get_num_sms(), bm, bn, 128, bm, wn, 128, 2, 1};
 }
 
-static int specialized_smem_size(const W4A8Config& c, int k, bool routed, bool prefix = true) {
-    return get_smem_size(c, k, routed ? SchedulerPolicy::Queue : prefix ? SchedulerPolicy::Prefix : SchedulerPolicy::Standard);
-}
-
-static bool fits_strategy(const W4A8Config& c, int k, bool routed, bool prefix = true) {
+static bool fits_strategy(const W4A8Config& c, int k, bool routed) {
     const auto prop = device_runtime->get_prop();
     return get_num_threads(c) <= prop->maxThreadsPerBlock &&
-           specialized_smem_size(c, k, routed, prefix) <= int(prop->sharedMemPerBlockOptin);
+           get_smem_size(c, k, routed ? SchedulerPolicy::Queue : SchedulerPolicy::Standard) <= int(prop->sharedMemPerBlockOptin);
 }
 
 static bool fits_compiled_strategy(int local_bytes) {
@@ -185,11 +179,10 @@ static bool fits_compiled_strategy(int local_bytes) {
 }
 
 static bool small_m_eligible(int groups, int m, int n, int k, GemmType kind = GemmType::MGroupedNoPad) {
-    const bool prefix = kind == GemmType::MGroupedNoPad && groups >= 16 && groups <= 64 && k <= 1024;
     if (groups < 1 || groups > 1024 || ceil_div(m, groups) >= 512 || n < 128 || n % 64 || k < 512 ||
         k % 128)
         return false;
-    return fits_strategy(small_m_config(ceil_div(m, groups), n, kind, groups), k, false, prefix);
+    return fits_strategy(small_m_config(ceil_div(m, groups), n, kind, groups), k, false);
 }
 
 static W4A8Config routed_config(bool small, GemmType kind = GemmType::MGroupedNoPad) {
@@ -383,18 +376,13 @@ static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, in
         check_config(c, n, k, kind);
     } else {
         DG_HOST_ASSERT(kind != GemmType::MGroupedMasked && n >= 128);
-        DG_HOST_ASSERT(c.warp_n == (c.block_m == 32 ? 32 : c.block_m == 16 && spec.fragment == FragmentPolicy::RollingK32 ? 32 : 64));
+        DG_HOST_ASSERT(c.warp_n == (c.block_m == 64 ? 64 : 32));
         DG_HOST_ASSERT(c.block_m == 16 || c.block_m == 32 || c.block_m == 64);
         DG_HOST_ASSERT(c.block_m == c.warp_m && (c.block_n == 128 || c.block_n == 256));
         DG_HOST_ASSERT(c.warp_n == 32 || c.warp_n == 64);
         DG_HOST_ASSERT(c.block_k == 128 && c.warp_k == 128 && c.n_expand == 1);
         DG_HOST_ASSERT(k >= 512 && k % 128 == 0 && c.num_stages == 2);
-        if (spec.scheduler == SchedulerPolicy::Prefix) {
-            DG_HOST_ASSERT(kind == GemmType::MGroupedNoPad && groups <= 64);
-            DG_HOST_ASSERT(spec.fragment == (c.block_m == 16 ? FragmentPolicy::FullK : FragmentPolicy::RollingK32));
-        } else {
-            DG_HOST_ASSERT(spec.fragment == FragmentPolicy::RollingK32);
-        }
+        DG_HOST_ASSERT(spec.fragment == FragmentPolicy::RollingK32);
     }
     const auto prop = device_runtime->get_prop();
     DG_HOST_ASSERT(get_num_threads(c) <= prop->maxThreadsPerBlock &&
@@ -414,7 +402,7 @@ static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int group
 }
 
 // Derive the single native implementation from the tile and host-known shape.
-static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k, int groups, GemmType kind) {
+static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k, GemmType kind) {
     if (c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
         return {c, FragmentPolicy::RollingK32, SchedulerPolicy::Queue};
     if (kind == GemmType::MGroupedMasked)
@@ -423,11 +411,6 @@ static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int 
     const bool small = (c.block_m == 16 || c.block_m == 32 || c.block_m == 64) && c.block_m == c.warp_m &&
                        (c.block_n == 128 || c.block_n == 256) && c.block_k == 128 && c.warp_k == 128 &&
                        c.num_stages == 2 && c.n_expand == 1 && n >= 128 && k >= 512 && k % 128 == 0;
-    const bool prefix = small && kind == GemmType::MGroupedNoPad && groups >= 16 && groups <= 64 && k <= 1024 &&
-                        c.warp_n == (c.block_m == 32 ? 32 : 64);
-    if (prefix)
-        return {c, c.block_m == 16 ? FragmentPolicy::FullK : FragmentPolicy::RollingK32, SchedulerPolicy::Prefix};
-
     const bool full = c.warp_n == 64 || c.warp_m == 128;
     const bool rolling = small && c.warp_n == (c.block_m == 64 ? 64 : 32);
     TORCH_CHECK(full || rolling, "W4FA8 tile has no supported native implementation");
@@ -472,7 +455,7 @@ static ExecutionPlan resolve_config(const W4A8Config& tile, int m, int n, int k,
         check_streamed_config(plan, m, n, k, groups, kind);
         return plan;
     }
-    return NativePlan{{resolve_native_config(tile, n, k, groups, kind)}};
+    return NativePlan{{resolve_native_config(tile, n, k, kind)}};
 }
 
 } // namespace deep_gemm::w4fa8
