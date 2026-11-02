@@ -320,7 +320,7 @@ static MoeAlignReturn moe_align_block_size_impl(
                                     std::get<6>(full)};
         };
         if (lhs.scalar_type() == torch::kFloat8_e4m3fn && rhs.scalar_type() == torch::kUInt8) {
-            const auto c = deep_gemm::w4fa8::get_best_configs(numel, n, k, num_groups, GemmType::MGroupedFused);
+            const auto c = deep_gemm::w4fa8::get_best_configs(expected_m, n, k, num_groups, GemmType::MGroupedFused);
             config = deep_gemm::w4fa8::pack_config(c);
         } else if (w4a16_type.has_value()) {
             // Forwarded whole: the W4A16 fused GEMM unpacks all 9 params, `warp_k` and `n_expand`
@@ -352,20 +352,7 @@ static MoeAlignReturn moe_align_block_size_impl(
                         "(supported: bf16 / int8-perchannel / fp8-e4m3fn / fp4 / w4a16)");
         }
     }
-    const bool w4fa8 = lhs.scalar_type() == torch::kFloat8_e4m3fn && rhs.scalar_type() == torch::kUInt8;
-    const int block_m = std::visit([&](const auto& c) -> int {
-        if (w4fa8) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(c)>, FusedMmaConfigTuple>) {
-                const auto plan = deep_gemm::w4fa8::resolve_config(
-                    deep_gemm::w4fa8::unpack_config(c), numel, n, k, num_groups, GemmType::MGroupedFused);
-                deep_gemm::w4fa8::check_plan(plan, numel, n, k, num_groups, GemmType::MGroupedFused);
-                return std::get<1>(c);
-            } else {
-                TORCH_CHECK(false, "W4FA8 configs must be a nine-element tile tuple");
-            }
-        }
-        return std::get<1>(c);
-    }, config);
+    const int block_m = std::visit([](const auto& c) { return std::get<1>(c); }, config);
     DG_HOST_ASSERT(num_groups > 0);
     DG_HOST_ASSERT(block_m > 0);
 

@@ -393,8 +393,9 @@ static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int 
             SchedulerPolicy::Standard};
 }
 
-static W4A8Config get_best_configs(int m, int n, int k, int groups, GemmType kind, int expected_m = -1) {
-    const int em = expected_m >= 0 ? expected_m : ceil_div(m, groups);
+static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, GemmType kind) {
+    const int em = expected_m;
+    const int m = expected_m * groups;
     const auto base = get_default_tile(em, n, k, groups, kind);
     if (kind != GemmType::MGroupedMasked && supports_native_strategy()) {
         const bool fused = kind == GemmType::MGroupedFused;

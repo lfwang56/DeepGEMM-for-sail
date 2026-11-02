@@ -1736,7 +1736,7 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_nopad(const std::pair<torch::Tensor, 
     TORCH_CHECK(counts.dim() == 1 && counts.numel() == num_groups, "m_rows shape mismatch");
     const int em = ceil_div(m, num_groups);
     const auto tile = configs ? deep_gemm::w4fa8::unpack_config(*configs)
-                              : deep_gemm::w4fa8::get_best_configs(m, n, k, num_groups, GemmType::MGroupedNoPad);
+                              : deep_gemm::w4fa8::get_best_configs(em, n, k, num_groups, GemmType::MGroupedNoPad);
     const auto plan = deep_gemm::w4fa8::resolve_config(tile, m, n, k, num_groups, GemmType::MGroupedNoPad);
     deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, counts,
                                  GemmType::MGroupedNoPad, em, inv_scale);
@@ -1754,7 +1754,7 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_masked(const std::pair<torch::Tensor,
     if (!m)
         return;
     const auto tile = configs ? deep_gemm::w4fa8::unpack_config(*configs)
-                              : deep_gemm::w4fa8::get_best_configs(m, n, k, num_groups, GemmType::MGroupedMasked, expected_m);
+                              : deep_gemm::w4fa8::get_best_configs(expected_m, n, k, num_groups, GemmType::MGroupedMasked);
     const auto plan = deep_gemm::w4fa8::resolve_config(tile, m, n, k, num_groups, GemmType::MGroupedMasked);
     deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, rows,
                                  GemmType::MGroupedMasked, expected_m, inv_scale);
