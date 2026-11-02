@@ -772,10 +772,10 @@ def _check_routed_fused_metadata_layout(n, k, tokens, groups=97, topk=8):
     for block_m in (64, 32):
         # Construct the corresponding token layout rather than changing only
         # the GEMM config after moe_align_block_size has produced its metadata.
-        layout_config = (deep_gemm.get_num_sms(), block_m, 256, 128, block_m, 64, 128, 2, 1)
-        _, rows, experts, sorted_tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
-            lhs[0], rhs[0], routes, config=layout_config)
         config = (deep_gemm.get_num_sms(), block_m, 256, 128, block_m, 64, 128, 2, 1)
+        selected, rows, experts, sorted_tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
+            lhs[0], rhs[0], routes, config=config)
+        assert selected == config
         def call():
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
                 lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, config)
@@ -1068,7 +1068,7 @@ def test_routed_fused_replay_updates():
 
 
 def test_native_optimized_inv_scale(k=768):
-    # Switch unit/non-unit variants in both queue choices to catch stale cache keys.
+    # Switch unit/non-unit variants across row distributions to catch stale cache keys.
     torch.manual_seed(41)
     groups, n = 97, 256
     packed = torch.randint(256, (groups, n, k // 2), device='cuda', dtype=torch.uint8)
@@ -1141,14 +1141,15 @@ def test_routing_layout_block_m():
     # Cover both align algorithms and non-power-of-two routing blocks.
     for tokens in (1733, 2049):
         groups, topk = 97, 8
-        a = torch.empty(tokens, 768, device='cuda', dtype=torch.float8_e4m3fn)
-        b = torch.empty(groups, 256, 384, device='cuda', dtype=torch.uint8)
+        a = torch.empty(tokens, 1024, device='cuda', dtype=torch.float8_e4m3fn)
+        b = torch.empty(groups, 1024, 512, device='cuda', dtype=torch.uint8)
         routes = (torch.arange(tokens * topk, device='cuda').reshape(tokens, topk) % groups).int()
         source = routes.flatten().argsort(stable=True) // topk
-        for bm in (64, 160, 176, 192):
-            config = (deep_gemm.get_num_sms(), bm, 256, 128, bm, 32 if bm > 128 else 64, 128, 2, 1)
+        for bm in (64, 160, 176, 192, 256):
+            config = ((deep_gemm.get_num_sms(), 256, 256, 128, 64, 64, 128, 4, 1) if bm == 256 else
+                      (deep_gemm.get_num_sms(), bm, 256, 128, bm, 32 if bm > 128 else 64, 128, 2, 1))
             selected, rows, _, sorted_tokens, _, _, _ = deep_gemm.moe_align_block_size(a, b, routes, config=config)
-            assert selected == config
+            assert selected == config and sorted_tokens.size(1) == bm
             table = sorted_tokens.flatten()
             begin = offset = 0
             for count in rows.cpu().tolist():
@@ -1185,7 +1186,7 @@ def test_explicit_execution_configs():
     config = core
     selected, counts, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
         lhs_f[0], rhs_f[0], routes, config=config)
-    assert selected == config and tokens.size(1) == 64
+    assert selected == config and tokens.size(1) == config[1]
     deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
         lhs_f, rhs_f[:2], out_f, counts, experts, tokens, aligned, config, inv_scale=.3)
     assert calc_diff(out_f, ref_f() * .3) < .003

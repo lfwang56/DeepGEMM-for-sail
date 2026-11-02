@@ -34,13 +34,12 @@ using ScaledCoreParams = StreamedCoreParamsT<true>;
 
 struct FusedInputs {
     torch::Tensor experts, tokens, aligned;
-    int block_m = 0;
 };
 
 class StreamedGatherRuntime final : public LaunchRuntime<StreamedGatherRuntime> {
   public:
     struct Args {
-        int k, block_m, groups;
+        int k, groups;
         LaunchArgs launch_args;
         w4fa8_streamed::GatherParams params;
     };
@@ -49,10 +48,10 @@ class StreamedGatherRuntime final : public LaunchRuntime<StreamedGatherRuntime> 
 #include <deep_gemm/impls/w4a8_streamed_decode.cuh>
 extern "C" __global__ __launch_bounds__(256)
 void w4a8_streamed_gather(deep_gemm::w4fa8_streamed::GatherParams p) {{
-    deep_gemm::w4fa8_streamed::gather_body<{}, {}, {}>(p, 0);
+    deep_gemm::w4fa8_streamed::gather_body<{}, deep_gemm::w4fa8_streamed::kBlockM, {}>(p, 0);
 }}
 )",
-                           a.k, a.block_m, a.groups);
+                           a.k, a.groups);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args a) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, a.params));
@@ -67,7 +66,7 @@ class StreamedDecodeRuntime final : public LaunchRuntime<StreamedDecodeRuntime> 
         w4fa8_streamed::DecodeParams params;
         bool skip_fence = false;
         bool empty_flat = false;
-        int fused_block_m = 0;
+        bool fuse_gather = false;
         w4fa8_streamed::GatherParams gather{};
     };
     static bool full_n_fast(const Args& a) {
@@ -75,7 +74,7 @@ class StreamedDecodeRuntime final : public LaunchRuntime<StreamedDecodeRuntime> 
     }
     static std::string kernel_name(const Args& a) {
         // Reuse the established FP8 compiler options for this integer-to-FP8 decoder.
-        const std::string suffix = a.fused_block_m ? "_fused" : "";
+        const std::string suffix = a.fuse_gather ? "_fused" : "";
         if (a.empty_flat)
             return (a.skip_fence ? "w4a8_streamed_decode_nonempty_free" : "w4a8_streamed_decode_nonempty_fenced") +
                    suffix;
@@ -85,14 +84,13 @@ class StreamedDecodeRuntime final : public LaunchRuntime<StreamedDecodeRuntime> 
                suffix;
     }
     static std::string gather_call(const Args& a) {
-        return a.fused_block_m
-                   ? fmt::format("deep_gemm::w4fa8_streamed::gather_body<{}, {}, {}>(gather, params.group_start);", a.k,
-                                 a.fused_block_m, a.groups)
+        return a.fuse_gather
+                   ? fmt::format("deep_gemm::w4fa8_streamed::gather_body<{}, deep_gemm::w4fa8_streamed::kBlockM, {}>(gather, params.group_start);", a.k, a.groups)
                    : "";
     }
     static std::string generate_impl(const Args& a) {
         const bool fast = full_n_fast(a);
-        const std::string gather_arg = a.fused_block_m ? ", deep_gemm::w4fa8_streamed::GatherParams gather" : "";
+        const std::string gather_arg = a.fuse_gather ? ", deep_gemm::w4fa8_streamed::GatherParams gather" : "";
         if (a.empty_flat)
             return fmt::format(R"(
 #include <deep_gemm/impls/w4a8_streamed_decode.cuh>
@@ -119,7 +117,7 @@ void {}(deep_gemm::w4fa8_streamed::DecodeParams params{}) {{
                            a.tile_n, a.groups, fast && a.skip_fence ? ", true" : "", gather_call(a));
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args a) {
-        if (a.fused_block_m)
+        if (a.fuse_gather)
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, a.params, a.gather));
         else
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, a.params));
@@ -138,7 +136,7 @@ class StreamedCoreRuntime final : public LaunchRuntime<StreamedCoreRuntime> {
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
 #include <deep_gemm/impls/w4a8_streamed_core.cuh>
-using Traits = deep_gemm::w4fa8_streamed::CoreTraits<{}, {}, {}, {}, 256, 256, 64, 64, 4, {}>;
+using Traits = deep_gemm::w4fa8_streamed::CoreTraits<{}, {}, {}, {}, deep_gemm::w4fa8_streamed::kBlockM, 256, 64, 64, 4, {}>;
 using Kernel = typename Traits::Kernel;
 using Params = typename Kernel::Params;
 static_assert(Kernel::MaxThreadsPerBlock == 512, "streamed thread count mismatch");
@@ -190,7 +188,7 @@ struct StreamedAsyncContext {
     std::vector<hggcEvent_t> decoded, consumed;
     std::mutex submit_mutex;
     // Shape readiness is CPU metadata only; no decoded weights are retained.
-    using ShapeKey = std::tuple<int, int, int, int, int, int, int, bool, bool, int, bool, int>;
+    using ShapeKey = std::tuple<int, int, int, int, int, int, int, bool, bool, bool, bool, int>;
     std::map<ShapeKey, StreamedPreparedPlan> prepared_plans;
 
     explicit StreamedAsyncContext(int device_) : device(device_) {}
@@ -269,7 +267,8 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
                                const StreamedConfig& execution, const FusedInputs& fused, float inv_scale = 1.f) {
     const int groups = b.size(0), n = b.size(1), k = a.size(1), m = d.size(0);
     constexpr int threads = 512, core_smem = 256 * 1024;
-    check_streamed_config(execution, m, n, k, groups, fused.block_m ? GemmType::MGroupedFused : GemmType::MGroupedNoPad);
+    const bool is_fused = fused.tokens.defined();
+    check_streamed_config(execution, m, n, k, groups, is_fused ? GemmType::MGroupedFused : GemmType::MGroupedNoPad);
     const bool allow_sparse = execution.empty_experts == EmptyExpertPolicy::Nonempty;
     const auto schedule = make_streamed_plan(execution, groups, short_streamed_eligible(m, n, k, groups, num_sms));
     struct Work { int group_start, groups, n_begin, n_count; };
@@ -284,13 +283,13 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     // The entire event submission is atomic with respect to other host callers
     // using this caller stream; previously queued waits retain their event record.
     std::lock_guard<std::mutex> lock(context->submit_mutex);
-    const StreamedAsyncContext::ShapeKey key{m, n, k, groups, num_sms, chunk, tile_n, ramp, allow_sparse, fused.block_m, inv_scale != 1.f, int(execution.gather)};
+    const StreamedAsyncContext::ShapeKey key{m, n, k, groups, num_sms, chunk, tile_n, ramp, allow_sparse, is_fused, inv_scale != 1.f, int(execution.gather)};
     // A captured call may only reuse resources and kernels warmed on this caller.
     auto prepared = context->prepared_plans.find(key);
     if (capturing && (prepared == context->prepared_plans.end() || !prepared->second.warmed || context->decoded.size() < size_t(parts) ||
                       context->consumed.size() < size_t(parts)))
         return false;
-    StreamedGatherRuntime::Args gather_args{k, fused.block_m, groups, {dim3(num_sms * 4), dim3(256), 0}, {}};
+    StreamedGatherRuntime::Args gather_args{k, groups, {dim3(num_sms * 4), dim3(256), 0}, {}};
     if (!capturing) context->reserve_events(parts);
     for (const bool apply_scale : {false, true}) {
         auto variant_key = key;
@@ -310,7 +309,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
             // Active experts are read on the device on every call, including
             // Graph replay; empty experts never require decoded weight traffic.
             pair.decode.empty_flat = allow_sparse && local_n == n;
-            pair.decode.fused_block_m = chunk_gather ? fused.block_m : 0;
+            pair.decode.fuse_gather = chunk_gather && is_fused;
             pair.core = {n, k, local_n, local_groups, {dim3(num_sms), dim3(threads), core_smem}, {}};
             pair.core.apply_inv_scale = apply_scale;
             pair.decoder = compiler->build(StreamedDecodeRuntime::kernel_name(pair.decode),
@@ -325,7 +324,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
             DG_HOST_ASSERT(blocks > 0);
             pair.core.launch_args.grid_dim = dim3(num_sms * blocks);
         }
-        if (fused.block_m && !chunk_gather)
+        if (is_fused && !chunk_gather)
             next.gather = compiler->build("w4a8_streamed_gather", StreamedGatherRuntime::generate(gather_args));
         // Publish only a complete plan. Capture never enters a compiler or module loader.
         context->prepared_plans.emplace(variant_key, std::move(next));
@@ -338,7 +337,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
 
     DgProfParam prof;
     if (ProfilingInterface::Instance().get_op_info()) {
-        if (fused.block_m)
+        if (is_fused)
             prof.set_fused_moe_params("w4fa8_mma", "group", groups, a.size(0), m / a.size(0), n, k,
                                       rows.data_ptr<int32_t>(), caller);
         else {
@@ -358,7 +357,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     auto b_scale_storage = at::empty({chunk, tile_n, 1}, a_scale.options());
     torch::Tensor core_a = a, core_scale = a_scale;
     w4fa8_streamed::GatherParams gather{};
-    if (fused.block_m) {
+    if (is_fused) {
         core_a = at::empty({m, k}, a.options());
         core_scale = at::empty({m, 1}, a_scale.options());
         gather = {reinterpret_cast<const uint8_t*>(a.data_ptr()),
@@ -378,7 +377,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     const auto stride_input = cute::Stride<int64_t, cute::Int<1>, int64_t>{k, cute::Int<1>{}, 0};
     const auto stride_output = cute::Stride<int64_t, cute::Int<1>, int64_t>{n, cute::Int<1>{}, 0};
 
-    const int overlap_per_sm = int64_t(m) >= int64_t(groups) * (fused.block_m ? 4096 : 2048) ? 1 : 2;
+    const int overlap_per_sm = int64_t(m) >= int64_t(groups) * (is_fused ? 4096 : 2048) ? 1 : 2;
     auto decode = [&](int index) {
         const auto& work = plan[index];
         const int group_start = work.group_start, local_groups = work.groups;

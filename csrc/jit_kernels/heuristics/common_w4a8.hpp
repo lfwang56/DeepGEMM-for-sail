@@ -30,9 +30,6 @@ struct NativeKernelConfig {
 
     ALoadPolicy a_load() const { return scheduler == SchedulerPolicy::Queue ? ALoadPolicy::Ring2 : ALoadPolicy::Bulk; }
 };
-struct NativePlan {
-    std::vector<NativeKernelConfig> kernels;
-};
 struct StreamedConfig {
     W4A8Config core;
     int decode_n, expert_chunk;
@@ -40,18 +37,7 @@ struct StreamedConfig {
     GatherPolicy gather;
     EmptyExpertPolicy empty_experts;
 };
-using ExecutionPlan = std::variant<NativePlan, StreamedConfig>;
-
-// Routing storage and compute tiles have different roles in multi-kernel plans.
-static int get_token_block_m(const ExecutionPlan& plan, GemmType kind) {
-    if (kind != GemmType::MGroupedFused)
-        return 0;
-    if (const auto* native = std::get_if<NativePlan>(&plan)) {
-        DG_HOST_ASSERT(native->kernels.size() == 1 || native->kernels.size() == 2);
-        return native->kernels.size() == 1 ? native->kernels.front().tile.block_m : 64;
-    }
-    return 64;
-}
+using ExecutionPlan = std::variant<NativeKernelConfig, StreamedConfig>;
 
 using W4A8ConfigTuple = std::tuple<int, int, int, int, int, int, int, int, int>;
 
@@ -185,24 +171,12 @@ static bool small_m_eligible(int groups, int m, int n, int k, GemmType kind = Ge
     return fits_strategy(small_m_config(ceil_div(m, groups), n, kind, groups), k, false);
 }
 
-static W4A8Config routed_config(bool small, GemmType kind = GemmType::MGroupedNoPad) {
-    const int bm = small ? 160 : kind == GemmType::MGroupedFused ? 176 : 192;
-    const int stages = kind == GemmType::MGroupedFused ? (small ? 3 : 2) : (small ? 2 : 3);
-    return {get_num_sms(), bm, 256, 128, bm, 32, 128, stages, 1};
-}
-
 // Long-K NoPad benefits from fewer weight-decode tiles near the M160 tail.
 static W4A8Config default_routed_config(int expected_m, int k, GemmType kind) {
     const bool wide = kind == GemmType::MGroupedNoPad && k > 2048 && expected_m > 128 && expected_m <= 192;
-    return routed_config(!wide, kind);
-}
-
-// A second persistent launch must have enough K-tile work to amortize its
-// empty-queue cost. This bound is independent of the current routing values.
-static bool routed_partition_eligible(const W4A8Config& c, int m, int n, int k) {
-    constexpr int min_k_steps_per_cu = 256;
-    const int64_t steps = int64_t(ceil_div(m, c.block_m)) * ceil_div(n, c.block_n) * (k / c.block_k);
-    return steps >= int64_t(c.num_sms) * min_k_steps_per_cu;
+    const int bm = wide ? 192 : 160;
+    const int stages = wide || kind == GemmType::MGroupedFused ? 3 : 2;
+    return {get_num_sms(), bm, 256, 128, bm, 32, 128, stages, 1};
 }
 
 static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, const W4A8Config& original) {
@@ -328,7 +302,7 @@ static void check_streamed_config(const StreamedConfig& c, int m, int n, int k, 
     DG_HOST_ASSERT(kind == GemmType::MGroupedNoPad || kind == GemmType::MGroupedFused);
     DG_HOST_ASSERT(groups >= 8 && groups <= 1024 && n >= 1024 && n % 64 == 0 && k >= 1024 && k % 128 == 0);
     DG_HOST_ASSERT(t.num_sms > 0 && t.num_sms <= get_num_sms());
-    DG_HOST_ASSERT(pack_config(t) == W4A8ConfigTuple(t.num_sms, 256, 256, 128, 64, 64, 128, 4, 1));
+    DG_HOST_ASSERT(pack_config(t) == W4A8ConfigTuple(t.num_sms, w4fa8_streamed::kBlockM, 256, 128, 64, 64, 128, 4, 1));
     const auto prop = device_runtime->get_prop();
     DG_HOST_ASSERT(prop->maxThreadsPerBlock >= 512 && prop->sharedMemPerBlockOptin >= 256 * 1024);
     DG_HOST_ASSERT(c.decode_n > 0 && c.decode_n <= n && (c.decode_n == n || c.decode_n % 256 == 0));
@@ -362,7 +336,7 @@ static StreamedConfig default_streamed_config(int m, int n, int k, int groups, i
                                                bool fused, bool allow_sparse) {
     const int tile_n = streamed_tile_n(n, k, groups);
     const auto schedule = make_streamed_plan(m, n, k, groups, num_sms, fused);
-    return {{num_sms, 256, 256, 128, 64, 64, 128, 4, 1}, tile_n, schedule.max_groups,
+    return {{num_sms, w4fa8_streamed::kBlockM, 256, 128, 64, 64, 128, 4, 1}, tile_n, schedule.max_groups,
             schedule.ramp ? ChunkSchedule::Ramp : ChunkSchedule::Fixed,
             !fused ? GatherPolicy::None : !schedule.short_call && tile_n == n ? GatherPolicy::Chunk : GatherPolicy::Full,
             allow_sparse && tile_n == n ? EmptyExpertPolicy::Nonempty : EmptyExpertPolicy::Dense};
@@ -395,16 +369,10 @@ static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, in
                    get_smem_size(c, k, spec.scheduler) <= int(prop->sharedMemPerBlockOptin));
 }
 static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int groups, GemmType kind) {
-    if (const auto* p = std::get_if<NativePlan>(&plan)) {
-        TORCH_CHECK(p->kernels.size() == 1 || p->kernels.size() == 2, "native plan requires one or two kernels");
-        for (const auto& c : p->kernels) check_native_kernel(c, n, k, groups, kind);
-        if (p->kernels.size() == 2) {
-            const auto& a = p->kernels[0]; const auto& b = p->kernels[1];
-            DG_HOST_ASSERT(a.scheduler == SchedulerPolicy::Queue && b.scheduler == SchedulerPolicy::Queue);
-            DG_HOST_ASSERT(a.tile.block_m < b.tile.block_m && a.tile.block_n == b.tile.block_n &&
-                           a.tile.num_sms == b.tile.num_sms);
-        }
-    } else check_streamed_config(std::get<StreamedConfig>(plan), m, n, k, groups, kind);
+    if (const auto* native = std::get_if<NativeKernelConfig>(&plan))
+        check_native_kernel(*native, n, k, groups, kind);
+    else
+        check_streamed_config(std::get<StreamedConfig>(plan), m, n, k, groups, kind);
 }
 
 // Derive the single native implementation from the tile and host-known shape.
@@ -450,8 +418,8 @@ static W4A8Config get_best_configs(int m, int n, int k, int groups, GemmType kin
 
 // Public configs contain only a tile; execution details stay internal.
 static ExecutionPlan resolve_config(const W4A8Config& tile, int m, int n, int k, int groups, GemmType kind) {
-    if (tile.block_m == 256) {
-        TORCH_CHECK(pack_config(tile) == W4A8ConfigTuple(tile.num_sms, 256, 256, 128, 64, 64, 128, 4, 1),
+    if (tile.block_m == w4fa8_streamed::kBlockM) {
+        TORCH_CHECK(pack_config(tile) == W4A8ConfigTuple(tile.num_sms, w4fa8_streamed::kBlockM, 256, 128, 64, 64, 128, 4, 1),
                     "unsupported W4FA8 streamed tile");
         TORCH_CHECK(kind != GemmType::MGroupedMasked && supports_native_strategy() && streamed_tile_n(n, k, groups),
                     "W4FA8 streamed tile is unavailable for this interface, shape or device");
@@ -461,7 +429,7 @@ static ExecutionPlan resolve_config(const W4A8Config& tile, int m, int n, int k,
         check_streamed_config(plan, m, n, k, groups, kind);
         return plan;
     }
-    return NativePlan{{resolve_native_config(tile, n, k, kind)}};
+    return resolve_native_config(tile, n, k, kind);
 }
 
 } // namespace deep_gemm::w4fa8

@@ -6,19 +6,25 @@ namespace deep_gemm::w4fa8_streamed {
 // activations and row scales are regenerated on every invocation/Graph replay.
 template <int K, int BlockM, int Groups> __device__ __forceinline__ void gather_body(GatherParams p, int group_start) {
   constexpr int VectorsPerRow = K / 16;
-  const int blocks = __ldg(p.aligned);
-  for (int block = blockIdx.x; block < blocks; block += gridDim.x) {
+  constexpr int CopyRows = 64;
+  static_assert(BlockM % CopyRows == 0);
+  constexpr int CopiesPerBlock = BlockM / CopyRows;
+  const int tasks = __ldg(p.aligned) * CopiesPerBlock;
+  // Copy tasks stay small enough to fill the device without changing routing BlockM.
+  for (int task = blockIdx.x; task < tasks; task += gridDim.x) {
+    const int block = task / CopiesPerBlock;
+    const int copy_row = task % CopiesPerBlock * CopyRows;
     const uint4 expert = __ldg(reinterpret_cast<const uint4 *>(p.experts) + block);
     if (expert.x < uint32_t(group_start) || expert.x >= uint32_t(group_start + Groups))
       continue;
-    const int row = (block - int(expert.z)) * BlockM;
-    const int valid = min(BlockM, int(expert.y) - row);
+    const int row = (block - int(expert.z)) * BlockM + copy_row;
+    const int valid = min(CopyRows, int(expert.y) - row);
     const int out_row = int(expert.w) + row;
     // A warp owns a row: share its routing lookup and keep both vector streams
     // contiguous, without a row/column division for every 16-byte copy.
     const int lane = threadIdx.x & 31;
     for (int local_row = threadIdx.x / 32; local_row < valid; local_row += blockDim.x / 32) {
-      int token = lane == 0 ? __ldg(p.tokens + int64_t(block) * BlockM + local_row) : 0;
+      int token = lane == 0 ? __ldg(p.tokens + int64_t(block) * BlockM + copy_row + local_row) : 0;
       token = __shfl_sync(0xffffffffu, token, 0);
       if (uint32_t(token) < uint32_t(p.num_tokens)) {
         const auto src = reinterpret_cast<const uint4 *>(p.a) + int64_t(token) * VectorsPerRow;

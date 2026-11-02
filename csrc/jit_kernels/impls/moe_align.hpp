@@ -359,7 +359,7 @@ static MoeAlignReturn moe_align_block_size_impl(
                 const auto plan = deep_gemm::w4fa8::resolve_config(
                     deep_gemm::w4fa8::unpack_config(c), numel, n, k, num_groups, GemmType::MGroupedFused);
                 deep_gemm::w4fa8::check_plan(plan, numel, n, k, num_groups, GemmType::MGroupedFused);
-                return deep_gemm::w4fa8::get_token_block_m(plan, GemmType::MGroupedFused);
+                return std::get<1>(c);
             } else {
                 TORCH_CHECK(false, "W4FA8 configs must be a nine-element tile tuple");
             }

@@ -277,26 +277,21 @@ class RoutedMetadataRuntime final : public LaunchRuntime<RoutedMetadataRuntime> 
   public:
     struct Args {
         W4A8Config config;
-        int n, k, groups, device, variant, token_block_m;
+        int n, k, groups, device;
         LaunchArgs launch_args;
         RoutedMetadataArguments params;
-        bool force_small = false;
-        int upper_m = 0;
-        std::pair<int, int> cache_variant() const { return {variant + 2 * int(force_small) + 4 * upper_m, token_block_m}; }
+        std::pair<int, int> cache_variant() const { return {0, 0}; }
     };
     static const char* name() { return "w4a8_routed_metadata"; }
     static std::string generate_impl(const Args& a) {
-        const auto lo = a.config;
-        const int upper_m = a.upper_m ? a.upper_m : lo.block_m;
         return fmt::format(R"(
 #include <deep_gemm/scheduler/w4a8_routed_scheduler.cuh>
 extern "C" __global__ __launch_bounds__(256)
 void w4a8_routed_metadata(deep_gemm::w4fa8::RoutedMetadataArguments p) {{
-    deep_gemm::w4fa8::{}<{}, {}, {}, {}>(p.rows, p.lower, p.upper);
+    deep_gemm::w4fa8::build_w4a8_routed_metadata<{}, {}>(p.rows, p.metadata);
 }}
 // device={}
-)", a.variant == 0 && !a.force_small ? "build_w4a8_partitioned_metadata" : "build_w4a8_routed_metadata",
-           a.groups, lo.block_m, a.force_small ? lo.block_m : upper_m, a.token_block_m, a.device);
+)", a.groups, a.config.block_m, a.device);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -334,75 +329,35 @@ static bool run_compact(const NativeKernelConfig& spec, int m, int n, int k, int
 
 static bool run_routed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
                        const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
-                       const torch::Tensor& tokens, GemmType kind, const W4A8Config& original, bool capturing, float inv_scale, const NativePlan& plan) {
+                       const torch::Tensor& tokens, GemmType kind, bool capturing, float inv_scale,
+                       const NativeKernelConfig& spec) {
     const int n = b.size(1), k = a.size(-1), groups = b.size(0), m = d.size(0), device = a.get_device();
     const bool fused = kind == GemmType::MGroupedFused;
-    TORCH_CHECK(plan.kernels.size() == 1 || plan.kernels.size() == 2, "native queue plan must have one or two kernels");
-    const auto lo = plan.kernels.front().tile, hi = plan.kernels.back().tile;
-    RoutedMetadataRuntime::Args meta{lo, n, k, groups, device, int(!fused), original.block_m, {dim3(1), dim3(256), 0},
-                                     {}};
-    RoutedRuntime::Args low{lo,    n,
-                            k,     groups,
-                            kind,  {dim3(lo.num_sms), dim3(get_num_threads(lo)), get_smem_size(lo, k, SchedulerPolicy::Queue)},
-                            {}, device};
-    RoutedRuntime::Args high{hi,    n,
-                             k,     groups,
-                             kind,  {dim3(hi.num_sms), dim3(get_num_threads(hi)), get_smem_size(hi, k, SchedulerPolicy::Queue)},
-                             {}, device};
-    low.kernel_config = plan.kernels.front();
-    high.kernel_config = plan.kernels.back();
-    low.params.inv_scale = high.params.inv_scale = inv_scale;
-    const auto low_kernel = prepare_specialized<RoutedRuntime>(low, capturing);
-    // A declared second tile must remain available throughout this plan.
-    const bool split = plan.kernels.size() == 2;
-    const auto high_kernel = split && fits_strategy(hi, k, true)
-                                 ? prepare_specialized<RoutedRuntime>(high, capturing)
-                                 : std::optional<SpecializedKernel>{};
-    if (!low_kernel)
+    const auto& c = spec.tile;
+    RoutedRuntime::Args args{c, n, k, groups, kind,
+                             {dim3(c.num_sms), dim3(get_num_threads(c)), get_smem_size(c, k, SchedulerPolicy::Queue)},
+                             {}, device, spec};
+    args.params.inv_scale = inv_scale;
+    const auto kernel = prepare_specialized<RoutedRuntime>(args, capturing);
+    if (!kernel)
         return false;
-    TORCH_CHECK(!split || high_kernel.has_value(), "native upper tile does not fit compiled resources");
-    meta.force_small = !split;
-    meta.upper_m = hi.block_m;
-    const auto metadata = prepare_specialized<RoutedMetadataRuntime>(meta, capturing);
-    if (!metadata)
+    RoutedMetadataRuntime::Args meta{c, n, k, groups, device, {dim3(1), dim3(256), 0}, {}};
+    const auto metadata_kernel = prepare_specialized<RoutedMetadataRuntime>(meta, capturing);
+    if (!metadata_kernel)
         return false;
-    auto buffer = [&](int bm) {
-        return at::empty({int64_t(kRoutedMetadataBytes) + int64_t(32) * (ceil_div(m, bm) + groups)}, b.options());
-    };
-    auto lower = buffer(lo.block_m);
-    auto upper = high_kernel ? buffer(hi.block_m) : at::empty({int64_t(2 * sizeof(int32_t))}, b.options());
-    meta.params = {rows.data_ptr<int32_t>(), lower.data_ptr<uint8_t>(), upper.data_ptr<uint8_t>()};
+    auto metadata = at::empty({int64_t(kRoutedMetadataBytes) + int64_t(32) * (ceil_div(m, c.block_m) + groups)}, b.options());
+    meta.params = {rows.data_ptr<int32_t>(), metadata.data_ptr<uint8_t>()};
     auto prof = make_profile(kind, groups, fused ? a.size(0) : m, n, k, ceil_div(m, groups),
                              fused ? d.size(0) / a.size(0) : 0, rows.data_ptr<int32_t>());
     ProfilingInterface::Instance().instrument(true, prof);
-    RoutedMetadataRuntime::launch(metadata->runtime, meta);
-    auto invoke = [&](RoutedRuntime::Args& args, const SpecializedKernel& prepared, const torch::Tensor& layout) {
-        args.params = {a.data_ptr(),
-                       b.data_ptr<uint8_t>(),
-                       scale.data_ptr<uint8_t>(),
-                       d.data_ptr(),
-                       a_scale.data_ptr<float>(),
-                       int(a.size(0)),
-                       inv_scale,
-                       fused ? tokens.data_ptr<int32_t>() : nullptr,
-                       {layout.data_ptr<uint8_t>()}};
-        args.launch_args.grid_dim = dim3(args.config.num_sms * std::min(8, prepared.active_blocks));
-        RoutedRuntime::launch(prepared.runtime, args);
-    };
-    invoke(low, *low_kernel, lower);
-    if (high_kernel)
-        invoke(high, *high_kernel, upper);
+    RoutedMetadataRuntime::launch(metadata_kernel->runtime, meta);
+    args.params = {a.data_ptr(), b.data_ptr<uint8_t>(), scale.data_ptr<uint8_t>(), d.data_ptr(),
+                   a_scale.data_ptr<float>(), int(a.size(0)), inv_scale,
+                   fused ? tokens.data_ptr<int32_t>() : nullptr, {metadata.data_ptr<uint8_t>()}};
+    args.launch_args.grid_dim = dim3(c.num_sms * std::min(8, kernel->active_blocks));
+    RoutedRuntime::launch(kernel->runtime, args);
     ProfilingInterface::Instance().instrument(false, prof);
     return true;
-}
-
-static std::vector<int> native_plan_key(const NativePlan& plan) {
-    std::vector<int> key;
-    for (const auto& c : plan.kernels) {
-        std::apply([&](auto... field) { (key.push_back(field), ...); }, pack_config(c.tile));
-        key.insert(key.end(), {int(c.fragment), int(c.a_load()), int(c.scheduler)});
-    }
-    return key;
 }
 
 static void execute_plan(const ExecutionPlan& plan, const torch::Tensor& a, const torch::Tensor& a_scale,
@@ -414,27 +369,24 @@ static void execute_plan(const ExecutionPlan& plan, const torch::Tensor& a, cons
     if (const auto* streamed_config = std::get_if<StreamedConfig>(&plan)) {
         const auto& c = *streamed_config;
         TORCH_CHECK(streamed::run_streamed(a, a_scale, b, scale, d, rows, c,
-                                          kind == GemmType::MGroupedFused ? streamed::FusedInputs{experts, tokens, aligned, get_token_block_m(plan, kind)}
+                                          kind == GemmType::MGroupedFused ? streamed::FusedInputs{experts, tokens, aligned}
                                                                           : streamed::FusedInputs{}, inv_scale),
                     "W4FA8 streamed plan must be warmed outside graph capture");
         return;
     }
-    const auto& native = std::get<NativePlan>(plan);
-    using ReadyKey = std::tuple<int, uintptr_t, int, int, int, int, int, std::vector<int>>;
+    const auto& kernel = std::get<NativeKernelConfig>(plan);
+    using ReadyKey = std::tuple<int, uintptr_t, int, int, int, int, int, W4A8ConfigTuple, FragmentPolicy, SchedulerPolicy>;
     static std::mutex ready_mutex;
     static std::set<ReadyKey> ready;
-    const ReadyKey key{a.get_device(), reinterpret_cast<uintptr_t>(current_stream()), m, n, k, groups, int(kind), native_plan_key(native)};
+    const ReadyKey key{a.get_device(), reinterpret_cast<uintptr_t>(current_stream()), m, n, k, groups, int(kind), pack_config(kernel.tile), kernel.fragment, kernel.scheduler};
     const bool capturing = is_w4a8_capturing();
     if (capturing) {
         std::lock_guard<std::mutex> lock(ready_mutex);
         TORCH_CHECK(ready.count(key), "W4FA8 native plan must be warmed outside graph capture on this caller stream");
     }
 
-    const auto& kernel = native.kernels.front();
     if (kernel.scheduler == SchedulerPolicy::Queue) {
-        auto layout = kernel.tile;
-        layout.block_m = kind == GemmType::MGroupedFused ? get_token_block_m(plan, kind) : 64;
-        TORCH_CHECK(run_routed(a, a_scale, b, scale, d, rows, tokens, kind, layout, is_w4a8_capturing(), inv_scale, native),
+        TORCH_CHECK(run_routed(a, a_scale, b, scale, d, rows, tokens, kind, capturing, inv_scale, kernel),
                     "W4FA8 native queue plan must be warmed outside graph capture and fit compiled resources");
     } else if (kernel.fragment == FragmentPolicy::FullK && kernel.scheduler == SchedulerPolicy::Standard) {
         run(a, a_scale, b, scale, d, rows, kind, expected_m, kernel.tile, inv_scale, experts, tokens, aligned);

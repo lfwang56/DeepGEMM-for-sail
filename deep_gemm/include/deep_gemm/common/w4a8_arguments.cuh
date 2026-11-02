@@ -12,6 +12,7 @@ template <class Storage> struct RowScaleStorage<Storage, 0> : Storage {};
 } // namespace deep_gemm::w4fa8
 
 namespace deep_gemm::w4fa8_streamed {
+inline constexpr int kBlockM = 256;
 struct GroupedRowRangeArguments {
   uint32_t shape_m;
   int32_t* grouped_layout;
@@ -38,12 +39,11 @@ struct DecodeParams {
 } // namespace deep_gemm::w4fa8_streamed
 
 namespace deep_gemm::w4fa8 {
-// Task records retain the measured alignment/layout used by routed kernels.
+// Queue header precedes the per-tile task records.
 inline constexpr int kRoutedMetadataBytes = 1024;
 struct RoutedMetadataArguments {
   const int32_t* rows;
-  uint8_t* lower;
-  uint8_t* upper;
+  uint8_t* metadata;
 };
 
 

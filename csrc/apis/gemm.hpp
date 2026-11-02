@@ -1774,7 +1774,7 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_fused(const std::pair<torch::Tensor, 
     if (!m)
         return;
     const auto plan = deep_gemm::w4fa8::resolve_config(deep_gemm::w4fa8::unpack_config(configs), out.size(0), n, k, num_groups, GemmType::MGroupedFused);
-    TORCH_CHECK(tokens.dim() == 2 && tokens.size(1) == deep_gemm::w4fa8::get_token_block_m(plan, GemmType::MGroupedFused),
+    TORCH_CHECK(tokens.dim() == 2 && tokens.size(1) == std::get<1>(configs),
                 "sorted_token_ids routing BlockM must match W4FA8 configs");
     deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, rows,
                                  GemmType::MGroupedFused, ceil_div(int(out.size(0)), num_groups), inv_scale, experts, tokens, aligned);

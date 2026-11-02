@@ -198,7 +198,7 @@ struct W4A8SingleRegisterMainloop : deep_gemm::w4fa8_streamed::UnitBScaleMainloo
 
 namespace deep_gemm::w4fa8_streamed {
 using namespace cute;
-template <int OutputN, int K, int TileN, int Groups, int BM = 256, int BN = 256, int WM = 64, int WN = 64,
+template <int OutputN, int K, int TileN, int Groups, int BM = kBlockM, int BN = 256, int WM = 64, int WN = 64,
           int Stages = 4, bool ApplyInvScale = false>
 struct CoreTraits {
   using Arch = cutlass::arch::PPU0015;
@@ -251,7 +251,7 @@ struct CoreTraits {
   };
   using Kernel = cutlass::gemm::kernel::DeepGemmUniversal<Shape<int, int, int, int>, ML, EP, Scheduler, false>;
 };
-template <int N, int K, int TileN, int Groups, int BM = 256, int BN = 256, int WM = 64, int WN = 64, int Stages = 4>
+template <int N, int K, int TileN, int Groups, int BM = kBlockM, int BN = 256, int WM = 64, int WN = 64, int Stages = 4>
 __global__ __launch_bounds__(
     CoreTraits<N, K, TileN, Groups, BM, BN, WM, WN, Stages>::Kernel::MaxThreadsPerBlock,
     1) void mixed_core(typename CoreTraits<N, K, TileN, Groups, BM, BN, WM, WN, Stages>::Kernel::Params params) {
