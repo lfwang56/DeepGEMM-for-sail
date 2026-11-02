@@ -191,6 +191,12 @@ static W4A8Config routed_config(bool small, GemmType kind = GemmType::MGroupedNo
     return {get_num_sms(), bm, 256, 128, bm, 32, 128, stages, 1};
 }
 
+// Long-K NoPad benefits from fewer weight-decode tiles near the M160 tail.
+static W4A8Config default_routed_config(int expected_m, int k, GemmType kind) {
+    const bool wide = kind == GemmType::MGroupedNoPad && k > 2048 && expected_m > 128 && expected_m <= 192;
+    return routed_config(!wide, kind);
+}
+
 // A second persistent launch must have enough K-tile work to amortize its
 // empty-queue cost. This bound is independent of the current routing values.
 static bool routed_partition_eligible(const W4A8Config& c, int m, int n, int k) {
@@ -209,14 +215,14 @@ static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, cons
     // Small expert sets need several waves to repay the device metadata pass.
     if (groups <= 64 && int64_t(ceil_div(m, 192)) * (n / 256) < int64_t(get_num_sms()) * 4)
         return false;
-    // Admit only the single default tile; dual-tile partitioning remains experimental.
+    // Check the same single tile that automatic dispatch will select.
+    const auto tile = default_routed_config(expected_m, k, kind);
     if (kind == GemmType::MGroupedFused) {
-        const auto lower = routed_config(true, kind);
-        const int routed_rows = ceil_div(expected_m, lower.block_m) * lower.block_m;
+        const int routed_rows = ceil_div(expected_m, tile.block_m) * tile.block_m;
         if (routed_rows * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
             return false;
     }
-    return fits_strategy(routed_config(true, kind), k, true);
+    return fits_strategy(tile, k, true);
 }
 
 inline constexpr int64_t kStreamedWeightBudget = 384LL * 1024 * 1024;
@@ -432,7 +438,7 @@ static W4A8Config get_best_configs(int m, int n, int k, int groups, GemmType kin
                 return tile;
             }
             if (routed) {
-                return routed_config(true, kind);
+                return default_routed_config(em, k, kind);
             }
         }
         if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k, groups, m, base.num_sms) &&
