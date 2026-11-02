@@ -45,7 +45,7 @@ class StreamedGatherRuntime final : public LaunchRuntime<StreamedGatherRuntime> 
     };
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
-#include <deep_gemm/impls/w4a8_streamed_decode.cuh>
+#include <deep_gemm/impls/w4a8_streamed_gemm.cuh>
 extern "C" __global__ __launch_bounds__(256)
 void w4a8_streamed_gather(deep_gemm::w4fa8_streamed::GatherParams p) {{
     deep_gemm::w4fa8_streamed::gather_body<{}, deep_gemm::w4fa8_streamed::kBlockM, {}>(p, 0);
@@ -93,7 +93,7 @@ class StreamedDecodeRuntime final : public LaunchRuntime<StreamedDecodeRuntime> 
         const std::string gather_arg = a.fuse_gather ? ", deep_gemm::w4fa8_streamed::GatherParams gather" : "";
         if (a.empty_flat)
             return fmt::format(R"(
-#include <deep_gemm/impls/w4a8_streamed_decode.cuh>
+#include <deep_gemm/impls/w4a8_streamed_gemm.cuh>
 extern "C" __global__ __maxnreg__(32)
 void {}(deep_gemm::w4fa8_streamed::DecodeParams params{}) {{
     deep_gemm::w4fa8_empty_flat::decode_empty_flat_body<{}, {}, {}, {}, 256, {}>(
@@ -104,7 +104,7 @@ void {}(deep_gemm::w4fa8_streamed::DecodeParams params{}) {{
                                kernel_name(a), gather_arg, a.n, a.k, a.tile_n, a.groups,
                                a.skip_fence ? "true" : "false", gather_call(a));
         return fmt::format(R"(
-#include <deep_gemm/impls/{}>
+#include <deep_gemm/impls/w4a8_streamed_gemm.cuh>
 extern "C" __global__ {}
 void {}(deep_gemm::w4fa8_streamed::DecodeParams params{}) {{
     deep_gemm::w4fa8_streamed::{}<{}, {}, {}, {}{}>(
@@ -112,7 +112,7 @@ void {}(deep_gemm::w4fa8_streamed::DecodeParams params{}) {{
     {}
 }}
 )",
-                           "w4a8_streamed_decode.cuh", fast ? "__maxnreg__(32)" : "__launch_bounds__(256)",
+                           fast ? "__maxnreg__(32)" : "__launch_bounds__(256)",
                            kernel_name(a), gather_arg, fast ? "decode_fulln_rows32_body" : "decode_tile_body", a.n, a.k,
                            a.tile_n, a.groups, fast && a.skip_fence ? ", true" : "", gather_call(a));
     }
@@ -135,7 +135,7 @@ class StreamedCoreRuntime final : public LaunchRuntime<StreamedCoreRuntime> {
     };
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
-#include <deep_gemm/impls/w4a8_streamed_core.cuh>
+#include <deep_gemm/impls/w4a8_streamed_gemm.cuh>
 using Traits = deep_gemm::w4fa8_streamed::CoreTraits<{}, {}, {}, {}, deep_gemm::w4fa8_streamed::kBlockM, 256, 64, 64, 4, {}>;
 using Kernel = typename Traits::Kernel;
 using Params = typename Kernel::Params;
