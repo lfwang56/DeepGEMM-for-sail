@@ -1,7 +1,10 @@
 #pragma once
 #include <cstdint>
 namespace deep_gemm::w4fa8 {
-enum class NativeStrategy { Default, Compact, Routed };
+enum class FragmentPolicy { FullK, RollingK32 };
+enum class ALoadPolicy { Bulk, Ring2 };
+enum class SchedulerPolicy { Standard, Prefix, Queue };
+
 template <class Storage, int Rows> struct RowScaleStorage : Storage {
   alignas(128) float row_scales[2][Rows];
 };
@@ -42,12 +45,6 @@ struct RoutedMetadataArguments {
   uint8_t* lower;
   uint8_t* upper;
 };
-struct AdaptiveMetadataArguments {
-  const int32_t* rows;
-  uint8_t* work;
-  int32_t* control;
-  float native_rate = 1, wide_rate = 1;
-  int32_t* native_layout = nullptr;
-};
+
 
 } // namespace deep_gemm::w4fa8

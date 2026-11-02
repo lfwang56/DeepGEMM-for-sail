@@ -25,7 +25,6 @@ using ConfigTuple = std::tuple<int, int, int, int, int, int, int, std::tuple<int
 // The 9-tuple returned by `w4a16_get_best_configs`:
 // (num_sms, block_m, block_n, block_k, warp_m, warp_n, warp_k, num_stages, n_expand)
 using W4A16ConfigTuple = deep_gemm_w4a16_common::W4A16ConfigTuple;
-using W4A8ConfigTuple = deep_gemm::w4fa8::W4A8ConfigTuple;
 
 extern "C" {
 static bool early_return(const int& m, const int &n, const int& k,
@@ -1525,14 +1524,13 @@ static std::pair<int, int> m_grouped_fp4_gemm_nt_masked(const std::pair<torch::T
 // validation; the impls layer (jit_kernels/impls/moe_align.hpp) only
 // orchestrates config resolution + kernel dispatch.
 //
-// NOTES: `config` is the dtype-dependent tuple `MoeAlignConfig` models -- 7 params for the bf16 /
-// int8 / fp8 fused kernels, 9 for the W4A16 ones -- so both widths are accepted and returned here.
+// Configs preserve the dtype-specific tile format or the complete W4FA8 execution plan.
 MoeAlignReturn moe_align_block_size(
     const torch::Tensor& lhs,
     const torch::Tensor& rhs,
     const torch::Tensor& topk_ids,
     bool perchannel_quant = false,
-    std::optional<FusedCommonConfigTuple> config = std::nullopt,
+    std::optional<FusedConfigTuple> config = std::nullopt,
     bool enable_act_and_quant_fusing = false) {
     DG_HOST_ASSERT(topk_ids.dtype() == torch::kInt32);
     DG_HOST_ASSERT(topk_ids.dim() == 2);
@@ -1719,9 +1717,11 @@ static void check_w4fa8_indices(const torch::Tensor& t, const torch::Tensor& a) 
 static void m_grouped_gemm_fp8_fp4_bf16_nt_nopad(const std::pair<torch::Tensor, torch::Tensor>& a,
                                       const std::pair<torch::Tensor, torch::Tensor>& b, const torch::Tensor& out,
                                       const torch::Tensor& indices, std::optional<torch::Tensor> rows = std::nullopt,
-                                      std::optional<W4A8ConfigTuple> configs = std::nullopt, float inv_scale = 1.0f) {
+                                      std::optional<pybind11::tuple> configs = std::nullopt, float inv_scale = 1.0f) {
     check_w4fa8_operands(a, b, out, GemmType::MGroupedNoPad);
+    TORCH_CHECK(std::isfinite(inv_scale) && inv_scale > 0.f, "inv_scale must be finite and positive");
     const int m = a.first.size(-2), n = b.first.size(1), k = a.first.size(-1), num_groups = b.first.size(0);
+    TORCH_CHECK(num_groups <= 1024, "W4FA8 nopad supports at most 1024 experts");
     check_w4fa8_indices(indices, a.first);
     TORCH_CHECK(indices.dim() == 1 && indices.numel() == m, "m_indices shape mismatch");
     if (!m)
@@ -1730,72 +1730,51 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_nopad(const std::pair<torch::Tensor, 
     if (rows.has_value())
         counts = *rows;
     else
-        counts = at::bincount(indices.to(at::kLong), {}, num_groups).to(at::kInt);
+        counts = at::zeros({num_groups}, indices.options()).index_add_(0, indices.to(at::kLong), at::ones_like(indices));
     check_w4fa8_indices(counts, a.first);
     TORCH_CHECK(counts.dim() == 1 && counts.numel() == num_groups, "m_rows shape mismatch");
     const int em = ceil_div(m, num_groups);
-    auto c = configs.has_value() ? deep_gemm::w4fa8::unpack_config(*configs)
-                                 : deep_gemm::w4fa8::get_best_configs(em, n, k, num_groups, GemmType::MGroupedNoPad);
-    if (inv_scale == 1.0f && !configs.has_value() && !is_compile_only() && is_ppu1v5_device()) {
-        deep_gemm::w4fa8::prepare_native_fallback(c, n, k, num_groups, GemmType::MGroupedNoPad);
-        if (rows.has_value() && deep_gemm::w4fa8::try_run_specialized(
-                a.first,a.second,b.first,b.second,out,counts,GemmType::MGroupedNoPad,c))
-            return;
-        const int tile_n = deep_gemm::w4fa8::streamed_tile_n(n,k,num_groups);
-        const int minimum_rows = deep_gemm::w4fa8::streamed_min_rows(n,k,num_groups,m,c.num_sms);
-        if (tile_n && int64_t(m) >= int64_t(num_groups) * minimum_rows &&
-            deep_gemm::w4fa8::streamed::run_streamed(
-                a.first, a.second, b.first, b.second, out, counts, tile_n, c.num_sms, rows.has_value()))
-            return;
-    }
-    deep_gemm::w4fa8::run(a.first, a.second, b.first, b.second, out, counts, GemmType::MGroupedNoPad, em, c, inv_scale);
+    const auto plan = configs ? deep_gemm::w4fa8::parse_plan(*configs)
+                              : deep_gemm::w4fa8::get_best_configs(m, n, k, num_groups, GemmType::MGroupedNoPad);
+    deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, counts,
+                                 GemmType::MGroupedNoPad, em, inv_scale);
 }
 
 static void m_grouped_gemm_fp8_fp4_bf16_nt_masked(const std::pair<torch::Tensor, torch::Tensor>& a,
                                        const std::pair<torch::Tensor, torch::Tensor>& b, const torch::Tensor& out,
                                        const torch::Tensor& rows, int expected_m,
-                                       std::optional<W4A8ConfigTuple> configs = std::nullopt, float inv_scale = 1.0f) {
+                                       std::optional<pybind11::tuple> configs = std::nullopt, float inv_scale = 1.0f) {
     check_w4fa8_operands(a, b, out, GemmType::MGroupedMasked);
+    TORCH_CHECK(std::isfinite(inv_scale) && inv_scale > 0.f, "inv_scale must be finite and positive");
     const int m = a.first.size(-2), n = b.first.size(1), k = a.first.size(-1), num_groups = b.first.size(0);
     check_w4fa8_indices(rows, a.first);
     TORCH_CHECK(rows.dim() == 1 && rows.numel() == num_groups && expected_m >= 0, "masked_m shape or expected_m invalid");
     if (!m)
         return;
-    auto c = configs.has_value()
-                 ? deep_gemm::w4fa8::unpack_config(*configs)
-                 : deep_gemm::w4fa8::get_best_configs(expected_m, n, k, num_groups, GemmType::MGroupedMasked);
-    deep_gemm::w4fa8::run(a.first, a.second, b.first, b.second, out, rows, GemmType::MGroupedMasked, expected_m, c, inv_scale);
+    const auto plan = configs ? deep_gemm::w4fa8::parse_plan(*configs)
+                              : deep_gemm::w4fa8::get_best_configs(m, n, k, num_groups, GemmType::MGroupedMasked, expected_m);
+    deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, rows,
+                                 GemmType::MGroupedMasked, expected_m, inv_scale);
 }
 
 static void m_grouped_gemm_fp8_fp4_bf16_nt_fused(const std::pair<torch::Tensor, torch::Tensor>& a,
                                       const std::pair<torch::Tensor, torch::Tensor>& b, const torch::Tensor& out,
                                       const torch::Tensor& rows, const torch::Tensor& experts,
                                       const torch::Tensor& tokens, const torch::Tensor& aligned,
-                                      const W4A8ConfigTuple& configs, float inv_scale = 1.0f) {
+                                      const pybind11::tuple& configs, float inv_scale = 1.0f) {
     check_w4fa8_operands(a, b, out, GemmType::MGroupedFused);
+    TORCH_CHECK(std::isfinite(inv_scale) && inv_scale > 0.f, "inv_scale must be finite and positive");
     const int m = a.first.size(0), num_groups = b.first.size(0);
     for (const auto& t : {rows, experts, tokens, aligned})
         check_w4fa8_indices(t, a.first);
     TORCH_CHECK(rows.numel() == num_groups && aligned.numel() >= 1, "fused metadata shape mismatch");
     if (!m)
         return;
-    auto c = deep_gemm::w4fa8::unpack_config(configs);
-    if (inv_scale == 1.0f && !is_compile_only())
-        deep_gemm::w4fa8::prepare_native_fallback(c, b.first.size(1), a.first.size(1), num_groups,
-                                                GemmType::MGroupedFused);
-    if (inv_scale == 1.0f &&
-        deep_gemm::w4fa8::try_run_specialized(a.first, a.second, b.first, b.second, out, rows, GemmType::MGroupedFused,
-                                              c, tokens, experts, aligned))
-        return;
-    const int n = b.first.size(1), k = a.first.size(1), output_m = out.size(0);
-    if (inv_scale == 1.0f && !is_compile_only() && tokens.dim() == 2 && tokens.size(1) == c.block_m &&
-        deep_gemm::w4fa8::default_fused_config(c, output_m, n, k, num_groups) &&
-        deep_gemm::w4fa8::streamed_fused_eligible(output_m, n, k, num_groups, c.num_sms) &&
-        deep_gemm::w4fa8::streamed::run_streamed(a.first, a.second, b.first, b.second, out, rows,
-                                                 deep_gemm::w4fa8::streamed_tile_n(n, k, num_groups), c.num_sms, true, {experts, tokens, aligned, c.block_m}))
-        return;
-    deep_gemm::w4fa8::run(a.first, a.second, b.first, b.second, out, rows, GemmType::MGroupedFused,
-                          ceil_div(output_m, num_groups), c, inv_scale, experts, tokens, aligned);
+    const auto plan = deep_gemm::w4fa8::parse_plan(configs);
+    TORCH_CHECK(tokens.dim() == 2 && tokens.size(1) == deep_gemm::w4fa8::get_token_block_m(plan, GemmType::MGroupedFused),
+                "sorted_token_ids routing BlockM must match W4FA8 configs");
+    deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, rows,
+                                 GemmType::MGroupedFused, ceil_div(int(out.size(0)), num_groups), inv_scale, experts, tokens, aligned);
 }
 
 static void acblaslt_gemm_nt(const torch::Tensor& a, const torch::Tensor& b,

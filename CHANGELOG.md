@@ -75,6 +75,13 @@ DeepGEMM-for-sail maintains its release identifiers independently of the upstrea
 
 - **Package versioning**: combines DeepGEMM's own version, its release version,
   and the PPU SDK version, e.g. `1.1.0+v1.0.0.ppu2.2.0`.
+- **M890 W4FA8 execution configs**: replaces flat W4FA8 tile tuples with complete
+  `native` or `streamed` plans, shared by alignment and GEMM execution. Explicit
+  configs determine tiles, fragment storage, operand loading, task assignment
+  and streamed chunking; unsupported combinations fail without changing plans.
+  Other dtypes retain their config formats. Default selection is deterministic
+  and does not benchmark candidates on the GPU. All plans support `inv_scale`.
+
 - **Paged MQA page sizes**: extends regular paged MQA from page size 64
   to 32, 64, and 128.
 - **Canonical GEMM bindings**: promotes existing short GEMM names to the

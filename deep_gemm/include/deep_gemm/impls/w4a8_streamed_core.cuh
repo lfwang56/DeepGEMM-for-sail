@@ -5,11 +5,17 @@ namespace deep_gemm::w4fa8_streamed {
 using namespace cute;
 // The decoder already incorporates weight scales. Keep the stock pipeline and
 // specialize its final scaling step without cloning the collective mainloop.
-template <class Base> struct UnitBScaleMainloop : Base {
-  using Params = typename Base::Params;
+template <class Base, bool ApplyInvScale> struct UnitBScaleMainloop : Base {
+  struct ScaledParams : Base::Params { float inv_scale = 1.f; };
+  using Params = cute::conditional_t<ApplyInvScale, ScaledParams, typename Base::Params>;
+  using Arguments = Params;
+  float inv_scale = 1.f;
+  template <class Shape> static Params to_underlying_arguments(Shape const&, Params const& p, void*) { return p; }
   using Policy = typename Base::DispatchPolicy;
   using ElementScale = typename Base::ElementScale;
-  template <class Shape> CUTLASS_DEVICE UnitBScaleMainloop(Params p, Shape shape) : Base(p, shape) {}
+  template <class Shape> CUTLASS_DEVICE UnitBScaleMainloop(Params p, Shape shape) : Base(p, shape) {
+    if constexpr (ApplyInvScale) inv_scale = p.inv_scale;
+  }
   template <class Src, class Dst>
   CUTLASS_DEVICE void dequant(Src& mma_acc, Dst& accum, int thread_idx, int smem_pipe_scale, char* smem_buf) {
     using namespace cute;
@@ -37,8 +43,11 @@ template <class Base> struct UnitBScaleMainloop : Base {
       CUTE_UNROLL
       for (int m = 0; m < cute::size<1>(accum); ++m) {
         CUTE_UNROLL
-        for (int i = 0; i < cute::size<0>(accum); ++i)
-          accum(i, m, n) = mma_acc(i, m, n) * tCrSA(i, m, Int<0>{});
+        for (int i = 0; i < cute::size<0>(accum); ++i) {
+          float scale = tCrSA(i, m, Int<0>{});
+          if constexpr (ApplyInvScale) scale *= inv_scale;
+          accum(i, m, n) = mma_acc(i, m, n) * scale;
+        }
       }
     }
   }
@@ -47,9 +56,10 @@ template <class Base> struct UnitBScaleMainloop : Base {
 namespace cutlass::gemm::collective {
 // Keep the stock mainloop construction, loading and parameter ABI. Only the
 // operand-register schedule changes; a shared stage is recycled after its last read.
-template <class Base> struct W4A8SingleRegisterMainloop : deep_gemm::w4fa8_streamed::UnitBScaleMainloop<Base> {
-  using Parent = deep_gemm::w4fa8_streamed::UnitBScaleMainloop<Base>;
-  using Params = typename Base::Params;
+template <class Base, bool ApplyInvScale = false>
+struct W4A8SingleRegisterMainloop : deep_gemm::w4fa8_streamed::UnitBScaleMainloop<Base, ApplyInvScale> {
+  using Parent = deep_gemm::w4fa8_streamed::UnitBScaleMainloop<Base, ApplyInvScale>;
+  using Params = typename Parent::Params;
   using DispatchPolicy = typename Base::DispatchPolicy;
   using TileShape = typename Base::TileShape;
   using SharedStorage = typename Base::SharedStorage;
@@ -189,7 +199,7 @@ template <class Base> struct W4A8SingleRegisterMainloop : deep_gemm::w4fa8_strea
 namespace deep_gemm::w4fa8_streamed {
 using namespace cute;
 template <int OutputN, int K, int TileN, int Groups, int BM = 256, int BN = 256, int WM = 64, int WN = 64,
-          int Stages = 4>
+          int Stages = 4, bool ApplyInvScale = false>
 struct CoreTraits {
   using Arch = cutlass::arch::PPU0015;
   using A = cutlass::float_e4m3_t;
@@ -208,7 +218,7 @@ struct CoreTraits {
       cutlass::detail::TagToStrideA_t<Row>, B, cutlass::detail::TagToStrideB_t<Col>, TM, typename OA::GmemTiledCopy,
       typename OA::SmemLayoutAtom, typename OA::SmemCopyAtom, cute::identity, typename OB::GmemTiledCopy,
       typename OB::SmemLayoutAtom, typename OB::SmemCopyAtom, cute::identity>;
-  using ML = cutlass::gemm::collective::W4A8SingleRegisterMainloop<MLBase>;
+  using ML = cutlass::gemm::collective::W4A8SingleRegisterMainloop<MLBase, ApplyInvScale>;
   using EP = cutlass::epilogue::collective::DefaultEpilogueNoTsm<
       cutlass::detail::TagToStrideA_t<Row>, cutlass::detail::TagToStrideA_t<Row>,
       cutlass::epilogue::thread::LinearCombination<D, 2, float, float, cutlass::epilogue::thread::ScaleType::Nothing>,

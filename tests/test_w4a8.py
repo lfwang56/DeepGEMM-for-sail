@@ -1,5 +1,6 @@
 """PPU1.5 W4FA8 functional tests. Run: python tests/test_w4a8.py"""
 import random
+from contextlib import contextmanager
 
 import torch
 import deep_gemm
@@ -7,6 +8,23 @@ from utils import is_ppu1v5_device
 from deep_gemm.testing.numeric import calc_diff
 from quantization import decode_weight, quant_activation
 import utils
+
+
+def native_config(tile, fragment="full_k", a_load="bulk", scheduler="standard"):
+    if tile is None or isinstance(tile[0], str):
+        return tile
+    return ("native", ((tile, fragment, a_load, scheduler),))
+
+
+@contextmanager
+def capture_after_warmup(graph, call):
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        call()
+    stream.synchronize()
+    with torch.cuda.graph(graph, stream=stream):
+        yield
 
 
 def test_grouped_gemm():
@@ -66,7 +84,7 @@ def test_inv_scale():
         assert rhs[2] == .03125
         lhs = quant_activation(torch.randn(sum(counts), k, device='cuda', dtype=torch.bfloat16))
         def nopad(a, out, **kwargs):
-            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(a, rhs[:2], out, indices, rows, config, **kwargs)
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(a, rhs[:2], out, indices, rows, native_config(config), **kwargs)
         compare(nopad, lhs, (sum(counts), n), f'nopad {k=} {config=}')
         out = torch.empty(sum(counts), n, device='cuda', dtype=torch.bfloat16)
         nopad(lhs, out, inv_scale=rhs[2])
@@ -83,7 +101,7 @@ def test_inv_scale():
     config, counts, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs[0], rhs[0], routes)
     def fused(a, output, **kwargs):
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-            a, rhs, output, counts, experts, tokens, aligned, config, **kwargs)
+            a, rhs, output, counts, experts, tokens, aligned, native_config(config), **kwargs)
     compare(fused, lhs, tuple(out.shape), 'fused gather and repeated token use')
 
     k, n, capacity = 256, 192, 67
@@ -147,7 +165,7 @@ def test_nopad_n_expand():
         config = (deep_gemm.get_num_sms(), bm, 256, 128, bm, 64, 128, 2, 1)
         baseline = torch.empty(m, n, device='cuda', dtype=torch.bfloat16)
         out = torch.empty_like(baseline)
-        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], baseline, indices, rows, config)
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], baseline, indices, rows, native_config(config))
         offset = 0
         for expert, count in enumerate(counts):
             if count:
@@ -158,23 +176,23 @@ def test_nopad_n_expand():
             offset += count
         for selected in (None, config[:-1] + (expand,)):
             out.fill_(float('nan'))
-            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, selected)
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, native_config(selected))
             assert torch.equal(out, baseline), (groups, n, k, expand)
         if bm == 32 and k <= 512 and expand > 1:
             out.fill_(float('nan'))
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
-                gemm_lhs, rhs[:2], out, indices, rows, config[:-1] + (expand,), inv_scale=.25)
+                gemm_lhs, rhs[:2], out, indices, rows, native_config(config[:-1] + (expand,)), inv_scale=.25)
             assert torch.equal(out, baseline * .25), (groups, n, k, expand)
         # Explicit expansion remains valid above the automatic short-K threshold.
         if k == 768:
-            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, config[:-1] + (4,))
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, native_config(config[:-1] + (4,)))
             assert torch.equal(out, baseline)
         invalid = [config[:-1] + (5,), config[:7] + (3, 2), config[:6] + (64, 2, 2)]
         if n == 320:
             invalid.append(config[:-1] + (2,))
         for bad in invalid:
             try:
-                deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, bad)
+                deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, native_config(bad))
             except RuntimeError:
                 pass
             else:
@@ -209,7 +227,7 @@ def test_nopad_resident_a_and_scales():
             configs.append((deep_gemm.get_num_sms(), 128, 256, 128, 64, 64, 128, 2, 3))
         for config in configs:
             out = torch.full((m, n), float('nan'), device='cuda', dtype=torch.bfloat16)
-            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, config)
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, native_config(config))
             start = 0
             for expert, count in enumerate(counts):
                 if count:
@@ -228,7 +246,7 @@ def test_fused_nopad_equivalence():
         args['groups'], args['num_token'], args['k'], args['n'], args['topk'],
         args['data_type'], args['quant_type'], args['group_size'])
     config, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs[0], rhs[0], routes)
-    deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(lhs, rhs, out, rows, experts, tokens, aligned, config)
+    deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(lhs, rhs, out, rows, experts, tokens, aligned, native_config(config))
     flat_experts = routes.flatten()
     order = flat_experts.argsort(stable=True)
     source = torch.arange(routes.size(0), device=routes.device).repeat_interleave(routes.size(1))[order]
@@ -436,10 +454,10 @@ def test_fused_k32_basis():
         scales = torch.linspace(.5, 1.5, m, device='cuda').reshape(m, 1)
         routes = torch.zeros(m, 1, device='cuda', dtype=torch.int32)
         _, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
-            aq, rhs[0], routes, config=config[:7])
+            aq, rhs[0], routes, config=native_config(config))
         out = torch.empty(m, n, device='cuda', dtype=torch.bfloat16)
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-            (aq, scales * rhs[2]), rhs[:2], out, rows, experts, tokens, aligned, config)
+            (aq, scales * rhs[2]), rhs[:2], out, rows, experts, tokens, aligned, native_config(config))
         expected = (decode_weight(packed[0], raw[0]).T[:m]*scales).bfloat16()
         torch.testing.assert_close(out, expected, rtol=0, atol=0)
     print('PASS fused K32 basis, shifted full scale window, M64 block boundaries and N tail')
@@ -496,7 +514,7 @@ def test_tuned_nopad_dispatch():
             assert calc_diff(output, reference) < .0015
             baseline = output.clone()
             graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph):
+            with capture_after_warmup(graph, lambda: call(lhs, rhs[:2], output, indices, rows)):
                 call(lhs, rhs[:2], output, indices, rows)
             lhs[1].neg_()
             graph.replay()
@@ -507,7 +525,7 @@ def test_tuned_nopad_dispatch():
             call(lhs, rhs[:2], output, indices)
             assert calc_diff(output, reference) < .0015
             configs = (deep_gemm.get_num_sms(), 16, 256, 128, 16, 64, 128, 2, 1)
-            call(lhs, rhs[:2], output, indices, rows, configs)
+            call(lhs, rhs[:2], output, indices, rows, native_config(configs))
             assert calc_diff(output, reference) < .0015
         del packed, raw, rhs, lhs, output, reference, baseline, graph
         torch.cuda.empty_cache()
@@ -547,7 +565,7 @@ def test_tuned_fused_dispatch():
         assert torch.isfinite(output).all()
         assert calc_diff(output, reference) < .003
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        with capture_after_warmup(graph, lambda: call()):
             call()
         lhs[1].neg_()
         graph.replay()
@@ -617,11 +635,11 @@ def test_compact_fused():
         config, rows, experts, sorted_tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs[0], rhs[0], routes)
         def call():
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-                lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, config)
+                lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, native_config(config))
         call()
         assert calc_diff(output, reference) < .003
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        with capture_after_warmup(graph, lambda: call()):
             call()
         lhs[1].neg_()
         graph.replay()
@@ -641,7 +659,7 @@ def _streamed_fused_problem(groups, tokens, topk, n, k):
     output = torch.empty(tokens * topk, n, device='cuda', dtype=torch.bfloat16)
     def call():
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-            lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, config)
+            lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, native_config(config))
     def reference(weights=packed, scales=raw, routing=routes):
         source = routing.flatten().argsort(stable=True) // topk
         counts = torch.bincount(routing.flatten().long(), minlength=groups).cpu().tolist()
@@ -701,7 +719,7 @@ def test_streamed_fused_replay_updates():
         assert calc_diff(consumed, expected) < .003
 
 
-def test_streamed_fused_compile_only_capture_fallback():
+def test_streamed_fused_compile_only_preparation():
     _, _, output, call, reference, _, _, _, _ = _streamed_fused_problem(11, 5632, 4, 1536, 1024)
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
@@ -711,6 +729,17 @@ def test_streamed_fused_compile_only_capture_fallback():
             call()
         finally:
             deep_gemm.set_compile_mode(0)
+    stream.synchronize()
+    # Module preparation does not establish ordinary caller readiness.
+    try:
+        with torch.cuda.graph(torch.cuda.CUDAGraph(), stream=stream):
+            call()
+    except RuntimeError as error:
+        assert 'must be warmed outside graph capture' in str(error)
+    else:
+        raise AssertionError('compile-only incorrectly admitted capture')
+    with torch.cuda.stream(stream):
+        call()
     stream.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph, stream=stream):
@@ -785,9 +814,9 @@ def test_streamed_nopad_replay_updates():
         assert torch.equal(consumed, output)
 
 
-def test_streamed_compile_only_capture_fallback():
-    # A distinct caller has no streamed streams/events. Compile-only prepares
-    # only the native module; capture must reuse it without compiling a decoder.
+def test_streamed_compile_only_preparation():
+    # Compile-only prepares the complete declared streamed plan without writing
+    # output; capture then reuses its modules and caller-specific resources.
     counts = [2048] * 11
     _, _, output, call, reference, _, _ = _w4a8_nopad_problem(counts, 1536, 1024)
     expected = reference()
@@ -799,6 +828,17 @@ def test_streamed_compile_only_capture_fallback():
             call()
         finally:
             deep_gemm.set_compile_mode(0)
+    stream.synchronize()
+    # Module preparation does not establish ordinary caller readiness.
+    try:
+        with torch.cuda.graph(torch.cuda.CUDAGraph(), stream=stream):
+            call()
+    except RuntimeError as error:
+        assert 'must be warmed outside graph capture' in str(error)
+    else:
+        raise AssertionError('compile-only incorrectly admitted capture')
+    with torch.cuda.stream(stream):
+        call()
     stream.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph, stream=stream):
@@ -835,17 +875,17 @@ def _check_routed_fused_metadata_layout(n, k, tokens, groups=97, topk=8):
     for block_m in (64, 32):
         # Construct the corresponding token layout rather than changing only
         # the GEMM config after moe_align_block_size has produced its metadata.
-        layout_config = (deep_gemm.get_num_sms(), block_m, 256, 128, block_m, 64, 2)
+        layout_config = native_config((deep_gemm.get_num_sms(), block_m, 256, 128, block_m, 64, 128, 2, 1))
         _, rows, experts, sorted_tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
             lhs[0], rhs[0], routes, config=layout_config)
         config = (deep_gemm.get_num_sms(), block_m, 256, 128, block_m, 64, 128, 2, 1)
         def call():
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-                lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, config)
+                lhs, rhs[:2], output, rows, experts, sorted_tokens, aligned, native_config(config))
         call()
         assert calc_diff(output, reference) < .003
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        with capture_after_warmup(graph, lambda: call()):
             call()
         lhs[1].neg_()
         graph.replay()
@@ -880,7 +920,7 @@ def test_fused_large_output_offset():
     config, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(a, rhs[0], routes)
     out = torch.empty(groups * r, n, device='cuda', dtype=torch.bfloat16)
     deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-        (a, scales), rhs[:2], out, rows, experts, tokens, aligned, config)
+        (a, scales), rhs[:2], out, rows, experts, tokens, aligned, native_config(config))
     probe_rows = torch.tensor([0, 65535, 65536, 65696, groups * r - 1], device='cuda')
     selected = out[probe_rows][:, [0, 255, n - 1]]
     torch.testing.assert_close(selected, torch.full_like(selected, float(k)), rtol=0, atol=0)
@@ -925,14 +965,14 @@ def test_compact_intermediate_rows_and_skew():
             fused_output = torch.empty_like(output)
             def fused():
                 deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-                    lhs, rhs[:2], fused_output, frows, experts, tokens, aligned, config)
+                    lhs, rhs[:2], fused_output, frows, experts, tokens, aligned, native_config(config))
             nopad()
             fused()
             expected = reference()
             assert calc_diff(output, expected) < .003
             assert calc_diff(fused_output, expected) < .003
             graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(graph):
+            with capture_after_warmup(graph, lambda: (nopad(), fused())):
                 nopad()
                 fused()
             # Change the distribution itself after capture: balanced <-> hot,
@@ -963,10 +1003,14 @@ def test_compact_intermediate_rows_and_skew():
 
 
 def _capture_on_fresh_stream(call):
-    call()  # Ordinary Streamed warmup on the original caller only.
+    call()  # An ordinary call prepares resources only for this caller.
     torch.cuda.synchronize()
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
+    # The new caller has its own internal streams/events and must prepare them.
+    with torch.cuda.stream(stream):
+        call()
+    stream.synchronize()
     from pathlib import Path
     import os
     cache = Path(os.environ.get('DG_JIT_CACHE_DIR', str(Path.home() / '.deep_gemm')))
@@ -980,13 +1024,13 @@ def _capture_on_fresh_stream(call):
     return graph
 
 
-def test_streamed_nopad_cross_stream_fallback():
+def test_streamed_nopad_per_caller_preparation():
     _, _, output, call, reference, _, _ = _w4a8_nopad_problem([2048] * 19, 2560, 1280)
     _capture_on_fresh_stream(call)
     assert calc_diff(output, reference()) < .003
 
 
-def test_streamed_fused_cross_stream_fallback():
+def test_streamed_fused_per_caller_preparation():
     _, _, output, call, reference, _, _, _, _ = _streamed_fused_problem(23, 11776, 4, 2560, 1280)
     _capture_on_fresh_stream(call)
     assert calc_diff(output, reference()) < .003
@@ -1033,7 +1077,7 @@ def test_streamed_partial_n_basis_and_replay():
     def call():
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], nopad_out, indices, rows)
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
-            (token_a, token_scale * rhs[2]), rhs[:2], fused_out, frows, experts, tokens, aligned, config)
+            (token_a, token_scale * rhs[2]), rhs[:2], fused_out, frows, experts, tokens, aligned, native_config(config))
     probes = torch.tensor([0, 1, 1023, 1024, m // 2, m - 2, m - 1], device='cuda')
     columns = torch.arange(n, device='cuda')
     values = torch.tensor([0., .5, 1., 1.5, 2., 3., 4., 6., -0., -.5, -1., -1.5, -2., -3., -4., -6.], device='cuda')
@@ -1102,7 +1146,7 @@ def test_routed_fused_partition_replay_updates():
     call()
     torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
+    with capture_after_warmup(graph, lambda: call()):
         call()
     slots = torch.arange(tokens * topk, device='cuda').reshape(tokens, topk)
     for active in (groups, groups - 1, groups // 2, 1):
@@ -1124,8 +1168,8 @@ def test_routed_fused_partition_replay_updates():
         assert calc_diff(output, reference(routing=routes)) < .003
 
 
-def test_routed_affine_copy_replay_updates():
-    # E192/Top8 is affine, E191/Top8 changes the stride between rows.
+def test_routed_token_order_replay_updates():
+    # Exercise regular and irregular token order through the same gather path.
     # E128/E160 exercise partial paired tiles, E96 full paired tiles,
     # and E1 moves all work to the other queue.
     # The same captured graph must observe each route and tensor update.
@@ -1136,7 +1180,7 @@ def test_routed_affine_copy_replay_updates():
     call()
     torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(graph):
+    with capture_after_warmup(graph, lambda: call()):
         call()
     slots = torch.arange(tokens * topk, device='cuda').reshape(tokens, topk)
     for active in (groups, groups - 1, 128, 160, groups // 2, 1):
@@ -1158,6 +1202,256 @@ def test_routed_affine_copy_replay_updates():
         assert calc_diff(output, reference(routing=routes)) < .003
 
 
+
+def test_native_optimized_inv_scale(k=768):
+    # Switch unit/non-unit variants in both queue choices to catch stale cache keys.
+    torch.manual_seed(41)
+    groups, n = 97, 256
+    packed = torch.randint(256, (groups, n, k // 2), device='cuda', dtype=torch.uint8)
+    raw = torch.randint(123, 132, (groups, n, k // 32), device='cuda', dtype=torch.uint8)
+    rhs = deep_gemm.preprocess_weights_and_scales(
+        deep_gemm.PreprocessMode.W4A8_MXFP4_MMA, False, packed, raw)[:2]
+    lhs = quant_activation(torch.randn(groups * 160, k, device='cuda', dtype=torch.bfloat16))
+    output = torch.empty(groups * 160, n, device='cuda', dtype=torch.bfloat16)
+    reference = torch.empty_like(output)
+    for skew in (False, True):
+        counts = [160] * groups
+        if skew:
+            counts[0], counts[1] = 170, 150
+        rows = torch.tensor(counts, device='cuda', dtype=torch.int32)
+        indices = torch.repeat_interleave(torch.arange(groups, device='cuda', dtype=torch.int32), rows.long())
+        for inverse in (1., .3, 2., 1.):
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+                (lhs[0], lhs[1] * inverse), rhs, reference, indices, rows)
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs, output, indices, rows, inv_scale=inverse)
+            assert torch.equal(output, reference), ('nopad', skew, inverse)
+    print('PASS native inv_scale nopad queue variants', flush=True)
+    lhs, rhs, output, _, _, _, _, routes, _ = _streamed_fused_problem(groups, 1940, 8, n, k)
+    config, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs[0], rhs[0], routes)
+    reference = torch.empty_like(output)
+    for inverse in (1., .3, 2., 1.):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
+            (lhs[0], lhs[1] * inverse), rhs[:2], reference, rows, experts, tokens, aligned, native_config(config))
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
+            lhs, rhs[:2], output, rows, experts, tokens, aligned, native_config(config), inv_scale=inverse)
+        assert torch.equal(output, reference), ('fused', inverse)
+    print('PASS native optimized inv_scale, lower/upper queues and cache variants')
+
+
+
+def test_streamed_inv_scale():
+    # Enough reuse for streamed dispatch; do not let non-unit scales choose native.
+    torch.manual_seed(42)
+    groups, n, k = 8, 1024, 1024
+    lhs_f, rhs, out_f, _, _, _, _, routes, _ = _streamed_fused_problem(groups, 2048, 4, n, k)
+    config, rows_f, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs_f[0], rhs[0], routes)
+    lhs_n = quant_activation(torch.randn(groups * 1024, k, device='cuda', dtype=torch.bfloat16))
+    rows_n = torch.full((groups,), 1024, device='cuda', dtype=torch.int32)
+    indices = torch.repeat_interleave(torch.arange(groups, device='cuda', dtype=torch.int32), rows_n.long())
+    out_n = torch.empty(groups * 1024, n, device='cuda', dtype=torch.bfloat16)
+    def nopad(lhs, out, inverse):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows_n, inv_scale=inverse)
+    def fused(lhs, out, inverse):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
+            lhs, rhs[:2], out, rows_f, experts, tokens, aligned, native_config(config), inv_scale=inverse)
+    for lhs, out, call in ((lhs_n, out_n, nopad), (lhs_f, out_f, fused)):
+        reference = torch.empty_like(out)
+        for inverse in (1., .3, 2., 1.):
+            call((lhs[0], lhs[1] * inverse), reference, 1.)
+            call(lhs, out, inverse)
+            assert torch.equal(out, reference), (call.__name__, inverse)
+        call(lhs, out, .3)
+        graph = torch.cuda.CUDAGraph()
+        with capture_after_warmup(graph, lambda: call(lhs, out, 0.3)):
+            call(lhs, out, .3)
+        expected = out.clone()
+        lhs[1].neg_()
+        graph.replay()
+        torch.cuda.synchronize()
+        assert torch.equal(out, -expected), call.__name__
+    print('PASS streamed inv_scale, unit/non-unit cache keys and Graph replay')
+
+
+
+def test_routing_layout_block_m():
+    # Cover both align algorithms and non-power-of-two routing blocks.
+    for tokens in (1733, 2049):
+        groups, topk = 97, 8
+        a = torch.empty(tokens, 768, device='cuda', dtype=torch.float8_e4m3fn)
+        b = torch.empty(groups, 256, 384, device='cuda', dtype=torch.uint8)
+        routes = (torch.arange(tokens * topk, device='cuda').reshape(tokens, topk) % groups).int()
+        source = routes.flatten().argsort(stable=True) // topk
+        for bm in (64, 160, 176, 192):
+            config = native_config((deep_gemm.get_num_sms(), bm, 256, 128, bm, 32 if bm > 128 else 64, 128, 2, 1),
+                                   "rolling_k32" if bm > 128 else "full_k",
+                                   "ring2" if bm > 128 else "bulk", "queue" if bm > 128 else "standard")
+            _, rows, _, sorted_tokens, _, _, _ = deep_gemm.moe_align_block_size(a, b, routes, config=config)
+            table = sorted_tokens.flatten()
+            begin = offset = 0
+            for count in rows.cpu().tolist():
+                assert torch.equal(table[offset:offset + count], source[begin:begin + count].int())
+                padded = (count + bm - 1) // bm * bm
+                assert (table[offset + count:offset + padded] == tokens).all()
+                begin += count
+                offset += padded
+    print('PASS routing padding blocks, expert token offsets and tail sentinels')
+
+
+def test_explicit_execution_configs():
+    # Explicit plans choose the same computation with no hidden default overrides.
+    sms = deep_gemm.get_num_sms()
+    lhs, rhs, out, call, reference, _, _, rows, indices = _w4a8_nopad_problem([0, 1, 17, 65], 256, 768, True)
+    expected = reference()
+    tile = (sms, 32, 256, 128, 32, 64, 128, 2, 1)
+    prefix_tile = tile[:5] + (32,) + tile[6:]
+    for config in (native_config(tile), native_config(prefix_tile, "rolling_k32", "bulk", "prefix")):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows, config, inv_scale=.3)
+        assert calc_diff(out, expected * .3) < .003, (config, calc_diff(out, expected * .3))
+    # Oversized tile products must fail before a narrowed thread count reaches
+    # copy-layout arithmetic (including the 2**32 -> zero overflow case).
+    oversized = tuple(native_config((sms, 128, bn, 128, 16, 64, 128, 2, expand))
+                      for bn in (1 << 28, 1 << 29, 1 << 30) for expand in (1, 4))
+    for bad in (tile, ("unknown", ()), ("native", ()),
+                native_config(tile, "rolling_k32", "ring2", "prefix"),
+                native_config(tile, "rolling_k32", "bulk", "prefix"),
+                ("native", ((tile, "full_k", "bulk", "standard"),) * 2)) + oversized:
+        try:
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows, bad)
+        except (RuntimeError, TypeError, ValueError):
+            pass
+        else:
+            raise AssertionError(f'accepted invalid execution plan {bad}')
+    # Both modes have a complete config returned by alignment and consumed verbatim.
+    lhs_f, rhs_f, out_f, _, ref_f, _, _, routes, _ = _streamed_fused_problem(8, 2048, 4, 1024, 1024)
+    core = (sms, 256, 256, 128, 64, 64, 128, 4, 1)
+    for gather, empty, schedule, decode_n in (("full", "dense", "fixed", 512),
+                                              ("chunk", "nonempty", "ramp", 1024)):
+        config = ("streamed", core, (decode_n, 2, schedule), gather, empty)
+        selected, counts, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
+            lhs_f[0], rhs_f[0], routes, config=config)
+        assert selected == config and tokens.size(1) == 64
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
+            lhs_f, rhs_f[:2], out_f, counts, experts, tokens, aligned, config, inv_scale=.3)
+        assert calc_diff(out_f, ref_f() * .3) < .003
+    print('PASS explicit native/streamed execution configs and invalid combinations')
+
+def test_native_capture_readiness():
+    # Warm with empty queues; capture can then select the upper declared tile and
+    # use the other inverse-scale module without compilation or fallback.
+    lhs, rhs, output, _, reference, _, _, rows, indices = _w4a8_nopad_problem([170] * 65, 256, 768, True)
+    sms = deep_gemm.get_num_sms()
+    def kernel(m, stages):
+        return ((sms, m, 256, 128, m, 32, 128, stages, 1), "rolling_k32", "ring2", "queue")
+    config = ("native", (kernel(160, 2), kernel(192, 3)))
+    counts = rows.clone()
+    rows.zero_()
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], output, indices, rows, config)
+    stream.synchronize()
+    rows.copy_(counts)
+    stream.wait_stream(torch.cuda.current_stream())
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph, stream=stream):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+            lhs, rhs[:2], output, indices, rows, config, inv_scale=.3)
+    graph.replay()
+    torch.cuda.synchronize()
+    assert calc_diff(output, reference() * .3) < .003
+    fresh = torch.cuda.Stream()
+    fresh.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(fresh):
+        deep_gemm.set_compile_mode(1)
+        try:
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], output, indices, rows, config)
+        finally:
+            deep_gemm.set_compile_mode(0)
+    fresh.synchronize()
+    try:
+        with torch.cuda.graph(torch.cuda.CUDAGraph(), stream=fresh):
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], output, indices, rows, config)
+    except RuntimeError as error:
+        assert 'must be warmed outside graph capture' in str(error)
+    else:
+        raise AssertionError('unprepared caller stream accepted native capture')
+    torch.cuda.synchronize()
+    # Omitted counts are constructed with a fixed-size GPU reduction in capture.
+    def without_rows():
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], output, indices, configs=config, inv_scale=.3)
+    graph2 = torch.cuda.CUDAGraph()
+    with capture_after_warmup(graph2, without_rows):
+        without_rows()
+    graph2.replay()
+    torch.cuda.synchronize()
+    assert calc_diff(output, reference() * .3) < .003
+    print('PASS native all-empty warmup, alternate inv_scale capture and per-caller readiness')
+
+def test_streamed_complete_preparation():
+    # Compile-only prepares modules without writing output; ordinary warmup
+    # establishes caller readiness. The first non-unit call is captured.
+    lhs, rhs, output, _, reference, _, _, routes, _ = _streamed_fused_problem(8, 2048, 4, 1024, 1024)
+    config, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs[0], rhs[0], routes)
+    assert config[0] == "streamed"
+    output.fill_(float('nan'))
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    def call(inverse):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
+            lhs, rhs[:2], output, rows, experts, tokens, aligned, config, inv_scale=inverse)
+    with torch.cuda.stream(stream):
+        deep_gemm.set_compile_mode(1)
+        try:
+            call(1.)
+        finally:
+            deep_gemm.set_compile_mode(0)
+    stream.synchronize()
+    assert torch.isnan(output).all()
+    try:
+        with torch.cuda.graph(torch.cuda.CUDAGraph(), stream=stream):
+            call(.3)
+    except RuntimeError as error:
+        assert 'must be warmed outside graph capture' in str(error)
+    else:
+        raise AssertionError('compile-only incorrectly admitted capture')
+    with torch.cuda.stream(stream):
+        call(1.)
+    stream.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph, stream=stream):
+        call(.3)
+    graph.replay()
+    torch.cuda.synchronize()
+    assert calc_diff(output, reference() * .3) < .003
+    print('PASS complete streamed compile-only preparation and alternate numerical variant capture')
+
+def test_streamed_empty_warmup():
+    counts = [0, 1, 17, 65, 32, 0, 4, 11]
+    lhs, rhs, output, _, reference, _, _, rows, indices = _w4a8_nopad_problem(counts, 1024, 1024, True)
+    config = ("streamed", (deep_gemm.get_num_sms(), 256, 256, 128, 64, 64, 128, 4, 1),
+              (1024, 2, "ramp"), "none", "nonempty")
+    live_rows = rows.clone()
+    rows.zero_()
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    def call(inverse):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+            lhs, rhs[:2], output, indices, rows, config, inv_scale=inverse)
+    with torch.cuda.stream(stream):
+        call(1.)
+    stream.synchronize()
+    assert torch.isnan(output).all()
+    rows.copy_(live_rows)
+    stream.wait_stream(torch.cuda.current_stream())
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph, stream=stream):
+        call(.3)
+    graph.replay()
+    torch.cuda.synchronize()
+    assert calc_diff(output, reference() * .3) < .003
+    print('PASS streamed all-empty warmup and nonempty alternate-variant replay')
+
+
 if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -1167,26 +1461,33 @@ if __name__ == '__main__':
     utils.set_benchmark(False)
 
     if is_ppu1v5_device():
+        test_streamed_empty_warmup()
+        test_streamed_complete_preparation()
+        test_native_capture_readiness()
+        test_explicit_execution_configs()
         test_grouped_gemm()
+        test_routing_layout_block_m()
         test_streamed_partial_n_basis_and_replay()
         test_streamed_n_tail()
         test_w4a8_cold_capture_requires_warmup()
-        test_streamed_nopad_cross_stream_fallback()
-        test_streamed_fused_cross_stream_fallback()
+        test_streamed_nopad_per_caller_preparation()
+        test_streamed_fused_per_caller_preparation()
         test_compact_intermediate_rows_and_skew()
         test_fused_large_output_offset()
         test_streamed_capture_prepared_plans()
         test_inv_scale()
+        test_native_optimized_inv_scale()
+        test_streamed_inv_scale()
         test_tuned_nopad_dispatch()
         test_tuned_fused_dispatch()
         test_native_strategy_domains()
         test_compact_fused()
         test_streamed_fused_replay_updates()
-        test_streamed_fused_compile_only_capture_fallback()
+        test_streamed_fused_compile_only_preparation()
         test_streamed_nopad_replay_updates()
-        test_streamed_compile_only_capture_fallback()
+        test_streamed_compile_only_preparation()
         test_routed_fused_partition_replay_updates()
-        test_routed_affine_copy_replay_updates()
+        test_routed_token_order_replay_updates()
         test_routed_fused_metadata_layout()
         test_routed_fused_small_expert_set()
         test_nopad_expert_limit()

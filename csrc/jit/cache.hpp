@@ -15,13 +15,11 @@ public:
     // TODO: consider cache capacity
     KernelRuntimeCache() = default;
 
-    std::shared_ptr<KernelRuntime> get(const std::filesystem::path& dir_path, bool allow_loading = true) {
+    std::shared_ptr<KernelRuntime> get(const std::filesystem::path& dir_path) {
         // Hit the runtime cache
         if (const auto iterator = cache.find(dir_path); iterator != cache.end())
             return iterator->second;
 
-        if (!allow_loading)
-            return nullptr;
         if (KernelRuntime::check_validity(dir_path))
             return cache[dir_path] = std::make_shared<KernelRuntime>(dir_path);
         return nullptr;

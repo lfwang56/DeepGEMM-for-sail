@@ -30,20 +30,21 @@ using deep_gemm::GemmType;
 
 template <int ShapeN, int ShapeK, int BlockM, int BlockN, int BlockK, int WarpM, int WarpN, int WarpK, int kNumGroups,
           int kNumStages, GemmType kGemmType, int N_EXPAND = 1, bool ApplyInvScale = false,
-          deep_gemm::w4fa8::NativeStrategy Strategy = deep_gemm::w4fa8::NativeStrategy::Default,
-          class SchedulerAdapter = void, bool AffineRows = false>
+          deep_gemm::w4fa8::SchedulerPolicy Schedule = deep_gemm::w4fa8::SchedulerPolicy::Standard,
+          class SchedulerAdapter = void,
+          deep_gemm::w4fa8::FragmentPolicy Fragment = deep_gemm::w4fa8::FragmentPolicy::FullK,
+          deep_gemm::w4fa8::ALoadPolicy ALoad = deep_gemm::w4fa8::ALoadPolicy::Bulk>
 class W4A8GEMM_MMA {
 public:
-  static constexpr bool Routed = Strategy == deep_gemm::w4fa8::NativeStrategy::Routed;
+  static constexpr bool Routed = Schedule == deep_gemm::w4fa8::SchedulerPolicy::Queue;
   static constexpr bool Fused = (kGemmType == GemmType::MGroupedFused);
-  static constexpr bool Small = Strategy == deep_gemm::w4fa8::NativeStrategy::Compact;
-  static constexpr bool Prefix = Small && !Fused && kNumGroups <= 64;
+  static constexpr bool Prefix = Schedule == deep_gemm::w4fa8::SchedulerPolicy::Prefix;
   static constexpr bool SharedPrefix = Prefix && BlockM == 32;
-  static constexpr bool Compact = Routed || (Small && (Fused || BlockM != 16));
+  static constexpr bool Compact = Fragment == deep_gemm::w4fa8::FragmentPolicy::RollingK32;
   static constexpr int DecodeN = Routed ? 1 : SharedPrefix ? 2 : WarpN / 16;
   // A narrow ring bounds live A operands for wide routed tiles.
-  static constexpr int ADistance = Routed ? 1 : -1;
-  static constexpr bool EarlyA = Routed;
+  static constexpr int ADistance = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2 ? 1 : -1;
+  static constexpr bool EarlyA = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2;
   static_assert(!Compact || (N_EXPAND == 1 && BlockK == WarpK));
   static_assert(WarpN == 16 || WarpN == 32 || WarpN == 48 || WarpN == 64);
   static_assert(N_EXPAND >= 1 && N_EXPAND <= 4);
@@ -204,17 +205,6 @@ public:
     const int* sorted_token_ids;
     typename TileScheduler::Params scheduler;
   };
-
-  template <int AffineStages>
-  CUTLASS_DEVICE static void run_affine(Params const& p, char* smem) {
-    using Fast = W4A8GEMM_MMA<ShapeN, ShapeK, BlockM, BlockN, BlockK, WarpM, WarpN, WarpK,
-                             kNumGroups, AffineStages, kGemmType, N_EXPAND, ApplyInvScale,
-                             Strategy, SchedulerAdapter, true>;
-    static_assert(sizeof(typename Fast::SharedStorage) <= sizeof(SharedStorage));
-    typename Fast::Params args{p.ptr_a, p.ptr_b, p.ptr_scale, p.ptr_d, p.ptr_a_scale,
-                               p.num_token, p.inv_scale, p.sorted_token_ids, p.scheduler};
-    Fast{}(args, smem);
-  }
 
   // for constexpr patial initialize
   struct NoTensor {};
@@ -423,13 +413,6 @@ public:
 
       Tensor cD = make_identity_tensor(make_shape(Int<BlockM>{}, Int<BlockN>{}));
       uint32_t token_offsets[CopyAConfig::M_ITER];
-      constexpr bool use_affine_a = AffineRows && Fused && Routed;
-      cute::AiuDesc affine_desc;
-      const ElementA* affine_base = nullptr;
-      if constexpr (use_affine_a) {
-        affine_desc.init(nullptr, deep_scheduler.valid_m_in_block, K, deep_scheduler.affine_stride * K);
-        affine_base = params.ptr_a + int64_t(deep_scheduler.affine_first) * K;
-      }
       auto [tAgA, residual_m, gD] = [&]() {
         if constexpr (!Fused) {
           int M = deep_scheduler.curr_group_m;
@@ -455,7 +438,6 @@ public:
             else
               return deep_scheduler.cumsum_m_block_idx * BlockM;
           }();
-          if constexpr (!use_affine_a) {
           if constexpr (Routed) {
             // Internal tiles can extend beyond the original expert padding.
             // Never read token metadata for those rows.
@@ -473,7 +455,6 @@ public:
           }
           deep_gemm::clear_invalid_A_to_tsm<ElementA, TilerA, BlockM, BlockK, K, kNumStages>(
               tAsA, params.ptr_a, token_offsets, params.num_token, thread_idx, Int<MaxThreadsPerBlock>{});
-          }
           Tensor mD_mn = make_tensor(make_gmem_ptr(params.ptr_d + int64_t(deep_scheduler.curr_block_m_offset) * N),
                                      make_shape(Int<BlockM>{}, Int<N>{}), strideD); // (m,n)
           Tensor gD =
@@ -488,7 +469,6 @@ public:
       const ElementA* token_rows[CopyAConfig::M_ITER];
       bool valid_tokens[CopyAConfig::M_ITER];
       if constexpr (Fused && Routed) {
-        if constexpr (!use_affine_a)
 #pragma unroll
         for (int mi = 0; mi < CopyAConfig::M_ITER; ++mi) {
           valid_tokens[mi] = token_offsets[mi] < uint32_t(params.num_token);
@@ -504,9 +484,7 @@ public:
           const bool valid = thread_idx < residual_m;
           int64_t scale_row = 0;
           if (valid) {
-            if constexpr (use_affine_a)
-              scale_row = deep_scheduler.affine_first + int64_t(thread_idx) * deep_scheduler.affine_stride;
-            else if constexpr (Fused)
+            if constexpr (Fused)
               scale_row = params.sorted_token_ids[deep_scheduler.token_base + thread_idx];
             else
               scale_row = deep_scheduler.curr_offset_a() / K + m_block_idx * BlockM + thread_idx;
@@ -516,14 +494,7 @@ public:
         }
 
       auto g2s_copy_A = [&](int k_tile_iter, int k_pipe) {
-        if constexpr (use_affine_a) {
-          if (warp_idx == 0) {
-            using Copy = cute::PPU0015_AIU_LOAD<Int<AStorageM * BlockK * 8>, ElementA,
-                                              false, AStorageM, BlockK, true>;
-            Copy::copy(storage.smem_a.data() + AStorageM * BlockK * k_pipe,
-                       affine_base, affine_desc, k_tile_iter * BlockK, 0);
-          }
-        } else if constexpr (!Fused) { // aiu copy
+        if constexpr (!Fused) { // aiu copy
           if (warp_idx == 0) {
             copy(gmem_tiled_copy_A, tAgA(_, _, _, k_tile_iter), tAsA(_, _, _, k_pipe));
           }
@@ -1008,7 +979,7 @@ public:
           epilogue_cta_reduce();
           epilogue_no_tsm(active_m);
         };
-        if constexpr (Routed || (Small && WarpM >= 64)) {
+        if constexpr (Routed || (Compact && WarpM >= 64)) {
           // Mutually exclusive branches keep each tail's accumulators local.
           // Independent predicates can merge their live ranges and spill.
           dispatch_tail((residual_m + WarpsOnM - 1) / WarpsOnM, process_active_rows);
