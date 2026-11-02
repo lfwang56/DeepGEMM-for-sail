@@ -1734,7 +1734,7 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_nopad(const std::pair<torch::Tensor, 
     check_w4fa8_indices(counts, a.first);
     TORCH_CHECK(counts.dim() == 1 && counts.numel() == num_groups, "m_rows shape mismatch");
     const int em = ceil_div(m, num_groups);
-    const auto plan = configs ? deep_gemm::w4fa8::parse_plan(*configs)
+    const auto plan = configs ? deep_gemm::w4fa8::parse_plan(*configs, m, n, k, num_groups, GemmType::MGroupedNoPad)
                               : deep_gemm::w4fa8::get_best_configs(m, n, k, num_groups, GemmType::MGroupedNoPad);
     deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, counts,
                                  GemmType::MGroupedNoPad, em, inv_scale);
@@ -1751,7 +1751,7 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_masked(const std::pair<torch::Tensor,
     TORCH_CHECK(rows.dim() == 1 && rows.numel() == num_groups && expected_m >= 0, "masked_m shape or expected_m invalid");
     if (!m)
         return;
-    const auto plan = configs ? deep_gemm::w4fa8::parse_plan(*configs)
+    const auto plan = configs ? deep_gemm::w4fa8::parse_plan(*configs, m, n, k, num_groups, GemmType::MGroupedMasked)
                               : deep_gemm::w4fa8::get_best_configs(m, n, k, num_groups, GemmType::MGroupedMasked, expected_m);
     deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, rows,
                                  GemmType::MGroupedMasked, expected_m, inv_scale);
@@ -1764,13 +1764,13 @@ static void m_grouped_gemm_fp8_fp4_bf16_nt_fused(const std::pair<torch::Tensor, 
                                       const pybind11::tuple& configs, float inv_scale = 1.0f) {
     check_w4fa8_operands(a, b, out, GemmType::MGroupedFused);
     TORCH_CHECK(std::isfinite(inv_scale) && inv_scale > 0.f, "inv_scale must be finite and positive");
-    const int m = a.first.size(0), num_groups = b.first.size(0);
+    const int m = a.first.size(0), n = b.first.size(1), k = a.first.size(-1), num_groups = b.first.size(0);
     for (const auto& t : {rows, experts, tokens, aligned})
         check_w4fa8_indices(t, a.first);
     TORCH_CHECK(rows.numel() == num_groups && aligned.numel() >= 1, "fused metadata shape mismatch");
     if (!m)
         return;
-    const auto plan = deep_gemm::w4fa8::parse_plan(configs);
+    const auto plan = deep_gemm::w4fa8::parse_plan(configs, out.size(0), b.first.size(1), a.first.size(1), num_groups, GemmType::MGroupedFused);
     TORCH_CHECK(tokens.dim() == 2 && tokens.size(1) == deep_gemm::w4fa8::get_token_block_m(plan, GemmType::MGroupedFused),
                 "sorted_token_ids routing BlockM must match W4FA8 configs");
     deep_gemm::w4fa8::execute_plan(plan, a.first, a.second, b.first, b.second, out, rows,

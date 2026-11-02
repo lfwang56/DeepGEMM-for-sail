@@ -28,8 +28,9 @@ enum class EmptyExpertPolicy { Dense, Nonempty };
 struct NativeKernelConfig {
     W4A8Config tile;
     FragmentPolicy fragment;
-    ALoadPolicy a_load;
     SchedulerPolicy scheduler;
+
+    ALoadPolicy a_load() const { return scheduler == SchedulerPolicy::Queue ? ALoadPolicy::Ring2 : ALoadPolicy::Bulk; }
 };
 struct NativePlan {
     std::vector<NativeKernelConfig> kernels;
@@ -186,7 +187,7 @@ static bool fits_compiled_strategy(int local_bytes) {
 }
 
 static bool small_m_eligible(int groups, int m, int n, int k, GemmType kind = GemmType::MGroupedNoPad) {
-    const bool prefix = kind != GemmType::MGroupedFused && groups <= 64;
+    const bool prefix = kind == GemmType::MGroupedNoPad && groups >= 16 && groups <= 64 && k <= 1024;
     if (groups < 1 || groups > 1024 || ceil_div(m, groups) >= 512 || n < 128 || n % 64 || k < 512 ||
         k % 128)
         return false;
@@ -217,17 +218,14 @@ static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, cons
     // Small expert sets need several waves to repay the device metadata pass.
     if (groups <= 64 && int64_t(ceil_div(m, 192)) * (n / 256) < int64_t(get_num_sms()) * 4)
         return false;
-    // Cost both queues that runtime can select, retaining the original padding bound.
+    // Admit only the single default tile; dual-tile partitioning remains experimental.
     if (kind == GemmType::MGroupedFused) {
-        const auto lower = routed_config(true, kind), upper = routed_config(false, kind);
-        int routed_rows = ceil_div(expected_m, lower.block_m) * lower.block_m;
-        if (routed_partition_eligible(lower, m, n, k) && fits_strategy(upper, k, true))
-            routed_rows = std::min(routed_rows, ceil_div(expected_m, upper.block_m) * upper.block_m);
+        const auto lower = routed_config(true, kind);
+        const int routed_rows = ceil_div(expected_m, lower.block_m) * lower.block_m;
         if (routed_rows * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
             return false;
     }
-    return fits_strategy(routed_config(true, kind), k, true) &&
-           (kind == GemmType::MGroupedFused || fits_strategy(routed_config(false), k, true));
+    return fits_strategy(routed_config(true, kind), k, true);
 }
 
 inline constexpr int64_t kStreamedWeightBudget = 384LL * 1024 * 1024;
@@ -382,12 +380,11 @@ static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, in
         DG_HOST_ASSERT(c.warp_m == c.block_m && c.block_n == 256 && c.warp_n == 32);
         DG_HOST_ASSERT(c.block_k == 128 && c.warp_k == 128 && c.n_expand == 1);
         DG_HOST_ASSERT(c.num_stages >= 2 && c.num_stages <= 4 && n % 256 == 0 && k >= 512 && k % 128 == 0);
-        DG_HOST_ASSERT(spec.fragment == FragmentPolicy::RollingK32 && spec.a_load == ALoadPolicy::Ring2);
+        DG_HOST_ASSERT(spec.fragment == FragmentPolicy::RollingK32);
     } else if (spec.fragment == FragmentPolicy::FullK && spec.scheduler == SchedulerPolicy::Standard) {
         check_config(c, n, k, kind);
-        DG_HOST_ASSERT(spec.a_load == ALoadPolicy::Bulk);
     } else {
-        DG_HOST_ASSERT(kind != GemmType::MGroupedMasked && spec.a_load == ALoadPolicy::Bulk && n >= 128);
+        DG_HOST_ASSERT(kind != GemmType::MGroupedMasked && n >= 128);
         DG_HOST_ASSERT(c.warp_n == (c.block_m == 32 ? 32 : c.block_m == 16 && spec.fragment == FragmentPolicy::RollingK32 ? 32 : 64));
         DG_HOST_ASSERT(c.block_m == 16 || c.block_m == 32 || c.block_m == 64);
         DG_HOST_ASSERT(c.block_m == c.warp_m && (c.block_n == 128 || c.block_n == 256));
@@ -418,10 +415,65 @@ static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int group
     } else check_streamed_config(std::get<StreamedConfig>(plan), m, n, k, groups, kind);
 }
 
+// Enumerate structurally possible policies without choosing between overlapping
+// implementations. check_native_kernel still validates the resolved tile/resources.
+static std::vector<NativeKernelConfig> native_kernel_options(const W4A8Config& c, int n, int k, int groups, GemmType kind) {
+    if (c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
+        return {{c, FragmentPolicy::RollingK32, SchedulerPolicy::Queue}};
+    if (kind == GemmType::MGroupedMasked)
+        return {{c, FragmentPolicy::FullK, SchedulerPolicy::Standard}};
+
+    std::vector<NativeKernelConfig> options;
+    if (c.warp_n == 64 || c.warp_m == 128)
+        options.push_back({c, FragmentPolicy::FullK, SchedulerPolicy::Standard});
+    const bool small = (c.block_m == 16 || c.block_m == 32 || c.block_m == 64) && c.block_m == c.warp_m &&
+                       (c.block_n == 128 || c.block_n == 256) && c.block_k == 128 && c.warp_k == 128 &&
+                       c.num_stages == 2 && c.n_expand == 1 && n >= 128 && k >= 512 && k % 128 == 0;
+    if (small) {
+        if (c.warp_n == (c.block_m == 64 ? 64 : 32))
+            options.push_back({c, FragmentPolicy::RollingK32, SchedulerPolicy::Standard});
+        if (kind == GemmType::MGroupedNoPad && groups <= 64 && c.warp_n == (c.block_m == 32 ? 32 : 64))
+            options.push_back({c, c.block_m == 16 ? FragmentPolicy::FullK : FragmentPolicy::RollingK32,
+                               SchedulerPolicy::Prefix});
+    }
+    return options;
+}
+
+static std::vector<NativeKernelConfig> resolve_native_kernel_options(
+    const W4A8Config& tile, int n, int k, int groups, GemmType kind) {
+    auto options = native_kernel_options(tile, n, k, groups, kind);
+    const bool has_queue = std::any_of(options.begin(), options.end(), [](const auto& c) {
+        return c.scheduler == SchedulerPolicy::Queue;
+    });
+    const bool use_prefix = kind == GemmType::MGroupedNoPad && groups >= 16 && groups <= 64 && k <= 1024 &&
+                           std::any_of(options.begin(), options.end(), [](const auto& c) {
+                               return c.scheduler == SchedulerPolicy::Prefix;
+                           });
+    const auto scheduler = has_queue ? SchedulerPolicy::Queue : use_prefix ? SchedulerPolicy::Prefix : SchedulerPolicy::Standard;
+    options.erase(std::remove_if(options.begin(), options.end(), [&](const auto& c) {
+        return c.scheduler != scheduler;
+    }), options.end());
+    // M64 standard uses rolling fragments for fused gather or a wide-N,
+    // long-K pipeline; the other overlapping tiles favor full fragments.
+    const bool rolling = kind == GemmType::MGroupedFused || (tile.block_n == 256 && k > 2048);
+    const auto preferred = rolling ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK;
+    if (std::any_of(options.begin(), options.end(), [&](const auto& c) {
+            return c.scheduler == SchedulerPolicy::Standard && c.fragment == preferred;
+        }))
+        options.erase(std::remove_if(options.begin(), options.end(), [&](const auto& c) {
+            return c.scheduler == SchedulerPolicy::Standard && c.fragment != preferred;
+        }), options.end());
+    return options;
+}
+
 static ExecutionPlan get_best_configs(int m, int n, int k, int groups, GemmType kind, int expected_m = -1) {
     const int em = expected_m >= 0 ? expected_m : ceil_div(m, groups);
     const auto base = get_default_tile(em, n, k, groups, kind);
-    auto full = [](const W4A8Config& c) { return NativeKernelConfig{c, FragmentPolicy::FullK, ALoadPolicy::Bulk, SchedulerPolicy::Standard}; };
+    auto native = [&](const W4A8Config& c) {
+        const auto options = resolve_native_kernel_options(c, n, k, groups, kind);
+        DG_HOST_ASSERT(options.size() == 1);
+        return options.front();
+    };
     if (kind != GemmType::MGroupedMasked && supports_native_strategy()) {
         const bool fused = kind == GemmType::MGroupedFused;
         if (em <= 256) {
@@ -429,78 +481,50 @@ static ExecutionPlan get_best_configs(int m, int n, int k, int groups, GemmType 
             if (small_m_eligible(groups, m, n, k, kind) && !(kind == GemmType::MGroupedNoPad && base.block_m == 128) &&
                 (!routed || em <= 64)) {
                 const auto tile = small_m_config(em, n, kind, groups);
-                const bool rolling = !fused || tile.block_m != 16 || tile.warp_n != 64;
-                return NativePlan{{{tile, rolling && (fused || tile.block_m != 16) ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK,
-                                    ALoadPolicy::Bulk, !fused && groups <= 64 ? SchedulerPolicy::Prefix : SchedulerPolicy::Standard}}};
+                return NativePlan{{native(tile)}};
             }
             if (routed) {
-                NativePlan plan{{{routed_config(true, kind), FragmentPolicy::RollingK32, ALoadPolicy::Ring2, SchedulerPolicy::Queue}}};
-                const auto upper = routed_config(false, kind);
-                if ((!fused || routed_partition_eligible(plan.kernels[0].tile, m, n, k)) && fits_strategy(upper, k, true))
-                    plan.kernels.push_back({upper, FragmentPolicy::RollingK32, ALoadPolicy::Ring2, SchedulerPolicy::Queue});
-                return plan;
+                return NativePlan{{{routed_config(true, kind), FragmentPolicy::RollingK32, SchedulerPolicy::Queue}}};
             }
         }
         if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k, groups, m, base.num_sms) &&
             (!fused || streamed_fused_eligible(m, n, k, groups, base.num_sms)))
             return default_streamed_config(m, n, k, groups, base.num_sms, fused, true);
     }
-    return NativePlan{{full(base)}};
+    return NativePlan{{native(base)}};
 }
 
 // Public tuples describe complete plans; other GEMM dtypes retain their formats.
 namespace py = pybind11;
-static NativeKernelConfig parse_native_kernel(const py::handle& value) {
-    const auto t = py::cast<py::tuple>(value);
-    TORCH_CHECK(t.size() == 4, "native kernel must be (tile, fragment, a_load, scheduler)");
-    NativeKernelConfig c{unpack_config(py::cast<W4A8ConfigTuple>(t[0])), FragmentPolicy::FullK,
-                         ALoadPolicy::Bulk, SchedulerPolicy::Standard};
-    const auto fragment = py::cast<std::string>(t[1]), load = py::cast<std::string>(t[2]), scheduler = py::cast<std::string>(t[3]);
-    TORCH_CHECK(fragment == "full_k" || fragment == "rolling_k32", "unknown W4FA8 fragment policy");
-    TORCH_CHECK(load == "bulk" || load == "ring2", "unknown W4FA8 A-load policy");
-    TORCH_CHECK(scheduler == "standard" || scheduler == "prefix" || scheduler == "queue", "unknown W4FA8 scheduler policy");
-    c.fragment = fragment == "full_k" ? FragmentPolicy::FullK : FragmentPolicy::RollingK32;
-    c.a_load = load == "bulk" ? ALoadPolicy::Bulk : ALoadPolicy::Ring2;
-    c.scheduler = scheduler == "standard" ? SchedulerPolicy::Standard : scheduler == "prefix" ? SchedulerPolicy::Prefix : SchedulerPolicy::Queue;
-    return c;
-}
-static ExecutionPlan parse_plan(const py::tuple& t) {
-    TORCH_CHECK(t.size() >= 1, "empty W4FA8 configs");
-    const auto mode = py::cast<std::string>(t[0]);
-    if (mode == "native") {
-        TORCH_CHECK(t.size() == 2, "native configs must be ('native', kernels)");
-        NativePlan p;
-        for (const auto kernel : py::cast<py::tuple>(t[1])) p.kernels.push_back(parse_native_kernel(kernel));
-        return p;
+static ExecutionPlan parse_plan(const py::tuple& t, int m, int n, int k, int groups, GemmType kind) {
+    TORCH_CHECK(t.size() == 9, "W4FA8 configs must be a nine-element tile tuple");
+    const auto tile = unpack_config(py::cast<W4A8ConfigTuple>(t));
+    if (tile.block_m == 256) {
+        const auto& core = tile;
+        TORCH_CHECK(pack_config(core) == W4A8ConfigTuple(core.num_sms, 256, 256, 128, 64, 64, 128, 4, 1),
+                    "unsupported W4FA8 streamed tile");
+        TORCH_CHECK(kind != GemmType::MGroupedMasked && supports_native_strategy() && streamed_tile_n(n, k, groups),
+                    "W4FA8 streamed tile is unavailable for this interface, shape or device");
+        auto plan = default_streamed_config(m, n, k, groups, core.num_sms,
+                                           kind == GemmType::MGroupedFused, true);
+        plan.core = core;
+        check_streamed_config(plan, m, n, k, groups, kind);
+        return plan;
     }
-    TORCH_CHECK(mode == "streamed" && t.size() == 5,
-                "W4FA8 configs must be a native or streamed execution plan");
-    const auto chunk = py::cast<std::tuple<int, int, std::string>>(t[2]);
-    const auto schedule = std::get<2>(chunk), gather = py::cast<std::string>(t[3]), empty = py::cast<std::string>(t[4]);
-    TORCH_CHECK(schedule == "fixed" || schedule == "ramp", "unknown W4FA8 chunk schedule");
-    TORCH_CHECK(gather == "none" || gather == "full" || gather == "chunk", "unknown W4FA8 gather policy");
-    TORCH_CHECK(empty == "dense" || empty == "nonempty", "unknown W4FA8 empty-expert policy");
-    return StreamedConfig{unpack_config(py::cast<W4A8ConfigTuple>(t[1])), std::get<0>(chunk), std::get<1>(chunk),
-                          schedule == "fixed" ? ChunkSchedule::Fixed : ChunkSchedule::Ramp,
-                          gather == "none" ? GatherPolicy::None : gather == "full" ? GatherPolicy::Full : GatherPolicy::Chunk,
-                          empty == "dense" ? EmptyExpertPolicy::Dense : EmptyExpertPolicy::Nonempty};
+    const auto options = resolve_native_kernel_options(tile, n, k, groups, kind);
+    TORCH_CHECK(options.size() == 1, "W4FA8 tile must resolve to one native implementation");
+    return NativePlan{{options.front()}};
 }
-static py::tuple pack_plan(const ExecutionPlan& p) {
+static py::tuple pack_plan(const ExecutionPlan& p, int n, int k, int groups, GemmType kind) {
     if (const auto* native = std::get_if<NativePlan>(&p)) {
-        py::tuple kernels(native->kernels.size());
-        for (size_t i = 0; i < native->kernels.size(); ++i) {
-            const auto& c = native->kernels[i];
-            kernels[i] = py::make_tuple(pack_config(c.tile), c.fragment == FragmentPolicy::FullK ? "full_k" : "rolling_k32",
-                                        c.a_load == ALoadPolicy::Bulk ? "bulk" : "ring2",
-                                        c.scheduler == SchedulerPolicy::Standard ? "standard" : c.scheduler == SchedulerPolicy::Prefix ? "prefix" : "queue");
-        }
-        return py::make_tuple("native", kernels);
+        DG_HOST_ASSERT(native->kernels.size() == 1);
+        const auto& c = native->kernels.front();
+        const auto inferred = resolve_native_kernel_options(c.tile, n, k, groups, kind);
+        DG_HOST_ASSERT(inferred.size() == 1 && inferred.front().fragment == c.fragment && inferred.front().scheduler == c.scheduler);
+        return py::cast(pack_config(c.tile));
     }
     const auto& c = std::get<StreamedConfig>(p);
-    return py::make_tuple("streamed", pack_config(c.core), py::make_tuple(c.decode_n, c.expert_chunk,
-                          c.schedule == ChunkSchedule::Fixed ? "fixed" : "ramp"),
-                          c.gather == GatherPolicy::None ? "none" : c.gather == GatherPolicy::Full ? "full" : "chunk",
-                          c.empty_experts == EmptyExpertPolicy::Dense ? "dense" : "nonempty");
+    return py::cast(pack_config(c.core));
 }
 
 } // namespace deep_gemm::w4fa8

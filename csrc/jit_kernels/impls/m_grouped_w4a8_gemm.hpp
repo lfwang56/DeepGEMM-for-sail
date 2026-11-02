@@ -61,11 +61,11 @@ template <class Scheduler> class Runtime final : public LaunchRuntime<Runtime<Sc
         int device = 0;
         std::optional<NativeKernelConfig> kernel_config;
         NativeKernelConfig kernel_spec() const {
-            return kernel_config.value_or(NativeKernelConfig{config, FragmentPolicy::FullK, ALoadPolicy::Bulk, SchedulerPolicy::Standard});
+            return kernel_config.value_or(NativeKernelConfig{config, FragmentPolicy::FullK, SchedulerPolicy::Standard});
         }
         std::pair<int, int> cache_variant() const {
             const auto c = kernel_spec();
-            return {int(c.fragment) + 2 * int(c.a_load) + 4 * int(c.scheduler) + 16 * int(params.inv_scale != 1.f), int(kind)};
+            return {int(c.fragment) + 2 * int(c.a_load()) + 4 * int(c.scheduler) + 16 * int(params.inv_scale != 1.f), int(kind)};
         }
     };
     static const char* name() { return "m_grouped_gemm_w4fa8_mma"; }
@@ -93,7 +93,7 @@ void m_grouped_gemm_w4fa8_mma(Kernel::Params params) {{
                               a.kind == GemmType::MGroupedFused ? "true" : "false")
                 : "void",
             kernel.fragment == FragmentPolicy::FullK ? "FullK" : "RollingK32",
-            kernel.a_load == ALoadPolicy::Bulk ? "Bulk" : "Ring2",
+            kernel.a_load() == ALoadPolicy::Bulk ? "Bulk" : "Ring2",
             a.launch_args.smem_size, get_num_threads(c), sizeof(Arguments<Scheduler>));
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -400,7 +400,7 @@ static std::vector<int> native_plan_key(const NativePlan& plan) {
     std::vector<int> key;
     for (const auto& c : plan.kernels) {
         std::apply([&](auto... field) { (key.push_back(field), ...); }, pack_config(c.tile));
-        key.insert(key.end(), {int(c.fragment), int(c.a_load), int(c.scheduler)});
+        key.insert(key.end(), {int(c.fragment), int(c.a_load()), int(c.scheduler)});
     }
     return key;
 }

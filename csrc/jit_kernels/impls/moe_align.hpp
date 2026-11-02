@@ -321,7 +321,7 @@ static MoeAlignReturn moe_align_block_size_impl(
         };
         if (lhs.scalar_type() == torch::kFloat8_e4m3fn && rhs.scalar_type() == torch::kUInt8) {
             const auto c = deep_gemm::w4fa8::get_best_configs(numel, n, k, num_groups, GemmType::MGroupedFused);
-            config = deep_gemm::w4fa8::pack_plan(c);
+            config = deep_gemm::w4fa8::pack_plan(c, n, k, num_groups, GemmType::MGroupedFused);
         } else if (w4a16_type.has_value()) {
             // Forwarded whole: the W4A16 fused GEMM unpacks all 9 params, `warp_k` and `n_expand`
             // included, so there is nothing to truncate here
@@ -355,12 +355,16 @@ static MoeAlignReturn moe_align_block_size_impl(
     const bool w4fa8 = lhs.scalar_type() == torch::kFloat8_e4m3fn && rhs.scalar_type() == torch::kUInt8;
     const int block_m = std::visit([&](const auto& c) -> int {
         if constexpr (std::is_same_v<std::decay_t<decltype(c)>, pybind11::tuple>) {
-            TORCH_CHECK(w4fa8, "nested execution configs are only supported for W4FA8");
-            const auto plan = deep_gemm::w4fa8::parse_plan(c);
+            TORCH_CHECK(w4fa8, "tuple configs are only supported for W4FA8");
+            const auto plan = deep_gemm::w4fa8::parse_plan(c, numel, n, k, num_groups, GemmType::MGroupedFused);
             deep_gemm::w4fa8::check_plan(plan, numel, n, k, num_groups, GemmType::MGroupedFused);
             return deep_gemm::w4fa8::get_token_block_m(plan, GemmType::MGroupedFused);
         } else {
-            TORCH_CHECK(!w4fa8, "W4FA8 requires native/streamed execution configs");
+            if (w4fa8) {
+                const auto plan = deep_gemm::w4fa8::parse_plan(pybind11::cast(c), numel, n, k, num_groups, GemmType::MGroupedFused);
+                deep_gemm::w4fa8::check_plan(plan, numel, n, k, num_groups, GemmType::MGroupedFused);
+                return deep_gemm::w4fa8::get_token_block_m(plan, GemmType::MGroupedFused);
+            }
             return std::get<1>(c);
         }
     }, config);
