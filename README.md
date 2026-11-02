@@ -214,8 +214,9 @@ rows must already be grouped by expert. Masked accepts device-side
 restricted to the valid rows specified by `masked_m`. Nopad/masked select configurations internally unless
 an explicit config tuple is supplied. The fused config comes from
 `moe_align_block_size`. Configuration selection remains internal to the
-C++ runtime. W4FA8 configs now describe a complete `native` or `streamed`
-execution plan; the previous flat nine-element W4FA8 tuple is not supported.
+C++ runtime. W4FA8 configs use a flat nine-element tile tuple for both native and streamed
+execution. Fragment, load, scheduler and streamed chunking policies are derived
+internally from the tile and host-known shape and resources.
 Other GEMM dtypes retain their existing config formats. See the
 [W4FA8 configuration guide](docs/w4a8.md) for fields and supported policies.
 Run `python tests/test_w4a8.py` for correctness coverage.

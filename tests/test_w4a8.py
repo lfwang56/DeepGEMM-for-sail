@@ -1161,7 +1161,7 @@ def test_routing_layout_block_m():
 
 
 def test_explicit_execution_configs():
-    # Explicit plans choose the same computation with no hidden default overrides.
+    # Explicit tiles determine execution without hidden default overrides.
     sms = deep_gemm.get_num_sms()
     lhs, rhs, out, call, reference, _, _, rows, indices = _w4a8_nopad_problem([0, 1, 17, 65], 256, 768, True)
     expected = reference()
@@ -1178,8 +1178,8 @@ def test_explicit_execution_configs():
         except (RuntimeError, TypeError, ValueError):
             pass
         else:
-            raise AssertionError(f'accepted invalid execution plan {bad}')
-    # Both modes have a complete config returned by alignment and consumed verbatim.
+            raise AssertionError(f'accepted invalid tile config {bad}')
+    # Alignment returns the same tile tuple that GEMM consumes.
     lhs_f, rhs_f, out_f, _, ref_f, _, _, routes, _ = _streamed_fused_problem(8, 2048, 4, 1024, 1024)
     core = (sms, 256, 256, 128, 64, 64, 128, 4, 1)
     config = core
