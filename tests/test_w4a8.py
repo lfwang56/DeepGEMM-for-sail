@@ -217,7 +217,7 @@ def test_nopad_resident_a_and_scales():
         gemm_lhs = (lhs[0], lhs[1] * rhs[2])
         configs = [None]
         if k == 256:
-            configs.append((deep_gemm.get_num_sms(), 128, 256, 128, 64, 64, 128, 2, 3))
+            configs.append((deep_gemm.get_num_sms(), 64, 256, 128, 64, 64, 128, 2, 3))
         for config in configs:
             out = torch.full((m, n), float('nan'), device='cuda', dtype=torch.bfloat16)
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(gemm_lhs, rhs[:2], out, indices, rows, config)
@@ -1173,14 +1173,21 @@ def test_explicit_execution_configs():
     for config in (tile, narrow_warp_tile, wide_tile):
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows, config, inv_scale=.3)
         assert calc_diff(out, expected * .3) < .003, (config, calc_diff(out, expected * .3))
-    oversized = (sms, 128, 1 << 30, 128, 16, 64, 128, 2, 4)
-    for bad in (oversized,):
+    oversized = (sms, 64, 1 << 30, 128, 64, 64, 128, 2, 4)
+    multi_m_warp = (sms, 128, 256, 128, 64, 64, 128, 2, 1)
+    for bad in (oversized, multi_m_warp):
         try:
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows, bad)
         except (RuntimeError, TypeError, ValueError):
             pass
         else:
             raise AssertionError(f'accepted invalid tile config {bad}')
+    try:
+        deep_gemm.moe_align_block_size(lhs[0], rhs[0], indices[:, None], config=multi_m_warp)
+    except RuntimeError as error:
+        assert 'block_m == warp_m' in str(error)
+    else:
+        raise AssertionError('alignment accepted a multi-M-warp native tile')
     # Alignment returns the same tile tuple that GEMM consumes.
     lhs_f, rhs_f, out_f, _, ref_f, _, _, routes, _ = _streamed_fused_problem(8, 2048, 4, 1024, 1024)
     core = (sms, 256, 256, 128, 64, 64, 128, 4, 1)

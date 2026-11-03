@@ -152,7 +152,7 @@ public:
   using SmemTiledCopyScale = decltype(make_tiled_copy(SmemCopyAtomScale{}, SmemThrLayoutScale{}, SmemValLayoutScale{}));
 
   // epilogue cta reduce
-  static_assert(WarpsOnM == 1 || WarpsOnK == 1);
+  static_assert(BlockM == WarpM, "W4FA8 native tiles require BlockM == WarpM");
   using SmemLayoutReduce =
       decltype(make_layout(make_shape(Int<16 * 64>{}, Int<WarpsOnN>{}, Int<WarpsOnK>{}), LayoutLeft{}));
 

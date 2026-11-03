@@ -57,7 +57,7 @@ static void check_config(const W4A8Config& c, int n, int k, GemmType kind) {
     DG_HOST_ASSERT(c.num_sms > 0 and c.num_sms <= get_num_sms());
     DG_HOST_ASSERT(c.block_m == 16 or c.block_m == 32 or c.block_m == 64 or c.block_m == 128);
     DG_HOST_ASSERT(c.warp_m == 16 or c.warp_m == 32 or c.warp_m == 64 or c.warp_m == 128);
-    DG_HOST_ASSERT(c.block_m % c.warp_m == 0 and (c.warp_n == 64 or c.warp_n == 32));
+    DG_HOST_ASSERT(c.block_m == c.warp_m and (c.warp_n == 64 or c.warp_n == 32));
     DG_HOST_ASSERT(c.block_n >= 64 and c.block_n % 64 == 0);
     if (c.warp_n == 32 or c.warp_m == 128) {
         DG_HOST_ASSERT(kind == GemmType::MGroupedNoPad and c.warp_m == 128 and c.warp_n == 32);
@@ -72,7 +72,6 @@ static void check_config(const W4A8Config& c, int n, int k, GemmType kind) {
         DG_HOST_ASSERT(c.block_k == c.warp_k);
         DG_HOST_ASSERT(n % (int64_t(c.block_n) * c.n_expand) == 0);
     }
-    DG_HOST_ASSERT(c.block_m == c.warp_m or c.block_k == c.warp_k);
     DG_HOST_ASSERT(get_num_threads(c) <= 1024);
 }
 
@@ -343,6 +342,7 @@ static StreamedConfig default_streamed_config(int m, int n, int k, int groups, i
 
 static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, int groups, GemmType kind) {
     const auto& c = spec.tile;
+    TORCH_CHECK(c.block_m == c.warp_m, "W4FA8 native tiles require block_m == warp_m");
     DG_HOST_ASSERT(groups > 0 && groups <= 1024 && c.num_sms > 0 && c.num_sms <= get_num_sms());
     if (c.warp_m > 128) {
         DG_HOST_ASSERT(kind != GemmType::MGroupedMasked);
@@ -376,6 +376,7 @@ static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int group
 
 // Derive the single native implementation from the tile and host-known shape.
 static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k, GemmType kind) {
+    TORCH_CHECK(c.block_m == c.warp_m, "W4FA8 native tiles require block_m == warp_m");
     if (c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
         return {c, FragmentPolicy::RollingK32};
     if (kind == GemmType::MGroupedMasked)
