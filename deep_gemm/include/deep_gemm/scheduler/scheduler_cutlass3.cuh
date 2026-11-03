@@ -61,7 +61,9 @@ template <GemmType kGemmType,
           uint32_t kNumNBlocks = math::ceil_div(SHAPE_N_, BLOCK_N_),
           uint32_t kNum1DBlocksPerGroup = 2,
           EpilogueType kEpilogueType = EpilogueType::Default,
-          bool kTransposedBatchOutput = true>
+          bool kTransposedBatchOutput = true,
+          bool kInterleaveM = false,
+          bool kForceNoPadPreprocess = false>
 struct DeepGemmScheduler {
     constexpr static uint32_t SHAPE_N = SHAPE_N_;
     constexpr static uint32_t SHAPE_K = SHAPE_K_;
@@ -74,7 +76,7 @@ struct DeepGemmScheduler {
     constexpr static GemmType GEMM_TYPE = kGemmType;
     constexpr static bool kIsTMAMulticastOnA = false;
 #ifdef EnableGroupNoPadOpt
-    constexpr static bool kIsNoPadPreprocessLayout = (kGemmType == GemmType::MGroupedNoPad||kGemmType == GemmType::MGroupedFused) && kNumGroups >= 128;
+    constexpr static bool kIsNoPadPreprocessLayout = (kGemmType == GemmType::MGroupedNoPad||kGemmType == GemmType::MGroupedFused) && (kNumGroups >= 128 || kForceNoPadPreprocess);
 #else
     constexpr static bool kIsNoPadPreprocessLayout = false;
 #endif
@@ -131,6 +133,10 @@ struct DeepGemmScheduler {
         } else {
             m_block_idx = first_block_idx + in_group_idx % num_blocks_in_group;
             n_block_idx = in_group_idx / num_blocks_in_group;
+        }
+        if constexpr (kInterleaveM && kNum1DBlocksPerGroup == 2) {
+            if (num_blocks_in_group == 2)
+                m_block_idx ^= (n_block_idx + curr_group_idx) & 1;
         }
     }
 

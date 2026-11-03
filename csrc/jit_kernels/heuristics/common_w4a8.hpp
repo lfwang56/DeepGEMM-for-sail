@@ -26,9 +26,8 @@ enum class EmptyExpertPolicy { Dense, Nonempty };
 struct NativeKernelConfig {
     W4A8Config tile;
     FragmentPolicy fragment;
-    SchedulerPolicy scheduler;
 
-    ALoadPolicy a_load() const { return scheduler == SchedulerPolicy::Queue ? ALoadPolicy::Ring2 : ALoadPolicy::Bulk; }
+    ALoadPolicy a_load() const { return tile.warp_m > 128 ? ALoadPolicy::Ring2 : ALoadPolicy::Bulk; }
 };
 struct StreamedConfig {
     W4A8Config core;
@@ -77,17 +76,17 @@ static void check_config(const W4A8Config& c, int n, int k, GemmType kind) {
     DG_HOST_ASSERT(get_num_threads(c) <= 1024);
 }
 
-static int get_smem_size(const W4A8Config& c, int k, SchedulerPolicy scheduler = SchedulerPolicy::Standard) {
+static int get_smem_size(const W4A8Config& c, int k) {
     const int threads = get_num_threads(c);
     const int copy_rows = threads / std::min(threads, std::min(c.block_k, 128) / 16);
-    const int a_rows = scheduler == SchedulerPolicy::Queue ? ceil_div(c.block_m, copy_rows) * copy_rows : c.block_m;
+    const int a_rows = c.warp_m > 128 ? ceil_div(c.block_m, copy_rows) * copy_rows : c.block_m;
     const bool resident_a = c.n_expand > 1 && c.warp_m == 64 && k <= 384;
     const int a_slots = resident_a ? std::max(c.num_stages, k / c.block_k) : c.num_stages;
     const int64_t mainloop = int64_t(a_rows) * c.block_k * a_slots +
                             int64_t(c.block_n) * (c.block_k / 2 + c.block_k / 32) * c.num_stages;
     const int64_t reduction = int64_t(16 * 64) * (c.block_n / c.warp_n) * (c.block_k / c.warp_k) * sizeof(float);
     int64_t bytes = std::max(mainloop, reduction);
-    if (scheduler == SchedulerPolicy::Queue)
+    if (c.warp_m > 128)
         bytes = ceil_div(bytes, int64_t(128)) * 128 + ceil_div(int64_t(2 * c.block_m * sizeof(float)), int64_t(128)) * 128;
     DG_HOST_ASSERT(bytes <= INT32_MAX);
     return int(bytes);
@@ -139,7 +138,7 @@ static const char* get_gemm_type_name(GemmType kind) {
     return "";
 }
 
-// Strategy domains follow the scheduler capacity, alignment and minimum work
+// Strategy domains follow the supported expert count, alignment and minimum work
 // needed to amortize metadata construction. They contain no model shapes.
 static bool supports_native_strategy() { return is_ppu1v5_device() && get_num_sms() > 0; }
 
@@ -153,10 +152,10 @@ static W4A8Config small_m_config(int expected_m, int n = 256, GemmType kind = Ge
     return {get_num_sms(), bm, bn, 128, bm, wn, 128, 2, 1};
 }
 
-static bool fits_strategy(const W4A8Config& c, int k, bool routed) {
+static bool fits_strategy(const W4A8Config& c, int k) {
     const auto prop = device_runtime->get_prop();
     return get_num_threads(c) <= prop->maxThreadsPerBlock &&
-           get_smem_size(c, k, routed ? SchedulerPolicy::Queue : SchedulerPolicy::Standard) <= int(prop->sharedMemPerBlockOptin);
+           get_smem_size(c, k) <= int(prop->sharedMemPerBlockOptin);
 }
 
 static bool fits_compiled_strategy(int local_bytes) {
@@ -168,18 +167,18 @@ static bool small_m_eligible(int groups, int m, int n, int k, GemmType kind = Ge
     if (groups < 1 || groups > 1024 || ceil_div(m, groups) >= 512 || n < 128 || n % 64 || k < 512 ||
         k % 128)
         return false;
-    return fits_strategy(small_m_config(ceil_div(m, groups), n, kind, groups), k, false);
+    return fits_strategy(small_m_config(ceil_div(m, groups), n, kind, groups), k);
 }
 
 // Long-K NoPad benefits from fewer weight-decode tiles near the M160 tail.
-static W4A8Config default_routed_config(int expected_m, int k, GemmType kind) {
+static W4A8Config default_wide_config(int expected_m, int k, GemmType kind) {
     const bool wide = kind == GemmType::MGroupedNoPad && k > 2048 && expected_m > 128 && expected_m <= 192;
     const int bm = wide ? 192 : 160;
     const int stages = wide || kind == GemmType::MGroupedFused ? 3 : 2;
     return {get_num_sms(), bm, 256, 128, bm, 32, 128, stages, 1};
 }
 
-static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, const W4A8Config& original) {
+static bool wide_tile_eligible(int groups, int m, int n, int k, GemmType kind, const W4A8Config& original) {
     if (groups < 1 || groups > 1024 || (groups <= 64 && kind != GemmType::MGroupedFused) || n < 256 || n % 256 ||
         k < 512 || k % 128)
         return false;
@@ -190,13 +189,13 @@ static bool routed_eligible(int groups, int m, int n, int k, GemmType kind, cons
     if (groups <= 64 && int64_t(ceil_div(m, 192)) * (n / 256) < int64_t(get_num_sms()) * 4)
         return false;
     // Check the same single tile that automatic dispatch will select.
-    const auto tile = default_routed_config(expected_m, k, kind);
+    const auto tile = default_wide_config(expected_m, k, kind);
     if (kind == GemmType::MGroupedFused) {
-        const int routed_rows = ceil_div(expected_m, tile.block_m) * tile.block_m;
-        if (routed_rows * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
+        const int padded_rows = ceil_div(expected_m, tile.block_m) * tile.block_m;
+        if (padded_rows * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
             return false;
     }
-    return fits_strategy(tile, k, true);
+    return fits_strategy(tile, k);
 }
 
 inline constexpr int64_t kStreamedWeightBudget = 384LL * 1024 * 1024;
@@ -345,14 +344,14 @@ static StreamedConfig default_streamed_config(int m, int n, int k, int groups, i
 static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, int groups, GemmType kind) {
     const auto& c = spec.tile;
     DG_HOST_ASSERT(groups > 0 && groups <= 1024 && c.num_sms > 0 && c.num_sms <= get_num_sms());
-    if (spec.scheduler == SchedulerPolicy::Queue) {
+    if (c.warp_m > 128) {
         DG_HOST_ASSERT(kind != GemmType::MGroupedMasked);
         DG_HOST_ASSERT(c.block_m == 160 || c.block_m == 176 || c.block_m == 192);
         DG_HOST_ASSERT(c.warp_m == c.block_m && c.block_n == 256 && c.warp_n == 32);
         DG_HOST_ASSERT(c.block_k == 128 && c.warp_k == 128 && c.n_expand == 1);
         DG_HOST_ASSERT(c.num_stages >= 2 && c.num_stages <= 4 && n % 256 == 0 && k >= 512 && k % 128 == 0);
         DG_HOST_ASSERT(spec.fragment == FragmentPolicy::RollingK32);
-    } else if (spec.fragment == FragmentPolicy::FullK && spec.scheduler == SchedulerPolicy::Standard) {
+    } else if (spec.fragment == FragmentPolicy::FullK) {
         check_config(c, n, k, kind);
     } else {
         DG_HOST_ASSERT(kind != GemmType::MGroupedMasked && n >= 128);
@@ -366,7 +365,7 @@ static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, in
     }
     const auto prop = device_runtime->get_prop();
     DG_HOST_ASSERT(get_num_threads(c) <= prop->maxThreadsPerBlock &&
-                   get_smem_size(c, k, spec.scheduler) <= int(prop->sharedMemPerBlockOptin));
+                   get_smem_size(c, k) <= int(prop->sharedMemPerBlockOptin));
 }
 static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int groups, GemmType kind) {
     if (const auto* native = std::get_if<NativeKernelConfig>(&plan))
@@ -378,9 +377,9 @@ static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int group
 // Derive the single native implementation from the tile and host-known shape.
 static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k, GemmType kind) {
     if (c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
-        return {c, FragmentPolicy::RollingK32, SchedulerPolicy::Queue};
+        return {c, FragmentPolicy::RollingK32};
     if (kind == GemmType::MGroupedMasked)
-        return {c, FragmentPolicy::FullK, SchedulerPolicy::Standard};
+        return {c, FragmentPolicy::FullK};
 
     const bool small = (c.block_m == 16 || c.block_m == 32 || c.block_m == 64) && c.block_m == c.warp_m &&
                        (c.block_n == 128 || c.block_n == 256) && c.block_k == 128 && c.warp_k == 128 &&
@@ -389,8 +388,7 @@ static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int 
     const bool rolling = small && c.warp_n == (c.block_m == 64 ? 64 : 32);
     TORCH_CHECK(full || rolling, "W4FA8 tile has no supported native implementation");
     const bool prefer_rolling = kind == GemmType::MGroupedFused || (c.block_n == 256 && k > 2048);
-    return {c, rolling && (!full || prefer_rolling) ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK,
-            SchedulerPolicy::Standard};
+    return {c, rolling && (!full || prefer_rolling) ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK};
 }
 
 static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, GemmType kind) {
@@ -400,14 +398,14 @@ static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, Gem
     if (kind != GemmType::MGroupedMasked && supports_native_strategy()) {
         const bool fused = kind == GemmType::MGroupedFused;
         if (em <= 256) {
-            const bool routed = routed_eligible(groups, m, n, k, kind, base);
+            const bool wide = wide_tile_eligible(groups, m, n, k, kind, base);
             if (small_m_eligible(groups, m, n, k, kind) && !(kind == GemmType::MGroupedNoPad && base.block_m == 128) &&
-                (!routed || em <= 64)) {
+                (!wide || em <= 64)) {
                 const auto tile = small_m_config(em, n, kind, groups);
                 return tile;
             }
-            if (routed) {
-                return default_routed_config(em, k, kind);
+            if (wide) {
+                return default_wide_config(em, k, kind);
             }
         }
         if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k, groups, m, base.num_sms) &&

@@ -569,7 +569,7 @@ def test_tuned_fused_dispatch():
         # Restore a fresh activation scale for the other routing distribution.
         quantized = quant_activation(torch.randn(tokens, k, device='cuda', dtype=torch.bfloat16))
         lhs = quantized[0], quantized[1] * rhs[2]
-    print('PASS native W4A8 routed dispatch, balanced/random routes and Graph inputs')
+    print('PASS native W4A8 wide dispatch, balanced/random routes and Graph inputs')
 
 
 def _w4a8_nopad_problem(counts, n, k, with_layout=False):
@@ -698,7 +698,7 @@ def test_native_strategy_domains():
             counts[0] += counts[-1]
             counts[-1] = 0
             _, _, output, call, reference, _, _ = _w4a8_nopad_problem(counts, n, k)
-            call()  # The first M64/routed call must also initialize dynamic SMEM.
+            call()  # The first M64/wide call must also initialize dynamic SMEM.
             assert torch.isfinite(output).all(), (groups, mean_rows, n, k)
             assert calc_diff(output, reference()) < .003
     finally:
@@ -746,7 +746,7 @@ def test_streamed_nopad_replay_updates():
         assert torch.equal(consumed, output)
 
 
-def _check_routed_fused_metadata_layout(n, k, tokens, groups=97, topk=8):
+def _check_wide_fused_metadata_layout(n, k, tokens, groups=97, topk=8):
     packed = torch.randint(256, (groups, n, k // 2), device='cuda', dtype=torch.uint8)
     raw = torch.randint(119, 133, (groups, n, k // 32), device='cuda', dtype=torch.uint8)
     rhs = deep_gemm.preprocess_weights_and_scales(
@@ -769,10 +769,11 @@ def _check_routed_fused_metadata_layout(n, k, tokens, groups=97, topk=8):
             a = lhs[0].float()[ids] * quantized[1][ids]
             reference[begin:begin + count] = (a @ decode_weight(packed[expert], raw[expert]).T).bfloat16()
         begin += count
-    for block_m in (64, 32):
+    for block_m in ((64, 32, 160, 176) if k <= 1024 else (64, 32, 160)):
         # Construct the corresponding token layout rather than changing only
         # the GEMM config after moe_align_block_size has produced its metadata.
-        config = (deep_gemm.get_num_sms(), block_m, 256, 128, block_m, 64, 128, 2, 1)
+        config = (deep_gemm.get_num_sms(), block_m, 256, 128, block_m,
+                  32 if block_m > 128 else 64, 128, 3 if block_m > 128 and k > 2048 else 2, 1)
         selected, rows, experts, sorted_tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
             lhs[0], rhs[0], routes, config=config)
         assert selected == config
@@ -790,21 +791,21 @@ def _check_routed_fused_metadata_layout(n, k, tokens, groups=97, topk=8):
         lhs[1].neg_()
 
 
-def test_routed_fused_metadata_layout():
-    _check_routed_fused_metadata_layout(512, 768, 1733)
+def test_wide_fused_metadata_layout():
+    _check_wide_fused_metadata_layout(512, 768, 1733)
     # Exercise large K with random packed values and scales that vary across
     # K32 groups, independently of the constant-K K3 oracle.
-    _check_routed_fused_metadata_layout(768, 3584, 2048)
+    _check_wide_fused_metadata_layout(768, 3584, 2048)
 
 
-def test_routed_fused_small_expert_set():
-    _check_routed_fused_metadata_layout(6144, 3584, 448, groups=28)
+def test_wide_fused_small_expert_set():
+    _check_wide_fused_metadata_layout(6144, 3584, 448, groups=28)
     # Two internal M blocks per expert exercise interleaving of full/tail pairs.
-    _check_routed_fused_metadata_layout(2048, 768, 896, groups=28)
+    _check_wide_fused_metadata_layout(2048, 768, 896, groups=28)
 
 
 def test_fused_large_output_offset():
-    # A legal routed problem crosses the signed 32-bit element offset at expert
+    # A legal wide problem crosses the signed 32-bit element offset at expert
     # 256. Keep the oracle small while exercising the real public GPU kernel.
     groups, r, n, k = 512, 256, 32768, 512
     packed = torch.full((groups, n, k // 2), 0x22, device='cuda', dtype=torch.uint8)
@@ -1033,7 +1034,7 @@ def test_streamed_n_tail():
     assert calc_diff(output, reference()) < .003
 
 
-def test_routed_fused_replay_updates():
+def test_wide_fused_replay_updates():
     # Exercise regular and irregular token order through the same gather path.
     # Cover full tiles, partial tiles, concentrated routes and empty experts.
     # The same captured graph must observe each route and tensor update.
@@ -1089,7 +1090,7 @@ def test_native_optimized_inv_scale(k=768):
                 (lhs[0], lhs[1] * inverse), rhs, reference, indices, rows)
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs, output, indices, rows, inv_scale=inverse)
             assert torch.equal(output, reference), ('nopad', skew, inverse)
-    print('PASS native inv_scale nopad queue variants', flush=True)
+    print('PASS native inv_scale nopad wide-tile variants', flush=True)
     lhs, rhs, output, _, _, _, _, routes, _ = _streamed_fused_problem(groups, 1940, 8, n, k)
     config, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(lhs[0], rhs[0], routes)
     reference = torch.empty_like(output)
@@ -1193,7 +1194,7 @@ def test_explicit_execution_configs():
     print('PASS explicit native/streamed execution configs and invalid combinations')
 
 def test_native_capture_readiness():
-    # Warm an empty single-tile queue, then capture nonempty work with the
+    # Warm an empty wide-tile call, then capture nonempty work with the
     # other inverse-scale module without compilation or fallback.
     lhs, rhs, output, _, reference, _, _, rows, indices = _w4a8_nopad_problem([170] * 65, 256, 768, True)
     sms = deep_gemm.get_num_sms()
@@ -1350,9 +1351,9 @@ if __name__ == '__main__':
         test_compact_fused()
         test_streamed_fused_replay_updates()
         test_streamed_nopad_replay_updates()
-        test_routed_fused_replay_updates()
-        test_routed_fused_metadata_layout()
-        test_routed_fused_small_expert_set()
+        test_wide_fused_replay_updates()
+        test_wide_fused_metadata_layout()
+        test_wide_fused_small_expert_set()
         test_nopad_expert_limit()
         test_nopad_n_expand()
         test_nopad_resident_a_and_scales()

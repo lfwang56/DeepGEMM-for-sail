@@ -12,7 +12,8 @@
 #include <cute/algorithm/ppu_copy.hpp>
 #include <deep_gemm/impls/dequant_w4a16.cuh>
 #include <deep_gemm/common/profiling_interface.cuh>
-#include <deep_gemm/scheduler/w4a8_routed_scheduler.cuh>
+#include <deep_gemm/common/w4a8_arguments.cuh>
+#include <deep_gemm/scheduler/scheduler_cutlass3.cuh>
 #include <deep_gemm/scheduler/fused_scheduler.cuh>
 #include <deep_gemm/impls/fused_gemm_util.cuh>
 #include <deep_gemm/common/exception.cuh>
@@ -29,17 +30,15 @@ using deep_gemm::GemmType;
 
 template <int ShapeN, int ShapeK, int BlockM, int BlockN, int BlockK, int WarpM, int WarpN, int WarpK, int kNumGroups,
           int kNumStages, GemmType kGemmType, int N_EXPAND = 1, bool ApplyInvScale = false,
-          deep_gemm::w4fa8::SchedulerPolicy Schedule = deep_gemm::w4fa8::SchedulerPolicy::Standard,
-          class SchedulerAdapter = void,
           deep_gemm::w4fa8::FragmentPolicy Fragment = deep_gemm::w4fa8::FragmentPolicy::FullK,
           deep_gemm::w4fa8::ALoadPolicy ALoad = deep_gemm::w4fa8::ALoadPolicy::Bulk>
 class W4A8GEMM_MMA {
 public:
-  static constexpr bool Routed = Schedule == deep_gemm::w4fa8::SchedulerPolicy::Queue;
+  static constexpr bool WideM = WarpM > 128;
   static constexpr bool Fused = (kGemmType == GemmType::MGroupedFused);
   static constexpr bool Compact = Fragment == deep_gemm::w4fa8::FragmentPolicy::RollingK32;
-  static constexpr int DecodeN = Routed ? 1 : WarpN / 16;
-  // A narrow ring bounds live A operands for wide routed tiles.
+  static constexpr int DecodeN = WideM ? 1 : WarpN / 16;
+  // A narrow ring bounds live A operands for wide M tiles.
   static constexpr int ADistance = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2 ? 1 : -1;
   static constexpr bool EarlyA = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2;
   static_assert(!Compact || (N_EXPAND == 1 && BlockK == WarpK));
@@ -59,7 +58,7 @@ public:
   static constexpr bool CacheRowScale = N_EXPAND > 1 && WarpM >= 32 && ShapeK <= 512;
   // basic
   // A packed K64 slice feeds two K32 MMA steps for every M tile and grouped kind.
-  static constexpr bool BatchDequant = Routed || WarpK == 128;
+  static constexpr bool BatchDequant = WideM || WarpK == 128;
   static constexpr bool E8M0_scale = true;
   static constexpr bool scale_use_ld_matrix = true;
   static constexpr int N = ShapeN;
@@ -75,13 +74,12 @@ public:
   using TileShape = Shape<Int<BlockM>, Int<BlockN>, Int<BlockK>>;
   static constexpr int N_Blocks = deep_gemm::math::ceil_div(ShapeN, BlockN* N_EXPAND);
   static constexpr int scheduler_swizzle = (BlockM == 16) ? 1 : 2;
-  using DefaultScheduler =
+  using TileScheduler =
       cute::conditional_t<Fused,
                           deep_gemm::FusedGemmScheduler<kGemmType, ShapeN, ShapeK, BlockM, BlockN * N_EXPAND,
-                                                        kNumGroups, N_Blocks, scheduler_swizzle>,
+                                                        kNumGroups, N_Blocks, scheduler_swizzle, WideM>,
                           deep_gemm::DeepGemmScheduler<kGemmType, ShapeN, ShapeK, BlockM, BlockN * N_EXPAND, kNumGroups,
-                                                       N_Blocks, scheduler_swizzle>>;
-  using TileScheduler = cute::conditional_t<Routed, SchedulerAdapter, DefaultScheduler>;
+                                                       N_Blocks, scheduler_swizzle, deep_gemm::EpilogueType::Default, true, WideM && kNumGroups >= 128, WideM>>;
   using ArchTag = cutlass::arch::PPU0015;
   static constexpr int WarpsOnM = BlockM / WarpM;
   static constexpr int WarpsOnN = BlockN / WarpN; // WarpN = 64
@@ -109,7 +107,7 @@ public:
   static constexpr int AlignA = 128 / cutlass::sizeof_bits<ElementA>::value;
   static constexpr int ACopyThreadsK = cute::min(MaxThreadsPerBlock, cute::min(BlockK, 128) / AlignA);
   static constexpr int ACopyRows = MaxThreadsPerBlock / ACopyThreadsK;
-  static constexpr int AStorageM = Routed ? ((BlockM + ACopyRows - 1) / ACopyRows) * ACopyRows : BlockM;
+  static constexpr int AStorageM = WideM ? ((BlockM + ACopyRows - 1) / ACopyRows) * ACopyRows : BlockM;
   using ACopyInst = cute::PPU_CP_ASYNC_CACHEALWAYS_ZFILL<cutlass::uint128_t>;
   using FusedOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<ArchTag, ElementA, false, AlignA, Int<BlockK>,
                                                                    MaxThreadsPerBlock, ACopyInst, Int<AStorageM>>;
@@ -169,7 +167,7 @@ public:
     };
   };
 
-  using SharedStorage = deep_gemm::w4fa8::RowScaleStorage<MainloopStorage, Routed ? BlockM : 0>;
+  using SharedStorage = deep_gemm::w4fa8::RowScaleStorage<MainloopStorage, WideM ? BlockM : 0>;
 
   struct NormalArguments {
     int* block_m_info;
@@ -299,9 +297,9 @@ public:
       else
         return full;
     }();
-    auto fp4_accum = make_tensor<ElementAcc>(Shape<_8, Int<DecodeN>, Int<Compact && !Routed ? 2 : 1>>{});
+    auto fp4_accum = make_tensor<ElementAcc>(Shape<_8, Int<DecodeN>, Int<Compact && !WideM ? 2 : 1>>{});
     auto decode_fragment = [&](int n, int half) {
-      if constexpr (Routed)
+      if constexpr (WideM)
         return fp4_accum(_, Int<0>{}, Int<0>{});
       else if constexpr (Compact)
         return fp4_accum(_, n, half);
@@ -415,14 +413,9 @@ public:
 
           return cute::make_tuple(tAgA, residual_m, gD);
         } else {
-          const int* blk_token_base = params.sorted_token_ids + [&]() {
-            if constexpr (Routed)
-              return deep_scheduler.token_base;
-            else
-              return deep_scheduler.cumsum_m_block_idx * BlockM;
-          }();
-          if constexpr (Routed) {
-            // Internal tiles can extend beyond the original expert padding.
+          const int* blk_token_base = params.sorted_token_ids + deep_scheduler.cumsum_m_block_idx * BlockM;
+          if constexpr (WideM) {
+            // Copy cohorts can extend beyond valid rows.
             // Never read token metadata for those rows.
             const int logical = CopyAConfig::logical_thread_idx(thread_idx);
             const int tm = logical / CopyAConfig::NumThreads_CPY_K;
@@ -447,11 +440,11 @@ public:
         }
       }();
 
-      // Routed tokens are fixed for this work item. Form their row addresses
+      // Gather tokens are fixed for this work item. Form their row addresses
       // once, rather than repeating the wide multiply in each K-stage copy.
       const ElementA* token_rows[CopyAConfig::M_ITER];
       bool valid_tokens[CopyAConfig::M_ITER];
-      if constexpr (Fused && Routed) {
+      if constexpr (Fused && WideM) {
 #pragma unroll
         for (int mi = 0; mi < CopyAConfig::M_ITER; ++mi) {
           valid_tokens[mi] = token_offsets[mi] < uint32_t(params.num_token);
@@ -462,13 +455,13 @@ public:
       // The prologue commit/wait covers these 4-byte asynchronous copies too.
       // A buffer is reused only after every warp has crossed the intervening
       // work item's prologue CTA barrier, completing its old epilogue reads.
-      if constexpr (Routed)
+      if constexpr (WideM)
         if (thread_idx < BlockM) {
           const bool valid = thread_idx < residual_m;
           int64_t scale_row = 0;
           if (valid) {
             if constexpr (Fused)
-              scale_row = params.sorted_token_ids[deep_scheduler.token_base + thread_idx];
+              scale_row = params.sorted_token_ids[deep_scheduler.cumsum_m_block_idx * BlockM + thread_idx];
             else
               scale_row = deep_scheduler.curr_offset_a() / K + m_block_idx * BlockM + thread_idx;
           }
@@ -493,7 +486,7 @@ public:
                 continue;
               const ElementA* row;
               bool valid;
-              if constexpr (Routed) {
+              if constexpr (WideM) {
                 row = token_rows[mi];
                 valid = valid_tokens[mi];
               } else {
@@ -504,14 +497,14 @@ public:
               for (int ki = cohort; ki < CopyAConfig::K_ITER; ki += CopyAConfig::KCohorts) {
                 const auto* src = reinterpret_cast<const cutlass::uint128_t*>(
                     row + ki * CopyAConfig::TILER_N + tk * CopyAConfig::KPerThread +
-                    (Routed ? 0 : BlockK * k_tile_iter));
+                    (WideM ? 0 : BlockK * k_tile_iter));
                 auto* dst = reinterpret_cast<cutlass::uint128_t*>(raw_pointer_cast(tAsA(_, mi, ki, k_pipe).data()));
                 deep_gemm::FusedACopyInst::copy(*src, *dst, valid);
               }
-              // The routed pipeline issues K tiles in order, including the
+              // The ring pipeline issues K tiles in order, including the
               // prologue. Carry each row pointer forward instead of forming
               // a wide multiply-add from the tile index for every copy.
-              if constexpr (Routed)
+              if constexpr (WideM)
                 token_rows[mi] += BlockK;
             }
           }
@@ -520,7 +513,7 @@ public:
 
       auto g2s_copy_B_and_scale = [&](int k_tile_iter, int k_pipe) {
         constexpr int copy_warp = SplitAIU ? 1 : 0;
-        constexpr int scale_warp = Routed && MaxThreadsPerBlock >= 96 ? 2 : copy_warp;
+        constexpr int scale_warp = WideM && MaxThreadsPerBlock >= 96 ? 2 : copy_warp;
         if (warp_idx == copy_warp)
           copy(gmem_tiled_copy_B, tBgB(_, _, _, k_tile_iter), tBsB(_, _, _, k_pipe));
         if (warp_idx == scale_warp)
@@ -748,14 +741,11 @@ public:
               continue;
             int64_t scale_row;
             if constexpr (Fused) {
-              if constexpr (Routed)
-                scale_row = params.sorted_token_ids[deep_scheduler.token_base + local_row];
-              else
-                scale_row = params.sorted_token_ids[deep_scheduler.cumsum_m_block_idx * BlockM + local_row];
+              scale_row = params.sorted_token_ids[deep_scheduler.cumsum_m_block_idx * BlockM + local_row];
             } else
               scale_row = deep_scheduler.curr_offset_a() / K + m_block_idx * BlockM + local_row;
             const float a_scale = [&]() {
-              if constexpr (Routed)
+              if constexpr (WideM)
                 return apply_inv_scale(storage.row_scales[scale_buffer][local_row]);
               else
                 return CacheRowScale ? cached_row_scale(m, row) : apply_inv_scale(params.ptr_a_scale[scale_row]);
@@ -835,7 +825,7 @@ public:
                   for (int mb = 0; mb < ADistance && mb < UsedM; ++mb)
                     copy(smem_tiled_copy_A, tCsA(_, mb, kb, stage_idx), tCrA_copy_view(_, mb, Int<0>{}));
                 }
-                if constexpr (Routed) {
+                if constexpr (WideM) {
 #pragma unroll
                   for (int nb = 0; nb < WarpN / 16; ++nb) {
 #pragma unroll
@@ -947,10 +937,10 @@ public:
               process_k_tile_iteration(k_tile_idx);
             }
           } else {
-            if constexpr (!Routed)
+            if constexpr (!WideM)
               process_k_tile_iteration(0);
 #pragma unroll 1
-            for (int k_tile_idx = Routed ? 0 : 1; k_tile_idx < k_tile_count; k_tile_idx++) {
+            for (int k_tile_idx = WideM ? 0 : 1; k_tile_idx < k_tile_count; k_tile_idx++) {
               process_k_tile_iteration(k_tile_idx);
             }
           }
@@ -962,7 +952,7 @@ public:
           epilogue_cta_reduce();
           epilogue_no_tsm(active_m);
         };
-        if constexpr (Routed || (Compact && WarpM >= 64)) {
+        if constexpr (WideM || (Compact && WarpM >= 64)) {
           // Mutually exclusive branches keep each tail's accumulators local.
           // Independent predicates can merge their live ranges and spill.
           dispatch_tail((residual_m + WarpsOnM - 1) / WarpsOnM, process_active_rows);

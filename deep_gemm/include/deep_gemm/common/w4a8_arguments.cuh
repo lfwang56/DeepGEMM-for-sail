@@ -3,7 +3,6 @@
 namespace deep_gemm::w4fa8 {
 enum class FragmentPolicy { FullK, RollingK32 };
 enum class ALoadPolicy { Bulk, Ring2 };
-enum class SchedulerPolicy { Standard, Queue };
 
 template <class Storage, int Rows> struct RowScaleStorage : Storage {
   alignas(128) float row_scales[2][Rows];
@@ -37,14 +36,3 @@ struct DecodeParams {
   int group_start;
 };
 } // namespace deep_gemm::w4fa8_streamed
-
-namespace deep_gemm::w4fa8 {
-// Queue header precedes the per-tile task records.
-inline constexpr int kRoutedMetadataBytes = 1024;
-struct RoutedMetadataArguments {
-  const int32_t* rows;
-  uint8_t* metadata;
-};
-
-
-} // namespace deep_gemm::w4fa8

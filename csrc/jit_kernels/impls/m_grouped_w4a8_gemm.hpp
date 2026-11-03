@@ -61,11 +61,11 @@ template <class Scheduler> class Runtime final : public LaunchRuntime<Runtime<Sc
         int device = 0;
         std::optional<NativeKernelConfig> kernel_config;
         NativeKernelConfig kernel_spec() const {
-            return kernel_config.value_or(NativeKernelConfig{config, FragmentPolicy::FullK, SchedulerPolicy::Standard});
+            return kernel_config.value_or(NativeKernelConfig{config, FragmentPolicy::FullK});
         }
         std::pair<int, int> cache_variant() const {
             const auto c = kernel_spec();
-            return {int(c.fragment) + 2 * int(c.a_load()) + 4 * int(c.scheduler) + 16 * int(params.inv_scale != 1.f), int(kind)};
+            return {int(c.fragment) + 2 * int(c.a_load()) + 16 * int(params.inv_scale != 1.f), int(kind)};
         }
     };
     static const char* name() { return "m_grouped_gemm_w4fa8_mma"; }
@@ -75,7 +75,7 @@ template <class Scheduler> class Runtime final : public LaunchRuntime<Runtime<Sc
         return fmt::format(
             R"(
 #include <deep_gemm/impls/w4fa8_gemm.cuh>
-using Kernel = cutlass::gemm::kernel::W4A8GEMM_MMA<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, deep_gemm::GemmType::{}, {}, {}, deep_gemm::w4fa8::SchedulerPolicy::{}, {}, deep_gemm::w4fa8::FragmentPolicy::{}, deep_gemm::w4fa8::ALoadPolicy::{}>;
+using Kernel = cutlass::gemm::kernel::W4A8GEMM_MMA<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, deep_gemm::GemmType::{}, {}, {}, deep_gemm::w4fa8::FragmentPolicy::{}, deep_gemm::w4fa8::ALoadPolicy::{}>;
 static_assert(sizeof(Kernel::SharedStorage) == {}, "shared memory mismatch");
 static_assert(Kernel::MaxThreadsPerBlock == {}, "thread count mismatch");
 static_assert(sizeof(Kernel::Params) == {}, "kernel argument size mismatch");
@@ -87,11 +87,6 @@ void m_grouped_gemm_w4fa8_mma(Kernel::Params params) {{
 )",
             a.n, a.k, c.block_m, c.block_n, c.block_k, c.warp_m, c.warp_n, c.warp_k, a.groups, c.num_stages,
             get_gemm_type_name(a.kind), c.n_expand, a.params.inv_scale != 1.0f ? "true" : "false",
-            kernel.scheduler == SchedulerPolicy::Queue ? "Queue" : "Standard",
-            kernel.scheduler == SchedulerPolicy::Queue
-                ? fmt::format("deep_gemm::w4fa8::W4A8RoutedScheduler<{}, {}, {}, {}, {}>", a.n, a.k, c.block_m, c.block_n,
-                              a.kind == GemmType::MGroupedFused ? "true" : "false")
-                : "void",
             kernel.fragment == FragmentPolicy::FullK ? "FullK" : "RollingK32",
             kernel.a_load() == ALoadPolicy::Bulk ? "Bulk" : "Ring2",
             a.launch_args.smem_size, get_num_threads(c), sizeof(Arguments<Scheduler>));
@@ -116,7 +111,6 @@ static DgProfParam make_profile(GemmType kind, int groups, int m, int n, int k, 
     return prof;
 }
 
-struct RoutedSchedulerArguments;
 
 // Specialized kernels use the same compiler, device settings and launch cache
 // as every other native GEMM. Only compiled handles/resource counts are cached;
@@ -161,8 +155,7 @@ static std::optional<SpecializedKernel> prepare_specialized(const typename R::Ar
                                                             bool check_local = true) {
     const auto result = lookup_native_kernel<R>(args, capturing, check_local);
     if constexpr (std::is_same_v<R, Runtime<TileSchedulerArguments>> ||
-                  std::is_same_v<R, Runtime<W4A8FusedSchedulerArguments>> ||
-                  std::is_same_v<R, Runtime<RoutedSchedulerArguments>>) {
+                  std::is_same_v<R, Runtime<W4A8FusedSchedulerArguments>>) {
         if (!capturing) {
             auto other = args;
             other.params.inv_scale = args.params.inv_scale == 1.f ? .5f : 1.f;
@@ -201,10 +194,10 @@ static void launch(const W4A8Config& c, int m, int n, int k, int groups, GemmTyp
 }
 
 static torch::Tensor prepare_nopad_layout(const torch::Tensor& rows, int groups, int m, const W4A8Config& c) {
-    if (groups < 128)
+    if (groups < 128 && c.warp_m <= 128)
         return rows;
     TORCH_CHECK(groups <= 1024, "W4FA8 nopad supports at most 1024 experts");
-    auto scratch = at::empty({(groups + ceil_div(m + 1 - groups, c.block_m)) * 4}, rows.options());
+    auto scratch = at::empty({int64_t(4) * (1 + groups + ceil_div(m, c.block_m))}, rows.options());
     auto args = ComputeBlockInfoKernelRuntime::Args{
         .launch_attr_args = {reinterpret_cast<const uint32_t*>(rows.data_ptr<int32_t>()), static_cast<uint32_t>(groups),
                              reinterpret_cast<uint32_t*>(scratch.data_ptr<int32_t>())},
@@ -268,36 +261,6 @@ static void run(const torch::Tensor& a, const torch::Tensor& a_scale, const torc
     }
 }
 
-struct RoutedSchedulerArguments {
-    const uint8_t* meta;
-};
-using RoutedRuntime = Runtime<RoutedSchedulerArguments>;
-
-class RoutedMetadataRuntime final : public LaunchRuntime<RoutedMetadataRuntime> {
-  public:
-    struct Args {
-        W4A8Config config;
-        int n, k, groups, device;
-        LaunchArgs launch_args;
-        RoutedMetadataArguments params;
-        std::pair<int, int> cache_variant() const { return {0, 0}; }
-    };
-    static const char* name() { return "w4a8_routed_metadata"; }
-    static std::string generate_impl(const Args& a) {
-        return fmt::format(R"(
-#include <deep_gemm/scheduler/w4a8_routed_scheduler.cuh>
-extern "C" __global__ __launch_bounds__(256)
-void w4a8_routed_metadata(deep_gemm::w4fa8::RoutedMetadataArguments p) {{
-    deep_gemm::w4fa8::build_w4a8_routed_metadata<{}, {}>(p.rows, p.metadata);
-}}
-// device={}
-)", a.groups, a.config.block_m, a.device);
-    }
-    static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
-    }
-};
-
 template <class Scheduler>
 static bool run_compact(const NativeKernelConfig& spec, int m, int n, int k, int groups, GemmType kind,
                         const Arguments<Scheduler>& params, const torch::Tensor& rows, int device, bool capturing) {
@@ -307,7 +270,7 @@ static bool run_compact(const NativeKernelConfig& spec, int m, int n, int k, int
     typename R::Args args{
         c,      n,
         k,      groups,
-        kind,   {dim3(c.num_sms), dim3(get_num_threads(c)), get_smem_size(c, k, spec.scheduler)},
+        kind,   {dim3(c.num_sms), dim3(get_num_threads(c)), get_smem_size(c, k)},
         params, device, spec};
     const auto prepared = prepare_specialized<R>(args, capturing);
     if (!prepared)
@@ -327,39 +290,6 @@ static bool run_compact(const NativeKernelConfig& spec, int m, int n, int k, int
     return true;
 }
 
-static bool run_routed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
-                       const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
-                       const torch::Tensor& tokens, GemmType kind, bool capturing, float inv_scale,
-                       const NativeKernelConfig& spec) {
-    const int n = b.size(1), k = a.size(-1), groups = b.size(0), m = d.size(0), device = a.get_device();
-    const bool fused = kind == GemmType::MGroupedFused;
-    const auto& c = spec.tile;
-    RoutedRuntime::Args args{c, n, k, groups, kind,
-                             {dim3(c.num_sms), dim3(get_num_threads(c)), get_smem_size(c, k, SchedulerPolicy::Queue)},
-                             {}, device, spec};
-    args.params.inv_scale = inv_scale;
-    const auto kernel = prepare_specialized<RoutedRuntime>(args, capturing);
-    if (!kernel)
-        return false;
-    RoutedMetadataRuntime::Args meta{c, n, k, groups, device, {dim3(1), dim3(256), 0}, {}};
-    const auto metadata_kernel = prepare_specialized<RoutedMetadataRuntime>(meta, capturing);
-    if (!metadata_kernel)
-        return false;
-    auto metadata = at::empty({int64_t(kRoutedMetadataBytes) + int64_t(32) * (ceil_div(m, c.block_m) + groups)}, b.options());
-    meta.params = {rows.data_ptr<int32_t>(), metadata.data_ptr<uint8_t>()};
-    auto prof = make_profile(kind, groups, fused ? a.size(0) : m, n, k, ceil_div(m, groups),
-                             fused ? d.size(0) / a.size(0) : 0, rows.data_ptr<int32_t>());
-    ProfilingInterface::Instance().instrument(true, prof);
-    RoutedMetadataRuntime::launch(metadata_kernel->runtime, meta);
-    args.params = {a.data_ptr(), b.data_ptr<uint8_t>(), scale.data_ptr<uint8_t>(), d.data_ptr(),
-                   a_scale.data_ptr<float>(), int(a.size(0)), inv_scale,
-                   fused ? tokens.data_ptr<int32_t>() : nullptr, {metadata.data_ptr<uint8_t>()}};
-    args.launch_args.grid_dim = dim3(c.num_sms * std::min(8, kernel->active_blocks));
-    RoutedRuntime::launch(kernel->runtime, args);
-    ProfilingInterface::Instance().instrument(false, prof);
-    return true;
-}
-
 static void execute_plan(const ExecutionPlan& plan, const torch::Tensor& a, const torch::Tensor& a_scale,
                          const torch::Tensor& b, const torch::Tensor& scale, const torch::Tensor& d,
                          const torch::Tensor& rows, GemmType kind, int expected_m, float inv_scale,
@@ -375,20 +305,17 @@ static void execute_plan(const ExecutionPlan& plan, const torch::Tensor& a, cons
         return;
     }
     const auto& kernel = std::get<NativeKernelConfig>(plan);
-    using ReadyKey = std::tuple<int, uintptr_t, int, int, int, int, int, W4A8ConfigTuple, FragmentPolicy, SchedulerPolicy>;
+    using ReadyKey = std::tuple<int, uintptr_t, int, int, int, int, int, W4A8ConfigTuple, FragmentPolicy>;
     static std::mutex ready_mutex;
     static std::set<ReadyKey> ready;
-    const ReadyKey key{a.get_device(), reinterpret_cast<uintptr_t>(current_stream()), m, n, k, groups, int(kind), pack_config(kernel.tile), kernel.fragment, kernel.scheduler};
+    const ReadyKey key{a.get_device(), reinterpret_cast<uintptr_t>(current_stream()), m, n, k, groups, int(kind), pack_config(kernel.tile), kernel.fragment};
     const bool capturing = is_w4a8_capturing();
     if (capturing) {
         std::lock_guard<std::mutex> lock(ready_mutex);
         TORCH_CHECK(ready.count(key), "W4FA8 native plan must be warmed outside graph capture on this caller stream");
     }
 
-    if (kernel.scheduler == SchedulerPolicy::Queue) {
-        TORCH_CHECK(run_routed(a, a_scale, b, scale, d, rows, tokens, kind, capturing, inv_scale, kernel),
-                    "W4FA8 native queue plan must be warmed outside graph capture and fit compiled resources");
-    } else if (kernel.fragment == FragmentPolicy::FullK && kernel.scheduler == SchedulerPolicy::Standard) {
+    if (kernel.fragment == FragmentPolicy::FullK) {
         run(a, a_scale, b, scale, d, rows, kind, expected_m, kernel.tile, inv_scale, experts, tokens, aligned);
     } else if (kind == GemmType::MGroupedFused) {
         const Arguments<W4A8FusedSchedulerArguments> params{
