@@ -4,6 +4,8 @@ namespace deep_gemm::w4fa8 {
 enum class FragmentPolicy { FullK, RollingK32 };
 enum class ALoadPolicy { Bulk, Ring2 };
 
+constexpr bool uses_ring_a(int warp_m) { return warp_m == 96 || warp_m > 128; }
+
 template <class Storage, int Rows> struct RowScaleStorage : Storage {
   alignas(128) float row_scales[2][Rows];
 };

@@ -27,7 +27,7 @@ struct NativeKernelConfig {
     W4A8Config tile;
     FragmentPolicy fragment;
 
-    ALoadPolicy a_load() const { return tile.warp_m > 128 ? ALoadPolicy::Ring2 : ALoadPolicy::Bulk; }
+    ALoadPolicy a_load() const { return uses_ring_a(tile.warp_m) ? ALoadPolicy::Ring2 : ALoadPolicy::Bulk; }
 };
 struct StreamedConfig {
     W4A8Config core;
@@ -48,7 +48,7 @@ static W4A8ConfigTuple pack_config(const W4A8Config& c) {
     return {c.num_sms, c.block_m, c.block_n, c.block_k, c.warp_m, c.warp_n, c.warp_k, c.num_stages, c.n_expand};
 }
 static int get_num_threads(const W4A8Config& c) {
-    const int64_t threads = int64_t(c.block_m / c.warp_m) * (c.block_n / c.warp_n) * (c.block_k / c.warp_k) * 32;
+    const int64_t threads = int64_t(c.block_m / c.warp_m) * (c.block_n / c.warp_n) * 32;
     DG_HOST_ASSERT(threads > 0 && threads <= 1024);
     return int(threads);
 }
@@ -64,7 +64,7 @@ static void check_config(const W4A8Config& c, int n, int k, GemmType kind) {
         DG_HOST_ASSERT(c.block_m == 128 and c.block_k == c.warp_k and c.n_expand == 1);
     }
     // PPU1.5 AIU minimum 64B swizzle requires 128 packed-FP4 K elements.
-    DG_HOST_ASSERT(c.block_k == 128 and (c.warp_k == 64 or c.warp_k == 128));
+    DG_HOST_ASSERT(c.block_k == 128 and c.warp_k == c.block_k);
     DG_HOST_ASSERT(k % c.block_k == 0 and c.num_stages >= 2 and c.num_stages <= 4);
     DG_HOST_ASSERT(c.n_expand >= 1 and c.n_expand <= 4);
     if (c.n_expand > 1) {
@@ -78,17 +78,25 @@ static void check_config(const W4A8Config& c, int n, int k, GemmType kind) {
 static int get_smem_size(const W4A8Config& c, int k) {
     const int threads = get_num_threads(c);
     const int copy_rows = threads / std::min(threads, std::min(c.block_k, 128) / 16);
-    const int a_rows = c.warp_m > 128 ? ceil_div(c.block_m, copy_rows) * copy_rows : c.block_m;
+    const int a_rows = uses_ring_a(c.warp_m) ? ceil_div(c.block_m, copy_rows) * copy_rows : c.block_m;
     const bool resident_a = c.n_expand > 1 && c.warp_m == 64 && k <= 384;
     const int a_slots = resident_a ? std::max(c.num_stages, k / c.block_k) : c.num_stages;
     const int64_t mainloop = int64_t(a_rows) * c.block_k * a_slots +
                             int64_t(c.block_n) * (c.block_k / 2 + c.block_k / 32) * c.num_stages;
-    const int64_t reduction = int64_t(16 * 64) * (c.block_n / c.warp_n) * (c.block_k / c.warp_k) * sizeof(float);
-    int64_t bytes = std::max(mainloop, reduction);
-    if (c.warp_m > 128)
+    int64_t bytes = mainloop;
+    if (uses_ring_a(c.warp_m))
         bytes = ceil_div(bytes, int64_t(128)) * 128 + ceil_div(int64_t(2 * c.block_m * sizeof(float)), int64_t(128)) * 128;
     DG_HOST_ASSERT(bytes <= INT32_MAX);
     return int(bytes);
+}
+
+// Configuration selection uses only host-known shapes and device resources.
+static bool supports_native_strategy() { return is_ppu1v5_device() && get_num_sms() > 0; }
+
+static bool fits_strategy(const W4A8Config& c, int k) {
+    const auto prop = device_runtime->get_prop();
+    return get_num_threads(c) <= prop->maxThreadsPerBlock &&
+           get_smem_size(c, k) <= int(prop->sharedMemPerBlockOptin);
 }
 
 // Bound M before rounding so even a large tuning hint cannot overflow.
@@ -121,6 +129,18 @@ static W4A8Config get_default_tile(int expected_m, int n, int k, int groups, Gem
         }
     }
     check_config(c, n, k, kind);
+    // Refine N partitioning for small standard tiles; M and routing layout stay unchanged.
+    if (supports_native_strategy() && expected_m <= 256 && groups <= 1024 &&
+        n >= 128 && k >= 512 && k % 128 == 0) {
+        auto candidate = c;
+        const bool underfilled = int64_t(groups) * ceil_div(n, bn) < c.num_sms;
+        candidate.block_n = bm == 32 ? 128 : bn;
+        candidate.warp_n = bm == 32 || (bm == 16 && underfilled) ? 32 : 64;
+        candidate.num_stages = 2;
+        candidate.n_expand = 1;
+        if (fits_strategy(candidate, k))
+            c = candidate;
+    }
     return c;
 }
 static const char* get_gemm_type_name(GemmType kind) {
@@ -137,36 +157,9 @@ static const char* get_gemm_type_name(GemmType kind) {
     return "";
 }
 
-// Strategy domains follow the supported expert count, alignment and minimum work
-// needed to amortize metadata construction. They contain no model shapes.
-static bool supports_native_strategy() { return is_ppu1v5_device() && get_num_sms() > 0; }
-
-static W4A8Config small_m_config(int expected_m, int n = 256, GemmType kind = GemmType::MGroupedNoPad, int groups = 1) {
-    const int bm = expected_m <= 16 ? 16 : expected_m <= 32 ? 32 : 64;
-    const bool fused = kind == GemmType::MGroupedFused;
-    const int base_n = n >= 256 ? 256 : 128;
-    const bool underfilled = int64_t(groups) * ceil_div(n, base_n) < get_num_sms();
-    const int bn = fused && bm == 32 ? 128 : base_n;
-    const int wn = bm == 32 || (fused && bm == 16 && underfilled) ? 32 : 64;
-    return {get_num_sms(), bm, bn, 128, bm, wn, 128, 2, 1};
-}
-
-static bool fits_strategy(const W4A8Config& c, int k) {
-    const auto prop = device_runtime->get_prop();
-    return get_num_threads(c) <= prop->maxThreadsPerBlock &&
-           get_smem_size(c, k) <= int(prop->sharedMemPerBlockOptin);
-}
-
 static bool fits_compiled_strategy(int local_bytes) {
     // Allow a small compiler frame, but reject spilled operand fragments.
     return local_bytes <= 64;
-}
-
-static bool small_m_eligible(int groups, int m, int n, int k, GemmType kind = GemmType::MGroupedNoPad) {
-    if (groups < 1 || groups > 1024 || ceil_div(m, groups) >= 512 || n < 128 || n % 64 || k < 512 ||
-        k % 128)
-        return false;
-    return fits_strategy(small_m_config(ceil_div(m, groups), n, kind, groups), k);
 }
 
 // Long-K NoPad benefits from fewer weight-decode tiles near the M160 tail.
@@ -343,10 +336,11 @@ static StreamedConfig default_streamed_config(int m, int n, int k, int groups, i
 static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, int groups, GemmType kind) {
     const auto& c = spec.tile;
     TORCH_CHECK(c.block_m == c.warp_m, "W4FA8 native tiles require block_m == warp_m");
+    TORCH_CHECK(c.block_k == c.warp_k, "W4FA8 native tiles require block_k == warp_k");
     DG_HOST_ASSERT(groups > 0 && groups <= 1024 && c.num_sms > 0 && c.num_sms <= get_num_sms());
-    if (c.warp_m > 128) {
+    if (uses_ring_a(c.warp_m)) {
         DG_HOST_ASSERT(kind != GemmType::MGroupedMasked);
-        DG_HOST_ASSERT(c.block_m == 160 || c.block_m == 176 || c.block_m == 192);
+        DG_HOST_ASSERT(c.block_m == 96 || c.block_m == 160 || c.block_m == 176 || c.block_m == 192);
         DG_HOST_ASSERT(c.warp_m == c.block_m && c.block_n == 256 && c.warp_n == 32);
         DG_HOST_ASSERT(c.block_k == 128 && c.warp_k == 128 && c.n_expand == 1);
         DG_HOST_ASSERT(c.num_stages >= 2 && c.num_stages <= 4 && n % 256 == 0 && k >= 512 && k % 128 == 0);
@@ -354,11 +348,10 @@ static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, in
     } else if (spec.fragment == FragmentPolicy::FullK) {
         check_config(c, n, k, kind);
     } else {
-        DG_HOST_ASSERT(kind != GemmType::MGroupedMasked && n >= 128);
-        DG_HOST_ASSERT(c.warp_n == (c.block_m == 64 ? 64 : 32));
-        DG_HOST_ASSERT(c.block_m == 16 || c.block_m == 32 || c.block_m == 64);
+        DG_HOST_ASSERT(n >= 128);
+        DG_HOST_ASSERT(c.warp_n == 32);
+        DG_HOST_ASSERT(c.block_m == 16 || c.block_m == 32);
         DG_HOST_ASSERT(c.block_m == c.warp_m && (c.block_n == 128 || c.block_n == 256));
-        DG_HOST_ASSERT(c.warp_n == 32 || c.warp_n == 64);
         DG_HOST_ASSERT(c.block_k == 128 && c.warp_k == 128 && c.n_expand == 1);
         DG_HOST_ASSERT(k >= 512 && k % 128 == 0 && c.num_stages == 2);
         DG_HOST_ASSERT(spec.fragment == FragmentPolicy::RollingK32);
@@ -375,21 +368,17 @@ static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int group
 }
 
 // Derive the single native implementation from the tile and host-known shape.
-static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k, GemmType kind) {
+static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k) {
     TORCH_CHECK(c.block_m == c.warp_m, "W4FA8 native tiles require block_m == warp_m");
-    if (c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
+    TORCH_CHECK(c.block_k == c.warp_k, "W4FA8 native tiles require block_k == warp_k");
+    if (c.block_m == 96 || c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
         return {c, FragmentPolicy::RollingK32};
-    if (kind == GemmType::MGroupedMasked)
-        return {c, FragmentPolicy::FullK};
-
-    const bool small = (c.block_m == 16 || c.block_m == 32 || c.block_m == 64) && c.block_m == c.warp_m &&
+    const bool rolling = (c.block_m == 16 || c.block_m == 32) && c.block_m == c.warp_m && c.warp_n == 32 &&
                        (c.block_n == 128 || c.block_n == 256) && c.block_k == 128 && c.warp_k == 128 &&
                        c.num_stages == 2 && c.n_expand == 1 && n >= 128 && k >= 512 && k % 128 == 0;
     const bool full = c.warp_n == 64 || c.warp_m == 128;
-    const bool rolling = small && c.warp_n == (c.block_m == 64 ? 64 : 32);
     TORCH_CHECK(full || rolling, "W4FA8 tile has no supported native implementation");
-    const bool prefer_rolling = kind == GemmType::MGroupedFused || (c.block_n == 256 && k > 2048);
-    return {c, rolling && (!full || prefer_rolling) ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK};
+    return {c, rolling ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK};
 }
 
 static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, GemmType kind) {
@@ -399,13 +388,7 @@ static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, Gem
     if (kind != GemmType::MGroupedMasked && supports_native_strategy()) {
         const bool fused = kind == GemmType::MGroupedFused;
         if (em <= 256) {
-            const bool wide = wide_tile_eligible(groups, m, n, k, kind, base);
-            if (small_m_eligible(groups, m, n, k, kind) && !(kind == GemmType::MGroupedNoPad && base.block_m == 128) &&
-                (!wide || em <= 64)) {
-                const auto tile = small_m_config(em, n, kind, groups);
-                return tile;
-            }
-            if (wide) {
+            if (wide_tile_eligible(groups, m, n, k, kind, base)) {
                 return default_wide_config(em, k, kind);
             }
         }
@@ -429,7 +412,7 @@ static ExecutionPlan resolve_config(const W4A8Config& tile, int m, int n, int k,
         check_streamed_config(plan, m, n, k, groups, kind);
         return plan;
     }
-    return resolve_native_config(tile, n, k, kind);
+    return resolve_native_config(tile, n, k);
 }
 
 } // namespace deep_gemm::w4fa8
