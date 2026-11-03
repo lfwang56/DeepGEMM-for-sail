@@ -55,14 +55,10 @@ static int get_num_threads(const W4A8Config& c) {
 
 static void check_config(const W4A8Config& c, int n, int k, GemmType kind) {
     DG_HOST_ASSERT(c.num_sms > 0 and c.num_sms <= get_num_sms());
-    DG_HOST_ASSERT(c.block_m == 16 or c.block_m == 32 or c.block_m == 64 or c.block_m == 128);
-    DG_HOST_ASSERT(c.warp_m == 16 or c.warp_m == 32 or c.warp_m == 64 or c.warp_m == 128);
-    DG_HOST_ASSERT(c.block_m == c.warp_m and (c.warp_n == 64 or c.warp_n == 32));
+    DG_HOST_ASSERT(c.block_m == 16 or c.block_m == 32 or c.block_m == 64);
+    DG_HOST_ASSERT(c.warp_m == 16 or c.warp_m == 32 or c.warp_m == 64);
+    DG_HOST_ASSERT(c.block_m == c.warp_m and c.warp_n == 64);
     DG_HOST_ASSERT(c.block_n >= 64 and c.block_n % 64 == 0);
-    if (c.warp_n == 32 or c.warp_m == 128) {
-        DG_HOST_ASSERT(kind == GemmType::MGroupedNoPad and c.warp_m == 128 and c.warp_n == 32);
-        DG_HOST_ASSERT(c.block_m == 128 and c.block_k == c.warp_k and c.n_expand == 1);
-    }
     // PPU1.5 AIU minimum 64B swizzle requires 128 packed-FP4 K elements.
     DG_HOST_ASSERT(c.block_k == 128 and c.warp_k == c.block_k);
     DG_HOST_ASSERT(k % c.block_k == 0 and c.num_stages >= 2 and c.num_stages <= 4);
@@ -106,9 +102,9 @@ static W4A8Config get_default_tile(int expected_m, int n, int k, int groups, Gem
                    kind == GemmType::MGroupedMasked);
     // Wider M reuses each native FP4 decode over eight M16 fragments.
     // Keep the small-M, short-K and other grouped paths on their existing tiles.
-    if (kind == GemmType::MGroupedNoPad and expected_m >= 128 and n >= 1024 and n % 128 == 0 and k >= 1024) {
-        W4A8Config c{get_num_sms(), 128, 128, 128, 128, 32, 128, 2, 1};
-        check_config(c, n, k, kind);
+    if (kind == GemmType::MGroupedNoPad and expected_m >= 128 and n >= 1024 and n % 256 == 0 and k >= 1024) {
+        W4A8Config c{get_num_sms(), 128, 256, 128, 128, 32, 128, 2, 1};
+        DG_HOST_ASSERT(k % 128 == 0);
         return c;
     }
     int bm = 16;
@@ -340,7 +336,7 @@ static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, in
     DG_HOST_ASSERT(groups > 0 && groups <= 1024 && c.num_sms > 0 && c.num_sms <= get_num_sms());
     if (uses_ring_a(c.warp_m)) {
         DG_HOST_ASSERT(kind != GemmType::MGroupedMasked);
-        DG_HOST_ASSERT(c.block_m == 96 || c.block_m == 160 || c.block_m == 176 || c.block_m == 192);
+        DG_HOST_ASSERT(c.block_m >= 80 && c.block_m <= 192 && c.block_m % 16 == 0);
         DG_HOST_ASSERT(c.warp_m == c.block_m && c.block_n == 256 && c.warp_n == 32);
         DG_HOST_ASSERT(c.block_k == 128 && c.warp_k == 128 && c.n_expand == 1);
         DG_HOST_ASSERT(c.num_stages >= 2 && c.num_stages <= 4 && n % 256 == 0 && k >= 512 && k % 128 == 0);
@@ -371,12 +367,12 @@ static void check_plan(const ExecutionPlan& plan, int m, int n, int k, int group
 static NativeKernelConfig resolve_native_config(const W4A8Config& c, int n, int k) {
     TORCH_CHECK(c.block_m == c.warp_m, "W4FA8 native tiles require block_m == warp_m");
     TORCH_CHECK(c.block_k == c.warp_k, "W4FA8 native tiles require block_k == warp_k");
-    if (c.block_m == 96 || c.block_m == 160 || c.block_m == 176 || c.block_m == 192)
+    if (uses_ring_a(c.warp_m))
         return {c, FragmentPolicy::RollingK32};
     const bool rolling = (c.block_m == 16 || c.block_m == 32) && c.block_m == c.warp_m && c.warp_n == 32 &&
                        (c.block_n == 128 || c.block_n == 256) && c.block_k == 128 && c.warp_k == 128 &&
                        c.num_stages == 2 && c.n_expand == 1 && n >= 128 && k >= 512 && k % 128 == 0;
-    const bool full = c.warp_n == 64 || c.warp_m == 128;
+    const bool full = c.warp_n == 64;
     TORCH_CHECK(full || rolling, "W4FA8 tile has no supported native implementation");
     return {c, rolling ? FragmentPolicy::RollingK32 : FragmentPolicy::FullK};
 }

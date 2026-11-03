@@ -548,9 +548,9 @@ def test_routing_layout_block_m():
         b = torch.empty(groups, 1024, 512, device='cuda', dtype=torch.uint8)
         routes = (torch.arange(tokens * topk, device='cuda').reshape(tokens, topk) % groups).int()
         source = routes.flatten().argsort(stable=True) // topk
-        for bm in (64, 96, 160, 176, 192, 256):
+        for bm in (64, 80, 96, 112, 128, 144, 160, 176, 192, 256):
             config = ((deep_gemm.get_num_sms(), 256, 256, 128, 64, 64, 128, 4, 1) if bm == 256 else
-                      (deep_gemm.get_num_sms(), bm, 256, 128, bm, 32 if bm == 96 or bm > 128 else 64, 128, 2, 1))
+                      (deep_gemm.get_num_sms(), bm, 256, 128, bm, 32 if bm > 64 else 64, 128, 2, 1))
             selected, rows, _, sorted_tokens, _, _, _ = deep_gemm.moe_align_block_size(a, b, routes, config=config)
             assert selected == config and sorted_tokens.size(1) == bm
             table = sorted_tokens.flatten()
@@ -564,9 +564,8 @@ def test_routing_layout_block_m():
     print('PASS routing padding blocks, expert token offsets and tail sentinels')
 
 
-def _check_m96_tile(stages, k=768):
-    # Cover M96 boundaries, output guards and inverse scales.
-    block_m = 96
+def _check_native_m_tile(block_m, stages, k=768):
+    # Cover intermediate M tiles, output guards and inverse scales.
     sms = deep_gemm.get_num_sms()
     config = (sms, block_m, 256, 128, block_m, 32, 128, stages, 1)
 
@@ -586,9 +585,10 @@ def _check_m96_tile(stages, k=768):
                 assert calc_diff(output, -expected * .5) < .003, (label, 'capture')
             finally:
                 scale.neg_()
-        print('PASS M96 tile', label, config, flush=True)
+        print('PASS native M tile', label, config, flush=True)
 
-    row_cases = [[0, 1, 95, 96, 97, 191, 192, 193, 289]]
+    row_cases = [[0, 1, block_m - 1, block_m, block_m + 1,
+                  2 * block_m - 1, 2 * block_m, 2 * block_m + 1, 3 * block_m + 1]]
     if stages == 2:
         row_cases.append([0] + [2 * block_m + 1] * 127)
     for counts in row_cases:
@@ -619,7 +619,25 @@ def _check_m96_tile(stages, k=768):
 
 def test_m96_tile():
     for stages in (2, 3, 4):
-        _check_m96_tile(stages)
+        _check_native_m_tile(96, stages)
+
+
+def test_intermediate_m_tiles():
+    for block_m in (80, 112, 128, 144):
+        for stages in (2, 4):
+            _check_native_m_tile(block_m, stages, 512 if stages == 4 else 768)
+
+
+def test_m128_ring_default():
+    # Small expert counts select the M128 Ring2 base tile without wide overrides.
+    lhs, rhs, out, _, reference, _, _, rows, indices = _w4a8_nopad_problem(
+        [0] + [136] * 16, 1024, 1024, True)
+    expected = reference()
+    for inverse in (1., .5):
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+            lhs, rhs[:2], out, indices, rows, inv_scale=inverse)
+        assert calc_diff(out, expected * inverse) < .003
+    print('PASS M128 Ring2 automatic NoPad configuration')
 
 
 def _capture_prepared(call, output, rows=None):
@@ -732,7 +750,8 @@ def test_explicit_execution_configs():
     oversized = (sms, 64, 1 << 30, 128, 64, 64, 128, 2, 4)
     multi_m_warp = (sms, 128, 256, 128, 64, 64, 128, 2, 1)
     split_k_tile = (sms, 16, 256, 128, 16, 64, 64, 2, 1)
-    for bad in (oversized, multi_m_warp, split_k_tile):
+    legacy_m128 = (sms, 128, 128, 128, 128, 32, 128, 2, 1)
+    for bad in (oversized, multi_m_warp, split_k_tile, legacy_m128):
         try:
             deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], out, indices, rows, bad)
         except (RuntimeError, TypeError, ValueError):
@@ -761,6 +780,8 @@ if __name__ == '__main__':
         test_explicit_execution_configs()
         test_routing_layout_block_m()
         test_m96_tile()
+        test_intermediate_m_tiles()
+        test_m128_ring_default()
         test_grouped_gemm()
         test_inv_scale()
         test_nopad_expert_limit()

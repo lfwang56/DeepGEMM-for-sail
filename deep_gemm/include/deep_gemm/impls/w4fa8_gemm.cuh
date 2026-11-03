@@ -41,6 +41,8 @@ public:
   // A narrow ring bounds live A operands for wide M tiles.
   static constexpr int ADistance = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2 ? 1 : -1;
   static constexpr bool EarlyA = ALoad == deep_gemm::w4fa8::ALoadPolicy::Ring2;
+  static_assert(!WideM || (Compact && EarlyA && BlockN == 256 && WarpN == 32),
+                "W4FA8 wide tiles require RollingK32/Ring2 with BlockN256/WarpN32");
   static_assert(BlockK == WarpK, "W4FA8 native tiles require BlockK == WarpK");
   static_assert(!Compact || N_EXPAND == 1);
   static_assert(WarpN == 16 || WarpN == 32 || WarpN == 48 || WarpN == 64);
