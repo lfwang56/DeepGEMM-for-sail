@@ -628,6 +628,66 @@ def test_intermediate_m_tiles():
             _check_native_m_tile(block_m, stages, 512 if stages == 4 else 768)
 
 
+def test_wide_default_tiles():
+    # Check 90% boundaries, multi-block budgets and long-K Fused M160.
+    groups, topk, n = 128, 16, 256
+    cases = ((65, 80), (72, 80), (73, 96), (86, 96), (87, 112),
+             (100, 112), (101, 128), (115, 128), (116, 144),
+             (129, 144), (130, 160), (144, 160), (145, 176), (158, 176),
+             (159, 96), (172, 96), (173, 112), (176, 112), (177, 112),
+             (192, 112), (256, 144), (288, 160), (289, 112),
+             (320, 128), (384, 144), (512, 144), (1024, 144))
+    for k in (768, 3584):
+        b = torch.empty((groups, n, k // 2), dtype=torch.uint8, device='cuda')
+        for em, bm in cases:
+            tokens = groups * em // topk
+            a = torch.empty((tokens, k), dtype=torch.float8_e4m3fn, device='cuda')
+            routes = (torch.arange(tokens * topk, device='cuda').reshape(tokens, topk) % groups).int()
+            config, rows, _, sorted_tokens, _, _, _ = deep_gemm.moe_align_block_size(a, b, routes)
+            expected_bm = 160 if k > 2048 and bm == 176 else bm
+            stages = 3 if expected_bm <= 144 else 2
+            assert config == (deep_gemm.get_num_sms(), expected_bm, 256, 128,
+                              expected_bm, 32, 128, stages, 1), (em, k, config)
+            assert sorted_tokens.size(1) == expected_bm and bool((rows == em).all())
+    for em, k in ((65, 768), (87, 768), (145, 768), (173, 3584)):
+        lhs, rhs, _, _, reference, _, _, rows, indices = _w4a8_nopad_problem(
+            [0, 2 * em] + [em] * 126, n, k, True)
+        expected = reference()
+        backing = torch.full((groups * em + 16, n), -123., dtype=torch.bfloat16, device='cuda')
+        output = backing[:-16]
+        for inverse in (1., .5):
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+                lhs, rhs[:2], output, indices, rows, inv_scale=inverse)
+            assert calc_diff(output, expected * inverse) < .003
+            assert bool((backing[-16:] == -123.).all())
+    print('PASS automatic wide M tiles and pipeline stages')
+
+
+def test_large_native_defaults():
+    # Retain streamed priority and use wide native tiles when streamed is unavailable.
+    groups, topk = 128, 16
+    for em, n, k, bm in ((512, 256, 768, 144), (1023, 1024, 1024, 144),
+                          (1024, 1024, 1024, 256)):
+        tokens = groups * em // topk
+        a = torch.empty((tokens, k), dtype=torch.float8_e4m3fn, device='cuda')
+        b = torch.empty((groups, n, k // 2), dtype=torch.uint8, device='cuda')
+        routes = (torch.arange(tokens * topk, device='cuda').reshape(tokens, topk) % groups).int()
+        config, _, _, _, _, _, _ = deep_gemm.moe_align_block_size(a, b, routes)
+        assert config[1] == bm, (em, n, k, config)
+    for em in (320, 512, 1024):
+        lhs, rhs, _, _, reference, _, _, rows, indices = _w4a8_nopad_problem(
+            [0, 2 * em] + [em] * 15, 1024, 768, True)
+        expected = reference()
+        automatic = torch.empty_like(expected)
+        explicit = torch.empty_like(expected)
+        bm = 128 if em == 320 else 144
+        config = (deep_gemm.get_num_sms(), bm, 256, 128, bm, 32, 128, 2, 1)
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], automatic, indices, rows)
+        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], explicit, indices, rows, configs=config)
+        assert torch.equal(automatic, explicit) and calc_diff(automatic, expected) < .003
+    print('PASS large native fallback and streamed priority')
+
+
 def test_m128_ring_default():
     # Small expert counts select the M128 Ring2 base tile without wide overrides.
     lhs, rhs, out, _, reference, _, _, rows, indices = _w4a8_nopad_problem(
@@ -782,6 +842,8 @@ if __name__ == '__main__':
         test_m96_tile()
         test_intermediate_m_tiles()
         test_m128_ring_default()
+        test_wide_default_tiles()
+        test_large_native_defaults()
         test_grouped_gemm()
         test_inv_scale()
         test_nopad_expert_limit()

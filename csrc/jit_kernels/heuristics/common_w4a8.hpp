@@ -157,32 +157,44 @@ static bool fits_compiled_strategy(int local_bytes) {
     // Allow a small compiler frame, but reject spilled operand fragments.
     return local_bytes <= 64;
 }
-
-// Long-K NoPad benefits from fewer weight-decode tiles near the M160 tail.
+// Plan one tile per call; the scheduler uses each expert's actual row count.
 static W4A8Config default_wide_config(int expected_m, int k, GemmType kind) {
-    const bool wide = kind == GemmType::MGroupedNoPad && k > 2048 && expected_m > 128 && expected_m <= 192;
-    const int bm = wide ? 192 : 160;
-    const int stages = wide || kind == GemmType::MGroupedFused ? 3 : 2;
+    const bool fused = kind == GemmType::MGroupedFused;
+    const int max_m = fused ? 176 : 192;
+    int bm;
+    if (int64_t(expected_m) * 10 <= max_m * 9) {
+        const int required = int(ceil_div(int64_t(expected_m) * 10, int64_t(9)));
+        bm = std::max(80, ceil_div(required, 16) * 16);
+        // Long-K Fused loses decode/compute overlap at M176; retain M160.
+        if (fused && k > 2048 && bm == 176)
+            bm = 160;
+    } else if (!fused && int64_t(expected_m) + 16 <= max_m) {
+        // Keep one M16 of headroom before splitting the NoPad transition range.
+        bm = max_m;
+    } else {
+        const int64_t blocks = std::max(int64_t(2), ceil_div(int64_t(expected_m) * 10, int64_t(160 * 9)));
+        const int required = int(ceil_div(int64_t(expected_m) * 10, blocks * 9));
+        bm = std::clamp(ceil_div(required, 16) * 16, 80, 160);
+    }
+    const int stages = fused && bm <= 144 ? 3 : 2;
     return {get_num_sms(), bm, 256, 128, bm, 32, 128, stages, 1};
 }
 
-static bool wide_tile_eligible(int groups, int m, int n, int k, GemmType kind, const W4A8Config& original) {
-    if (groups < 1 || groups > 1024 || (groups <= 64 && kind != GemmType::MGroupedFused) || n < 256 || n % 256 ||
+static bool wide_tile_eligible(int groups, int m, int n, int k, GemmType kind) {
+    if (groups < 1 || groups > 1024 ||
+        (groups <= 64 && kind != GemmType::MGroupedFused && int64_t(m) <= int64_t(groups) * 256) || n < 256 || n % 256 ||
         k < 512 || k % 128)
         return false;
     const int expected_m = ceil_div(m, groups);
-    if (expected_m < 96 || expected_m > 256 || int64_t(ceil_div(m, 192)) * (n / 256) < get_num_sms())
+    if (expected_m < 65)
+        return false;
+    const auto tile = default_wide_config(expected_m, k, kind);
+    const int64_t tasks = int64_t(ceil_div(m, tile.block_m)) * (n / 256);
+    if (tasks < get_num_sms())
         return false;
     // Small expert sets need several waves to repay the device metadata pass.
-    if (groups <= 64 && int64_t(ceil_div(m, 192)) * (n / 256) < int64_t(get_num_sms()) * 4)
+    if (groups <= 64 && tasks < int64_t(get_num_sms()) * 4)
         return false;
-    // Check the same single tile that automatic dispatch will select.
-    const auto tile = default_wide_config(expected_m, k, kind);
-    if (kind == GemmType::MGroupedFused) {
-        const int padded_rows = ceil_div(expected_m, tile.block_m) * tile.block_m;
-        if (padded_rows * 4 > ceil_div(expected_m, original.block_m) * original.block_m * 5)
-            return false;
-    }
     return fits_strategy(tile, k);
 }
 
@@ -383,14 +395,11 @@ static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, Gem
     const auto base = get_default_tile(em, n, k, groups, kind);
     if (kind != GemmType::MGroupedMasked && supports_native_strategy()) {
         const bool fused = kind == GemmType::MGroupedFused;
-        if (em <= 256) {
-            if (wide_tile_eligible(groups, m, n, k, kind, base)) {
-                return default_wide_config(em, k, kind);
-            }
-        }
         if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k, groups, m, base.num_sms) &&
             (!fused || streamed_fused_eligible(m, n, k, groups, base.num_sms)))
             return default_streamed_config(m, n, k, groups, base.num_sms, fused, true).core;
+        if (wide_tile_eligible(groups, m, n, k, kind))
+            return default_wide_config(em, k, kind);
     }
     return base;
 }
