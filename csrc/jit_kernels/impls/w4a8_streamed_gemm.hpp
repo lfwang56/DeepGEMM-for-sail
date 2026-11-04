@@ -291,11 +291,8 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
         return false;
     StreamedGatherRuntime::Args gather_args{k, groups, {dim3(num_sms * 4), dim3(256), 0}, {}};
     if (!capturing) context->reserve_events(parts);
-    for (const bool apply_scale : {false, true}) {
-        auto variant_key = key;
-        std::get<10>(variant_key) = apply_scale;
-        if (context->prepared_plans.count(variant_key)) continue;
-        TORCH_CHECK(!capturing, "W4FA8 streamed variants must be warmed outside graph capture");
+    if (prepared == context->prepared_plans.end()) {
+        TORCH_CHECK(!capturing, "W4FA8 streamed variant must be warmed outside graph capture");
         StreamedPreparedPlan next;
         for (const auto& op : plan)
             next.kernels.emplace(std::make_pair(op.groups, op.n_count), StreamedKernels{});
@@ -311,7 +308,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
             pair.decode.empty_flat = allow_sparse && local_n == n;
             pair.decode.fuse_gather = chunk_gather && is_fused;
             pair.core = {n, k, local_n, local_groups, {dim3(num_sms), dim3(threads), core_smem}, {}};
-            pair.core.apply_inv_scale = apply_scale;
+            pair.core.apply_inv_scale = inv_scale != 1.f;
             pair.decoder = compiler->build(StreamedDecodeRuntime::kernel_name(pair.decode),
                                            StreamedDecodeRuntime::generate(pair.decode));
             pair.gemm =
@@ -327,7 +324,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
         if (is_fused && !chunk_gather)
             next.gather = compiler->build("w4a8_streamed_gather", StreamedGatherRuntime::generate(gather_args));
         // Publish only a complete plan. Capture never enters a compiler or module loader.
-        context->prepared_plans.emplace(variant_key, std::move(next));
+        context->prepared_plans.emplace(key, std::move(next));
     }
     prepared = context->prepared_plans.find(key);
     TORCH_CHECK(prepared != context->prepared_plans.end(), "W4FA8 streamed plan preparation incomplete");
@@ -450,18 +447,13 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
         throw;
     }
     ProfilingInterface::Instance().instrument(false, prof);
-    if (!capturing) {
-        for (const bool apply : {false, true}) {
-            auto variant_key = key;
-            std::get<10>(variant_key) = apply;
-            context->prepared_plans.at(variant_key).warmed = true;
-        }
-    }
+    if (!capturing)
+        prepared->second.warmed = true;
     return true;
 }
 
 // Admission and preparation are owned by this operator, including every
-// declared chunk/tail and both numerical variants on the actual caller stream.
+// declared chunk/tail for the requested numerical variant on the actual caller stream.
 static bool run_streamed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
                          const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
                          const StreamedConfig& execution, const FusedInputs& fused = {}, float inv_scale = 1.f) {

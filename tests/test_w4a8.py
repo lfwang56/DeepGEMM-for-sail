@@ -700,21 +700,21 @@ def test_m128_ring_default():
     print('PASS M128 Ring2 automatic NoPad configuration')
 
 
-def _capture_prepared(call, output, rows=None):
+def _capture_prepared(call, output, rows=None, inverse=.3):
     stream = torch.cuda.Stream()
     stream.wait_stream(torch.cuda.current_stream())
     output.fill_(float('nan'))
     with torch.cuda.stream(stream):
         deep_gemm.set_compile_mode(1)
         try:
-            call(1.)
+            call(inverse)
         finally:
             deep_gemm.set_compile_mode(0)
     stream.synchronize()
     assert torch.isnan(output).all()
     try:
         with torch.cuda.graph(torch.cuda.CUDAGraph(), stream=stream):
-            call(.3)
+            call(inverse)
     except RuntimeError as error:
         assert 'must be warmed outside graph capture' in str(error)
     else:
@@ -724,26 +724,35 @@ def _capture_prepared(call, output, rows=None):
         rows.zero_()
     stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
-        call(1.)
+        call(inverse)
     stream.synchronize()
     if rows is not None:
         assert torch.isnan(output).all()
         rows.copy_(live_rows)
     stream.wait_stream(torch.cuda.current_stream())
+    try:
+        with torch.cuda.graph(torch.cuda.CUDAGraph(), stream=stream):
+            call(1. if inverse != 1. else .3)
+    except RuntimeError as error:
+        assert 'must be warmed outside graph capture' in str(error)
+    else:
+        raise AssertionError('capture admitted an unwarmed inverse-scale variant')
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph, stream=stream):
-        call(.3)
+        call(inverse)
     graph.replay()
     torch.cuda.synchronize()
     return graph, stream
 
 
 def test_execution_paths():
-    # Four representative paths share capture, scaling and live-input checks.
-    for streamed in (False, True):
+    # FullK, rolling and streamed kernels prepare only the requested scale variant.
+    for mode in ('full', 'rolling', 'streamed'):
+        streamed = mode == 'streamed'
         for fused in (False, True):
             groups, n, k = 8, 1344 if streamed else 512, 1024 if streamed else 768
             config = ((deep_gemm.get_num_sms(), 256, 256, 128, 64, 64, 128, 4, 1) if streamed else
+                      (deep_gemm.get_num_sms(), 64, 256, 128, 64, 64, 128, 2, 1) if mode == 'full' else
                       (deep_gemm.get_num_sms(), 160, 256, 128, 160, 32, 128, 3, 1))
             if fused:
                 lhs, rhs, output, _, reference, packed, raw, routes, _ = _streamed_fused_problem(
@@ -793,7 +802,22 @@ def test_execution_paths():
                 consumed = output.clone()
             stream.synchronize()
             assert torch.equal(consumed, output)
-            print(f'PASS execution {streamed=} {fused=}: capture preparation, inverse scale and live inputs')
+            unit_graph, _ = _capture_prepared(call, output, None if fused else rows, inverse=1.)
+            assert calc_diff(output, reference()) < .003
+            graph.replay()
+            torch.cuda.synchronize()
+            assert calc_diff(output, reference() * .3) < .003
+            # A different non-unit scalar reuses the warmed non-unit variant.
+            nonunit_graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(nonunit_graph, stream=stream):
+                call(.7)
+            nonunit_graph.replay()
+            torch.cuda.synchronize()
+            assert calc_diff(output, reference() * .7) < .003
+            unit_graph.replay()
+            torch.cuda.synchronize()
+            assert calc_diff(output, reference()) < .003
+            print(f'PASS execution {mode=} {fused=}: variant-specific warmup, capture and live inputs')
 
 
 def test_explicit_execution_configs():

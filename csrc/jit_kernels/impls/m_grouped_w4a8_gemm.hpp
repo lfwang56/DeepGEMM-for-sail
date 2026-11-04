@@ -150,22 +150,6 @@ static std::optional<SpecializedKernel> lookup_native_kernel(const typename R::A
     return kernels.emplace(key, prepared).first->second;
 }
 
-template <class R>
-static std::optional<SpecializedKernel> prepare_specialized(const typename R::Args& args, bool capturing,
-                                                            bool check_local = true) {
-    const auto result = lookup_native_kernel<R>(args, capturing, check_local);
-    if constexpr (std::is_same_v<R, Runtime<TileSchedulerArguments>> ||
-                  std::is_same_v<R, Runtime<W4A8FusedSchedulerArguments>>) {
-        if (!capturing) {
-            auto other = args;
-            other.params.inv_scale = args.params.inv_scale == 1.f ? .5f : 1.f;
-            TORCH_CHECK(lookup_native_kernel<R>(other, false, check_local).has_value(),
-                        "W4FA8 inverse-scale variant does not fit compiled resources");
-        }
-    }
-    return result;
-}
-
 template <class Scheduler>
 static void launch(const W4A8Config& c, int m, int n, int k, int groups, GemmType kind, int expected_m, int topk,
                    int32_t* m_rows, const Arguments<Scheduler>& params) {
@@ -173,7 +157,7 @@ static void launch(const W4A8Config& c, int m, int n, int k, int groups, GemmTyp
     const int threads = get_num_threads(c), smem = get_smem_size(c, k);
     typename R::Args args{c, n, k, groups, kind, {dim3(c.num_sms), dim3(threads), smem}, params};
     DG_HGGC_RUNTIME_CHECK(hggcGetDevice(&args.device));
-    const auto prepared = prepare_specialized<R>(args, is_w4a8_capturing(), false);
+    const auto prepared = lookup_native_kernel<R>(args, is_w4a8_capturing(), false);
     TORCH_CHECK(prepared.has_value(), "W4FA8 native plan must be warmed outside graph capture");
     const auto& runtime = prepared->runtime;
     const int blocks = prepared->active_blocks;
@@ -272,7 +256,7 @@ static bool run_compact(const NativeKernelConfig& spec, int m, int n, int k, int
         k,      groups,
         kind,   {dim3(c.num_sms), dim3(get_num_threads(c)), get_smem_size(c, k)},
         params, device, spec};
-    const auto prepared = prepare_specialized<R>(args, capturing);
+    const auto prepared = lookup_native_kernel<R>(args, capturing);
     if (!prepared)
         return false;
     torch::Tensor layout;
@@ -307,10 +291,10 @@ static void execute_plan(const ExecutionPlan& plan, const torch::Tensor& a, cons
         return;
     }
     const auto& kernel = std::get<NativeKernelConfig>(plan);
-    using ReadyKey = std::tuple<int, uintptr_t, int, int, int, int, int, W4A8ConfigTuple, FragmentPolicy>;
+    using ReadyKey = std::tuple<int, uintptr_t, int, int, int, int, int, W4A8ConfigTuple, FragmentPolicy, bool>;
     static std::mutex ready_mutex;
     static std::set<ReadyKey> ready;
-    const ReadyKey key{a.get_device(), reinterpret_cast<uintptr_t>(current_stream()), m, n, k, groups, int(kind), pack_config(kernel.tile), kernel.fragment};
+    const ReadyKey key{a.get_device(), reinterpret_cast<uintptr_t>(current_stream()), m, n, k, groups, int(kind), pack_config(kernel.tile), kernel.fragment, inv_scale != 1.f};
     const bool capturing = is_w4a8_capturing();
     if (capturing) {
         std::lock_guard<std::mutex> lock(ready_mutex);
