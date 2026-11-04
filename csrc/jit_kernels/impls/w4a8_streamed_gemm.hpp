@@ -1,6 +1,9 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -181,6 +184,30 @@ struct StreamedPreparedPlan {
     bool warmed = false;
 };
 
+static void log_streamed_config(const StreamedConfig& execution, int m, int n, int k, int groups,
+                                int grouped_rows, int chunk, int parts, const StreamedPreparedPlan& prepared) {
+    if (const char* log = std::getenv("show_log"); log && isdigit(*log)) {
+        const auto& c = execution.core;
+        printf("[W4FA8 streamed] group:%d problem:[%d,%d,%d] rows:%d decode_n:%d expert_chunk:%d parts:%d "
+               "schedule:%s gather:%s empty_experts:%s\n",
+               groups, m, n, k, grouped_rows, execution.decode_n, chunk, parts,
+               execution.schedule == ChunkSchedule::Ramp ? "ramp" : "fixed",
+               execution.gather == GatherPolicy::None ? "none" : execution.gather == GatherPolicy::Full ? "full" : "chunk",
+               execution.empty_experts == EmptyExpertPolicy::Nonempty ? "nonempty" : "dense");
+        for (const auto& entry : prepared.kernels) {
+            const auto& core = entry.second;
+            int regs = 0, stack = 0;
+            hgFuncGetAttribute(&regs, HG_FUNC_ATTRIBUTE_NUM_REGS, core.gemm->kernel);
+            hgFuncGetAttribute(&stack, HG_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, core.gemm->kernel);
+            printf("[W4FA8 streamed core] group:%d n:%d block:[%d,%d,%d] warp:[%d,%d,%d] stages:%d "
+                   "smem:%d vreg:%d stack:%d tb_per_sm:%u threads:%u\n",
+                   entry.first.first, entry.first.second, c.block_m, c.block_n, c.block_k,
+                   c.warp_m, c.warp_n, c.warp_k, c.num_stages, core.core.launch_args.smem_size, regs, stack,
+                   core.core.launch_args.grid_dim.x / c.num_sms, core.core.launch_args.block_dim.x);
+        }
+    }
+}
+
 struct StreamedAsyncContext {
     int device;
     hggcStream_t compute = nullptr, decode = nullptr;
@@ -331,6 +358,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     if (is_compile_only()) return true;
     const auto& kernels = prepared->second.kernels;
     const auto& gather_kernel = prepared->second.gather;
+    log_streamed_config(execution, int(a.size(0)), n, k, groups, m, chunk, parts, prepared->second);
 
     DgProfParam prof;
     if (ProfilingInterface::Instance().get_op_info()) {

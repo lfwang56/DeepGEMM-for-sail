@@ -150,6 +150,19 @@ static std::optional<SpecializedKernel> lookup_native_kernel(const typename R::A
     return kernels.emplace(key, prepared).first->second;
 }
 
+static void log_native_config(const W4A8Config& c, int m, int n, int k, int groups,
+                              const SpecializedKernel& prepared) {
+    if (const char* log = std::getenv("show_log"); log && isdigit(*log)) {
+        int regs = 0, stack = 0;
+        hgFuncGetAttribute(&regs, HG_FUNC_ATTRIBUTE_NUM_REGS, prepared.runtime->kernel);
+        hgFuncGetAttribute(&stack, HG_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, prepared.runtime->kernel);
+        printf("[W4FA8] group:%d problem:[%d,%d,%d] block:[%d,%d,%d] warp:[%d,%d,%d] stages:%d smem:%d vreg:%d "
+               "stack:%d tb_per_sm:%d threads:%d n_expand:%d\n",
+               groups, m, n, k, c.block_m, c.block_n, c.block_k, c.warp_m, c.warp_n, c.warp_k, c.num_stages,
+               get_smem_size(c, k), regs, stack, prepared.active_blocks, get_num_threads(c), c.n_expand);
+    }
+}
+
 template <class Scheduler>
 static void launch(const W4A8Config& c, int m, int n, int k, int groups, GemmType kind, int expected_m, int topk,
                    int32_t* m_rows, const Arguments<Scheduler>& params) {
@@ -163,15 +176,7 @@ static void launch(const W4A8Config& c, int m, int n, int k, int groups, GemmTyp
     const int blocks = prepared->active_blocks;
     args.launch_args.grid_dim = dim3(c.num_sms < 20 ? c.num_sms : c.num_sms * std::min(8, blocks));
     auto prof = make_profile(kind, groups, m, n, k, expected_m, topk, m_rows);
-    if (const char* log = std::getenv("show_log"); log && isdigit(*log)) {
-        int regs = 0, stack = 0;
-        hgFuncGetAttribute(&regs, HG_FUNC_ATTRIBUTE_NUM_REGS, runtime->kernel);
-        hgFuncGetAttribute(&stack, HG_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, runtime->kernel);
-        printf("[W4FA8] group:%d problem:[%d,%d,%d] block:[%d,%d,%d] warp:[%d,%d,%d] stages:%d smem:%d vreg:%d "
-               "stack:%d tb_per_sm:%d threads:%d n_expand:%d\n",
-               groups, m, n, k, c.block_m, c.block_n, c.block_k, c.warp_m, c.warp_n, c.warp_k, c.num_stages, smem, regs,
-               stack, blocks, threads, c.n_expand);
-    }
+    log_native_config(c, m, n, k, groups, *prepared);
     ProfilingInterface::Instance().instrument(true, prof);
     R::launch(runtime, args);
     ProfilingInterface::Instance().instrument(false, prof);
@@ -270,6 +275,7 @@ static bool run_compact(const NativeKernelConfig& spec, int m, int n, int k, int
         dim3(c.num_sms * (fused ? prepared->active_blocks : std::min(8, prepared->active_blocks)));
     auto prof = make_profile(kind, groups, fused ? params.num_token : m, n, k, ceil_div(m, groups),
                              fused ? m / params.num_token : 0, rows.data_ptr<int32_t>());
+    log_native_config(c, fused ? params.num_token : m, n, k, groups, *prepared);
     ProfilingInterface::Instance().instrument(true, prof);
     R::launch(prepared->runtime, args);
     ProfilingInterface::Instance().instrument(false, prof);
