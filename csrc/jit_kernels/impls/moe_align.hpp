@@ -352,12 +352,6 @@ static MoeAlignReturn moe_align_block_size_impl(
                         "(supported: bf16 / int8-perchannel / fp8-e4m3fn / fp4 / w4a16)");
         }
     }
-    if (lhs.scalar_type() == torch::kFloat8_e4m3fn && rhs.scalar_type() == torch::kUInt8) {
-        TORCH_CHECK(std::holds_alternative<FusedMmaConfigTuple>(config), "W4FA8 requires a nine-element tile tuple");
-        deep_gemm::w4fa8::resolve_config(
-            deep_gemm::w4fa8::unpack_config(std::get<FusedMmaConfigTuple>(config)),
-            numel, n, k, num_groups, GemmType::MGroupedFused);
-    }
     const int block_m = std::visit([](const auto& c) { return std::get<1>(c); }, config);
     DG_HOST_ASSERT(num_groups > 0);
     DG_HOST_ASSERT(block_m > 0);
