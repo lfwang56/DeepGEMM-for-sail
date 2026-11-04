@@ -62,8 +62,7 @@ template <GemmType kGemmType,
           uint32_t kNum1DBlocksPerGroup = 2,
           EpilogueType kEpilogueType = EpilogueType::Default,
           bool kTransposedBatchOutput = true,
-          bool kInterleaveM = false,
-          bool kForceNoPadPreprocess = false>
+          bool kInterleaveM = false>
 struct DeepGemmScheduler {
     constexpr static uint32_t SHAPE_N = SHAPE_N_;
     constexpr static uint32_t SHAPE_K = SHAPE_K_;
@@ -76,7 +75,7 @@ struct DeepGemmScheduler {
     constexpr static GemmType GEMM_TYPE = kGemmType;
     constexpr static bool kIsTMAMulticastOnA = false;
 #ifdef EnableGroupNoPadOpt
-    constexpr static bool kIsNoPadPreprocessLayout = (kGemmType == GemmType::MGroupedNoPad||kGemmType == GemmType::MGroupedFused) && (kNumGroups >= 128 || kForceNoPadPreprocess);
+    constexpr static bool kIsNoPadPreprocessLayout = (kGemmType == GemmType::MGroupedNoPad||kGemmType == GemmType::MGroupedFused) && kNumGroups >= 128;
 #else
     constexpr static bool kIsNoPadPreprocessLayout = false;
 #endif

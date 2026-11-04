@@ -688,16 +688,48 @@ def test_large_native_defaults():
     print('PASS large native fallback and streamed priority')
 
 
-def test_m128_ring_default():
-    # Small expert counts select the M128 Ring2 base tile without wide overrides.
-    lhs, rhs, out, _, reference, _, _, rows, indices = _w4a8_nopad_problem(
-        [0] + [136] * 16, 1024, 1024, True)
-    expected = reference()
-    for inverse in (1., .5):
-        deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
-            lhs, rhs[:2], out, indices, rows, inv_scale=inverse)
-        assert calc_diff(out, expected * inverse) < .003
-    print('PASS M128 Ring2 automatic NoPad configuration')
+def test_wide_tile_admission():
+    # Small expert sets use one task-wave gate for every automatic wide tile.
+    sms = deep_gemm.get_num_sms()
+    for groups, em, n in ((17, 128, 512), (17, 128, 768),
+                          (17, 128, 1024), (17, 128, 6144),
+                          (64, 176, 512), (64, 176, 768)):
+        bm = 144 if em == 128 else 192
+        tasks = ((groups * em + bm - 1) // bm) * (n // 256)
+        if tasks < sms:
+            bm = 64
+        config = (sms, bm, 256, 128, bm, 64 if bm == 64 else 32, 128, 2, 1)
+        lhs, rhs, _, _, reference, _, _, rows, indices = _w4a8_nopad_problem(
+            [0, 2 * em] + [em] * (groups - 2), n, 1024, True)
+        expected = reference()
+        backing = torch.full((groups * em + 16, n), -123., device='cuda', dtype=torch.bfloat16)
+        automatic, explicit = backing[:-16], torch.empty_like(expected)
+        for inverse in (1., .5):
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+                lhs, rhs[:2], automatic, indices, rows, inv_scale=inverse)
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(
+                lhs, rhs[:2], explicit, indices, rows, configs=config, inv_scale=inverse)
+            assert torch.equal(automatic, explicit) and calc_diff(automatic, expected * inverse) < .003
+            assert bool((backing[-16:] == -123.).all())
+        print(f'PASS unified wide admission {groups=} {em=} {n=} {bm=}')
+    for groups, k in ((8, 1024), (17, 1024), (17, 3584)):
+        em, n, topk = 128, 1024, 4
+        lhs, rhs, _, _, reference, _, _, routes, _ = _streamed_fused_problem(
+            groups, groups * em // topk, topk, n, k)
+        config, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
+            lhs[0], rhs[0], routes)
+        tasks = ((groups * em + 143) // 144) * (n // 256)
+        bm = 144 if tasks >= sms else 64
+        assert config == (sms, bm, 256, 128, bm, 32 if bm == 144 else 64,
+                          128, 3 if bm == 144 else 2, 1), (groups, k, config)
+        expected = reference()
+        backing = torch.full((groups * em + 16, n), -123., device='cuda', dtype=torch.bfloat16)
+        for inverse in (1., .5):
+            deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_fused(
+                lhs, rhs[:2], backing[:-16], rows, experts, tokens, aligned, config, inv_scale=inverse)
+            assert calc_diff(backing[:-16], expected * inverse) < .003
+            assert bool((backing[-16:] == -123.).all())
+        print(f'PASS fused wide admission {groups=} {k=} {bm=}')
 
 
 def _capture_prepared(call, output, rows=None, inverse=.3):
@@ -865,7 +897,7 @@ if __name__ == '__main__':
         test_routing_layout_block_m()
         test_m96_tile()
         test_intermediate_m_tiles()
-        test_m128_ring_default()
+        test_wide_tile_admission()
         test_wide_default_tiles()
         test_large_native_defaults()
         test_grouped_gemm()

@@ -100,13 +100,6 @@ static W4A8Config get_default_tile(int expected_m, int n, int k, int groups, Gem
     DG_HOST_ASSERT(expected_m >= 0 && groups > 0 && n > 0 && n % 64 == 0 && k > 0);
     DG_HOST_ASSERT(kind == GemmType::MGroupedFused || kind == GemmType::MGroupedNoPad ||
                    kind == GemmType::MGroupedMasked);
-    // Wider M reuses each native FP4 decode over eight M16 fragments.
-    // Keep the small-M, short-K and other grouped paths on their existing tiles.
-    if (kind == GemmType::MGroupedNoPad and expected_m >= 128 and n >= 1024 and n % 256 == 0 and k >= 1024) {
-        W4A8Config c{get_num_sms(), 128, 256, 128, 128, 32, 128, 2, 1};
-        DG_HOST_ASSERT(k % 128 == 0);
-        return c;
-    }
     int bm = 16;
     while (bm < expected_m && bm < 64)
         bm *= 2;
@@ -181,8 +174,7 @@ static W4A8Config default_wide_config(int expected_m, int k, GemmType kind) {
 }
 
 static bool wide_tile_eligible(int groups, int m, int n, int k, GemmType kind) {
-    if (groups < 1 || groups > 1024 ||
-        (groups <= 64 && kind != GemmType::MGroupedFused && int64_t(m) <= int64_t(groups) * 256) || n < 256 || n % 256 ||
+    if (groups < 1 || groups > 1024 || n < 256 || n % 256 ||
         k < 512 || k % 128)
         return false;
     const int expected_m = ceil_div(m, groups);
@@ -191,9 +183,6 @@ static bool wide_tile_eligible(int groups, int m, int n, int k, GemmType kind) {
     const auto tile = default_wide_config(expected_m, k, kind);
     const int64_t tasks = int64_t(ceil_div(m, tile.block_m)) * (n / 256);
     if (tasks < get_num_sms())
-        return false;
-    // Small expert sets need several waves to repay the device metadata pass.
-    if (groups <= 64 && tasks < int64_t(get_num_sms()) * 4)
         return false;
     return fits_strategy(tile, k);
 }

@@ -178,7 +178,7 @@ static void launch(const W4A8Config& c, int m, int n, int k, int groups, GemmTyp
 }
 
 static torch::Tensor prepare_nopad_layout(const torch::Tensor& rows, int groups, int m, const W4A8Config& c) {
-    if (groups < 128 && !uses_ring_a(c.warp_m))
+    if (groups < 128)
         return rows;
     TORCH_CHECK(groups <= 1024, "W4FA8 nopad supports at most 1024 experts");
     auto scratch = at::empty({int64_t(4) * (1 + groups + ceil_div(m, c.block_m))}, rows.options());
