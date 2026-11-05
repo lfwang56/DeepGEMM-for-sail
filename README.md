@@ -218,6 +218,9 @@ an explicit config tuple is supplied. The fused config comes from
 Native tile selection and streamed execution policies are handled internally
 by the C++ runtime. For explicit streamed NoPad/Fused execution, use
 `(dg.get_num_sms(), 256, 256, 128, 64, 64, 128, 4, 1)`.
+Subject to device, layout and workspace limits, automatic streamed execution
+requires at least 512 rows per expert on average when `K >= 2048` and
+`ceil(N / 256) * (K / 128) >= 128`, or 1024 rows otherwise.
 Set `show_log=1` to print the selected tile, resources and streamed execution plan.
 Before graph capture, warm up the selected configuration and unit/non-unit
 `inv_scale` variant on the capture stream.

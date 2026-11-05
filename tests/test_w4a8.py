@@ -591,7 +591,10 @@ def test_default_configs():
                                   (128, 72, 256, 768, 80), (128, 73, 256, 768, 96),
                                   (128, 145, 256, 3584, 160), (128, 158, 256, 768, 176),
                                   (128, 159, 256, 768, 96), (128, 320, 256, 768, 128),
-                                  (128, 1023, 1024, 1024, 144), (128, 1024, 1024, 1024, 256)):
+                                  (128, 1023, 1024, 1024, 144), (128, 1024, 1024, 1024, 256),
+                                  (32, 511, 2048, 2048, 144), (32, 512, 2048, 2048, 256),
+                                  (32, 512, 4096, 1920, 144), (32, 512, 4096, 2048, 256),
+                                  (32, 512, 1024, 3968, 144), (32, 512, 1024, 4096, 256)):
         topk, tokens = 4, groups * em // 4
         a = torch.empty((tokens, k), dtype=torch.float8_e4m3fn, device='cuda')
         b = torch.empty((groups, n, k // 2), dtype=torch.uint8, device='cuda')
@@ -605,7 +608,8 @@ def test_default_configs():
         assert sorted_tokens.size(1) == bm and bool((rows == em).all())
     # NoPad checks both sides of task-wave admission, small expert sets and large-M fallback.
     for groups, em, n, k, bm in ((17, 128, 512, 1024, 144), (17, 128, 768, 1024, 144),
-                                  (64, 176, 512, 1024, 192), (17, 320, 1024, 768, 128)):
+                                  (64, 176, 512, 1024, 192), (17, 320, 1024, 768, 128),
+                                  (32, 512, 2048, 2048, 256)):
         counts = [0, 2 * em] + [em] * (groups - 2)
         lhs, rhs, _, _, reference, _, _, rows, indices = _w4a8_nopad_problem(counts, n, k, True)
         expected = reference()
@@ -613,7 +617,8 @@ def test_default_configs():
         explicit = torch.empty_like(expected)
         if ((groups * em + bm - 1) // bm) * (n // 256) < sms:
             bm = 64
-        config = (sms, bm, 256, 128, bm, 64 if bm == 64 else 32, 128, 2, 1)
+        config = (sms, bm, 256, 128, 64 if bm == 256 else bm,
+                  64 if bm in (64, 256) else 32, 128, 4 if bm == 256 else 2, 1)
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], backing[:-16], indices, rows)
         deep_gemm.m_grouped_gemm_fp8_fp4_bf16_nt_nopad(lhs, rhs[:2], explicit, indices, rows, configs=config)
         assert torch.equal(backing[:-16], explicit) and calc_diff(explicit, expected) < .003

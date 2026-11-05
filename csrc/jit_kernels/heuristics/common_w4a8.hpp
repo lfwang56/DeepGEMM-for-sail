@@ -229,18 +229,18 @@ static bool short_streamed_eligible(int m, int n, int k, int groups, int num_sms
            streamed_waves(m, tile_n, groups, num_sms, maximum);
 }
 
-static int streamed_min_rows(int n, int k, int groups, int m, int num_sms) {
-    if (!streamed_tile_n(n, k, groups))
-        return 2048;
-    return short_streamed_eligible(m, n, k, groups, num_sms) ? 512 : 1024;
+static int streamed_min_rows(int n, int k) {
+    // Admission depends on workload; short-call chunk scheduling stays independent.
+    const int64_t nk_tiles = int64_t(ceil_div(n, 256)) * (k / 128);
+    return k >= 2048 && nk_tiles >= 128 ? 512 : 1024;
 }
 
-static bool streamed_fused_eligible(int m, int n, int k, int groups, int num_sms) {
+static bool streamed_fused_eligible(int m, int n, int k, int groups) {
     // Bound the additional activation workspace independently of weight chunks.
     constexpr int64_t activation_budget = 1024LL * 1024 * 1024;
     return supports_native_strategy() && streamed_tile_n(n, k, groups) &&
            int64_t(m) * (k + int(sizeof(float))) <= activation_budget &&
-           int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k, groups, m, num_sms);
+           int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k);
 }
 
 struct StreamedPlan {
@@ -384,8 +384,8 @@ static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, Gem
     const auto base = get_default_tile(em, n, k, groups, kind);
     if (kind != GemmType::MGroupedMasked && supports_native_strategy()) {
         const bool fused = kind == GemmType::MGroupedFused;
-        if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k, groups, m, base.num_sms) &&
-            (!fused || streamed_fused_eligible(m, n, k, groups, base.num_sms)))
+        if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k) &&
+            (!fused || streamed_fused_eligible(m, n, k, groups)))
             return default_streamed_config(m, n, k, groups, base.num_sms, fused, true).core;
         if (wide_tile_eligible(groups, m, n, k, kind))
             return default_wide_config(em, k, kind);
