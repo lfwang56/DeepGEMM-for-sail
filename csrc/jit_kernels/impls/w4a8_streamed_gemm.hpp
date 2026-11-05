@@ -288,10 +288,17 @@ static void launch_streamed_on(const std::shared_ptr<KernelRuntime>& runtime, co
     Runtime::launch_impl(runtime->kernel, config, args);
 }
 
-static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
-                               const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
-                               int num_sms, int tile_n, const std::shared_ptr<StreamedAsyncContext>& context, bool capturing,
-                               const StreamedConfig& execution, const FusedInputs& fused, float inv_scale = 1.f) {
+// Prepare every declared chunk/tail and numerical variant on the actual caller stream.
+static bool run_streamed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
+                         const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
+                         const StreamedConfig& execution, const FusedInputs& fused = {}, float inv_scale = 1.f) {
+    const auto caller = current_stream();
+    hggcStreamCaptureStatus capture = hggcStreamCaptureStatusNone;
+    DG_HGGC_RUNTIME_CHECK(hggcStreamIsCapturing(caller, &capture));
+    const bool capturing = capture != hggcStreamCaptureStatusNone;
+    auto context = streamed_async_context(a.get_device(), caller, !capturing);
+    TORCH_CHECK(context, "W4FA8 streamed plan must be warmed outside graph capture on this caller stream");
+    const int num_sms = execution.core.num_sms, tile_n = execution.decode_n;
     const int groups = b.size(0), n = b.size(1), k = a.size(1), m = d.size(0);
     constexpr int threads = 512, core_smem = 256 * 1024;
     const bool is_fused = fused.tokens.defined();
@@ -305,7 +312,6 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     const int chunk = execution.expert_chunk, parts = int(plan.size());
     const bool ramp = execution.schedule == ChunkSchedule::Ramp;
     const bool chunk_gather = execution.gather == GatherPolicy::Chunk;
-    const auto caller = current_stream();
     // The entire event submission is atomic with respect to other host callers
     // using this caller stream; previously queued waits retain their event record.
     std::lock_guard<std::mutex> lock(context->submit_mutex);
@@ -348,10 +354,8 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
         if (is_fused && !chunk_gather)
             next.gather = compiler->build("w4a8_streamed_gather", StreamedGatherRuntime::generate(gather_args));
         // Publish only a complete plan. Capture never enters a compiler or module loader.
-        context->prepared_plans.emplace(key, std::move(next));
+        prepared = context->prepared_plans.emplace(key, std::move(next)).first;
     }
-    prepared = context->prepared_plans.find(key);
-    TORCH_CHECK(prepared != context->prepared_plans.end(), "W4FA8 streamed plan preparation incomplete");
     if (is_compile_only()) return true;
     const auto& kernels = prepared->second.kernels;
     const auto& gather_kernel = prepared->second.gather;
@@ -477,16 +481,4 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     return true;
 }
 
-// Admission and preparation are owned by this operator, including every
-// declared chunk/tail for the requested numerical variant on the actual caller stream.
-static bool run_streamed(const torch::Tensor& a, const torch::Tensor& a_scale, const torch::Tensor& b,
-                         const torch::Tensor& scale, const torch::Tensor& d, const torch::Tensor& rows,
-                         const StreamedConfig& execution, const FusedInputs& fused = {}, float inv_scale = 1.f) {
-    hggcStreamCaptureStatus capture = hggcStreamCaptureStatusNone;
-    DG_HGGC_RUNTIME_CHECK(hggcStreamIsCapturing(current_stream(), &capture));
-    const bool capturing = capture != hggcStreamCaptureStatusNone;
-    auto context = streamed_async_context(a.get_device(), current_stream(), !capturing);
-    TORCH_CHECK(context, "W4FA8 streamed plan must be warmed outside graph capture on this caller stream");
-    return run_streamed_async(a, a_scale, b, scale, d, rows, execution.core.num_sms, execution.decode_n, context, capturing, execution, fused, inv_scale);
-}
 } // namespace deep_gemm::w4fa8::streamed

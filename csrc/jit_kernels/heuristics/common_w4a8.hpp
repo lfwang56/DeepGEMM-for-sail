@@ -279,20 +279,18 @@ static int64_t streamed_plan_score(int m, int n, int groups, int num_sms, const 
 static int select_streamed_chunk(int m, int tile_n, int k, int groups, int num_sms, bool minimize_startup,
                                  ChunkSchedule schedule) {
     const int maximum = streamed_chunk_limit(tile_n, k, groups);
+    const int64_t max_waves = minimize_startup ? streamed_waves(m, tile_n, groups, num_sms, maximum) : 0;
     int selected = maximum;
     int64_t best = INT64_MAX;
     for (int candidate = 1; candidate <= maximum; ++candidate) {
-        const int64_t waves = streamed_waves(m, tile_n, groups, num_sms, candidate);
         if (minimize_startup) {
             // Minimize decode startup without increasing complete compute waves.
-            if (waves <= streamed_waves(m, tile_n, groups, num_sms, maximum)) {
-                selected = candidate;
-                break;
-            }
+            if (streamed_waves(m, tile_n, groups, num_sms, candidate) <= max_waves)
+                return candidate;
         } else {
             const int64_t score = schedule == ChunkSchedule::Ramp
                                       ? streamed_plan_score(m, tile_n, groups, num_sms, make_streamed_plan(groups, candidate, schedule))
-                                      : waves + ceil_div(groups, candidate);
+                                      : streamed_waves(m, tile_n, groups, num_sms, candidate) + ceil_div(groups, candidate);
             if (score <= best) {
                 best = score;
                 selected = candidate;
