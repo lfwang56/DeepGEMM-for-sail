@@ -22,6 +22,7 @@ struct W4A8Config {
 enum class ChunkSchedule { Fixed, Ramp };
 enum class GatherPolicy { None, Full, Chunk };
 enum class EmptyExpertPolicy { Dense, Nonempty };
+enum class DecodeFencePolicy { Fenced, FenceFree };
 
 struct NativeKernelConfig {
     W4A8Config tile;
@@ -35,6 +36,8 @@ struct StreamedConfig {
     ChunkSchedule schedule;
     GatherPolicy gather;
     EmptyExpertPolicy empty_experts;
+    DecodeFencePolicy decode_fence;
+    std::vector<std::pair<int, int>> group_chunks;
 };
 using ExecutionPlan = std::variant<NativeKernelConfig, StreamedConfig>;
 
@@ -218,7 +221,7 @@ static int64_t streamed_waves(int m, int n, int groups, int num_sms, int chunk) 
 
 // Short calls need enough N/K tile work to repay additional decode/core
 // launches. Use tile counts rather than a list of projection dimensions.
-static bool short_streamed_eligible(int m, int n, int k, int groups, int num_sms) {
+static bool is_short_streamed_workload(int m, int n, int k, int groups, int num_sms) {
     const int64_t nk_tiles = int64_t(ceil_div(n, 256)) * (k / 128);
     const int tile_n = streamed_tile_n(n, k, groups);
     if (!tile_n || nk_tiles < 128 || k / 128 < 16 || int64_t(m) < int64_t(groups) * 512 ||
@@ -246,43 +249,57 @@ static bool streamed_fused_eligible(int m, int n, int k, int groups) {
 struct StreamedPlan {
     std::vector<std::pair<int, int>> groups;
     int max_groups;
-    bool ramp, short_call;
 };
-static StreamedPlan make_streamed_plan(int m, int n, int k, int groups, int num_sms, bool fused = false) {
-    const int tile_n = streamed_tile_n(n, k, groups);
+static StreamedPlan make_streamed_plan(int groups, int expert_chunk, ChunkSchedule schedule) {
+    std::vector<std::pair<int, int>> plan;
+    const bool ramp = schedule == ChunkSchedule::Ramp;
+    int maximum = 0;
+    for (int start = 0, target = ramp ? std::min(2, expert_chunk) : expert_chunk; start < groups;) {
+        const int count = std::min({target, expert_chunk, groups - start});
+        plan.emplace_back(start, count);
+        maximum = std::max(maximum, count);
+        start += count;
+        if (ramp) target = std::min(expert_chunk, target * 2);
+    }
+    return {std::move(plan), maximum};
+}
+
+static W4A8Config streamed_core_config(int num_sms) {
+    return {num_sms, w4fa8_streamed::kBlockM, 256, 128, 64, 64, 128, 4, 1};
+}
+
+static int64_t streamed_plan_score(int m, int n, int groups, int num_sms, const StreamedPlan& plan) {
+    const int64_t tiles_per_expert = ceil_div(int64_t(m), int64_t(groups) * 256) * ceil_div(int64_t(n), int64_t(256));
+    int64_t score = plan.groups.size();
+    for (const auto& group : plan.groups)
+        score += ceil_div(int64_t(group.second) * tiles_per_expert, int64_t(std::max(1, num_sms)));
+    return score;
+}
+
+static int select_streamed_chunk(int m, int tile_n, int k, int groups, int num_sms, bool minimize_startup,
+                                 ChunkSchedule schedule) {
     const int maximum = streamed_chunk_limit(tile_n, k, groups);
-    const bool short_call = short_streamed_eligible(m, n, k, groups, num_sms);
     int selected = maximum;
     int64_t best = INT64_MAX;
     for (int candidate = 1; candidate <= maximum; ++candidate) {
         const int64_t waves = streamed_waves(m, tile_n, groups, num_sms, candidate);
-        if (short_call) {
+        if (minimize_startup) {
             // Minimize decode startup without increasing complete compute waves.
             if (waves <= streamed_waves(m, tile_n, groups, num_sms, maximum)) {
                 selected = candidate;
                 break;
             }
         } else {
-            const int64_t score = waves + ceil_div(groups, candidate);
+            const int64_t score = schedule == ChunkSchedule::Ramp
+                                      ? streamed_plan_score(m, tile_n, groups, num_sms, make_streamed_plan(groups, candidate, schedule))
+                                      : waves + ceil_div(groups, candidate);
             if (score <= best) {
                 best = score;
                 selected = candidate;
             }
         }
     }
-    const bool ramp = int64_t(tile_n) * k >= 8LL * 1024 * 1024 && int64_t(m) >= int64_t(groups) * 1024 &&
-                      (fused || int64_t(m) < int64_t(groups) * 4096);
-    std::vector<std::pair<int, int>> plan;
-    int chunk = 0;
-    for (int start = 0, target = ramp ? std::min(2, selected) : selected; start < groups;) {
-        const int count = std::min({target, selected, groups - start});
-        plan.emplace_back(start, count);
-        chunk = std::max(chunk, count);
-        start += count;
-        if (ramp)
-            target = std::min(selected, target * 2);
-    }
-    return {std::move(plan), chunk, ramp, short_call};
+    return selected;
 }
 
 static void check_streamed_config(const StreamedConfig& c, int m, int n, int k, int groups, GemmType kind) {
@@ -295,6 +312,7 @@ static void check_streamed_config(const StreamedConfig& c, int m, int n, int k, 
     DG_HOST_ASSERT(prop->maxThreadsPerBlock >= 512 && prop->sharedMemPerBlockOptin >= 256 * 1024);
     DG_HOST_ASSERT(c.decode_n > 0 && c.decode_n <= n && (c.decode_n == n || c.decode_n % 256 == 0));
     DG_HOST_ASSERT(c.expert_chunk >= 1 && c.expert_chunk <= std::min(32, groups / 2));
+    DG_HOST_ASSERT(!c.group_chunks.empty());
     DG_HOST_ASSERT(int64_t(c.expert_chunk) * c.decode_n * k + 8 <= kStreamedWeightBudget);
     DG_HOST_ASSERT(c.empty_experts != EmptyExpertPolicy::Nonempty || c.decode_n == n);
     if (kind == GemmType::MGroupedFused) {
@@ -306,28 +324,21 @@ static void check_streamed_config(const StreamedConfig& c, int m, int n, int k, 
     }
 }
 
-static StreamedPlan make_streamed_plan(const StreamedConfig& c, int groups, bool short_call = false) {
-    std::vector<std::pair<int, int>> plan;
-    const bool ramp = c.schedule == ChunkSchedule::Ramp;
-    int maximum = 0;
-    for (int start = 0, target = ramp ? std::min(2, c.expert_chunk) : c.expert_chunk; start < groups;) {
-        const int count = std::min({target, c.expert_chunk, groups - start});
-        plan.emplace_back(start, count);
-        maximum = std::max(maximum, count);
-        start += count;
-        if (ramp) target = std::min(c.expert_chunk, target * 2);
-    }
-    return {std::move(plan), maximum, ramp, short_call};
-}
-
 static StreamedConfig default_streamed_config(int m, int n, int k, int groups, int num_sms,
                                                bool fused, bool allow_sparse) {
     const int tile_n = streamed_tile_n(n, k, groups);
-    const auto schedule = make_streamed_plan(m, n, k, groups, num_sms, fused);
-    return {{num_sms, w4fa8_streamed::kBlockM, 256, 128, 64, 64, 128, 4, 1}, tile_n, schedule.max_groups,
-            schedule.ramp ? ChunkSchedule::Ramp : ChunkSchedule::Fixed,
-            !fused ? GatherPolicy::None : !schedule.short_call && tile_n == n ? GatherPolicy::Chunk : GatherPolicy::Full,
-            allow_sparse && tile_n == n ? EmptyExpertPolicy::Nonempty : EmptyExpertPolicy::Dense};
+    const bool short_workload = is_short_streamed_workload(m, n, k, groups, num_sms);
+    const bool ramp = int64_t(tile_n) * k >= 8LL * 1024 * 1024 && int64_t(m) >= int64_t(groups) * 1024 &&
+                      (fused || int64_t(m) < int64_t(groups) * 4096);
+    const auto schedule = ramp ? ChunkSchedule::Ramp : ChunkSchedule::Fixed;
+    const int chunk = select_streamed_chunk(m, tile_n, k, groups, num_sms, short_workload, schedule);
+    auto plan = make_streamed_plan(groups, chunk, schedule);
+    // Preserve the existing defaults; runtime consumes each policy independently.
+    const auto gather = !fused ? GatherPolicy::None : !short_workload && tile_n == n ? GatherPolicy::Chunk : GatherPolicy::Full;
+    const auto decode_fence = short_workload && k % 1024 != 0 ? DecodeFencePolicy::FenceFree : DecodeFencePolicy::Fenced;
+    return {streamed_core_config(num_sms), tile_n, plan.max_groups, schedule, gather,
+            allow_sparse && tile_n == n ? EmptyExpertPolicy::Nonempty : EmptyExpertPolicy::Dense, decode_fence,
+            std::move(plan.groups)};
 }
 
 static void check_native_kernel(const NativeKernelConfig& spec, int n, int k, int groups, GemmType kind) {
@@ -386,7 +397,7 @@ static W4A8Config get_best_configs(int expected_m, int n, int k, int groups, Gem
         const bool fused = kind == GemmType::MGroupedFused;
         if (streamed_tile_n(n, k, groups) && int64_t(m) >= int64_t(groups) * streamed_min_rows(n, k) &&
             (!fused || streamed_fused_eligible(m, n, k, groups)))
-            return default_streamed_config(m, n, k, groups, base.num_sms, fused, true).core;
+            return streamed_core_config(base.num_sms);
         if (wide_tile_eligible(groups, m, n, k, kind))
             return default_wide_config(em, k, kind);
     }

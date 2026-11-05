@@ -673,16 +673,19 @@ def _capture_prepared(call, output, rows=None, inverse=.3):
 
 def test_execution_paths():
     # FullK, rolling and streamed kernels prepare only the requested scale variant.
-    for mode in ('full', 'rolling', 'streamed'):
-        streamed = mode == 'streamed'
+    for mode in ('full', 'rolling', 'streamed', 'streamed_short'):
+        streamed = mode.startswith('streamed')
+        short = mode == 'streamed_short'
         for fused in (False, True):
             groups, n, k = 8, 1344 if streamed else 512, 1024 if streamed else 768
+            if short:
+                n, k = 2048, 2176
             config = ((deep_gemm.get_num_sms(), 256, 256, 128, 64, 64, 128, 4, 1) if streamed else
                       (deep_gemm.get_num_sms(), 64, 256, 128, 64, 64, 128, 2, 1) if mode == 'full' else
                       (deep_gemm.get_num_sms(), 160, 256, 128, 160, 32, 128, 3, 1))
             if fused:
                 lhs, rhs, output, _, reference, packed, raw, routes, _ = _streamed_fused_problem(
-                    groups, 193 if streamed else 417, 4, n, k)
+                    groups, 1024 if short else 193 if streamed else 417, 4, n, k)
                 selected, rows, experts, tokens, aligned, _, _ = deep_gemm.moe_align_block_size(
                     lhs[0], rhs[0], routes, config=config)
                 assert selected == config and tokens.size(1) == config[1]
@@ -691,6 +694,8 @@ def test_execution_paths():
                         lhs, rhs[:2], output, rows, experts, tokens, aligned, config, inv_scale=inverse)
             else:
                 counts = [0, 1, 17, 65, 256, 257, 128, 0] if streamed else [0, 1, 31, 32, 65, 160, 161, 257]
+                if short:
+                    counts[-1] = groups * 512 - sum(counts)
                 lhs, rhs, output, _, reference, packed, raw, rows, indices = _w4a8_nopad_problem(
                     counts, n, k, True)
                 def call(inverse):

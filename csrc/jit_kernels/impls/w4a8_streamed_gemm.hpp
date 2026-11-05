@@ -215,7 +215,7 @@ struct StreamedAsyncContext {
     std::vector<hggcEvent_t> decoded, consumed;
     std::mutex submit_mutex;
     // Shape readiness is CPU metadata only; no decoded weights are retained.
-    using ShapeKey = std::tuple<int, int, int, int, int, int, int, bool, bool, bool, bool, int>;
+    using ShapeKey = std::tuple<int, int, int, int, int, int, int, bool, bool, bool, bool, int, DecodeFencePolicy>;
     std::map<ShapeKey, StreamedPreparedPlan> prepared_plans;
 
     explicit StreamedAsyncContext(int device_) : device(device_) {}
@@ -297,20 +297,19 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
     const bool is_fused = fused.tokens.defined();
     check_streamed_config(execution, m, n, k, groups, is_fused ? GemmType::MGroupedFused : GemmType::MGroupedNoPad);
     const bool allow_sparse = execution.empty_experts == EmptyExpertPolicy::Nonempty;
-    const auto schedule = make_streamed_plan(execution, groups, short_streamed_eligible(m, n, k, groups, num_sms));
     struct Work { int group_start, groups, n_begin, n_count; };
     std::vector<Work> plan;
     for (int nb = 0; nb < n; nb += tile_n)
-        for (const auto& group : schedule.groups)
+        for (const auto& group : execution.group_chunks)
             plan.push_back({group.first, group.second, nb, std::min(tile_n, n - nb)});
-    const int chunk = schedule.max_groups, parts = int(plan.size());
-    const bool ramp = schedule.ramp, short_call = schedule.short_call;
+    const int chunk = execution.expert_chunk, parts = int(plan.size());
+    const bool ramp = execution.schedule == ChunkSchedule::Ramp;
     const bool chunk_gather = execution.gather == GatherPolicy::Chunk;
     const auto caller = current_stream();
     // The entire event submission is atomic with respect to other host callers
     // using this caller stream; previously queued waits retain their event record.
     std::lock_guard<std::mutex> lock(context->submit_mutex);
-    const StreamedAsyncContext::ShapeKey key{m, n, k, groups, num_sms, chunk, tile_n, ramp, allow_sparse, is_fused, inv_scale != 1.f, int(execution.gather)};
+    const StreamedAsyncContext::ShapeKey key{m, n, k, groups, num_sms, chunk, tile_n, ramp, allow_sparse, is_fused, inv_scale != 1.f, int(execution.gather), execution.decode_fence};
     // A captured call may only reuse resources and kernels warmed on this caller.
     auto prepared = context->prepared_plans.find(key);
     if (capturing && (prepared == context->prepared_plans.end() || !prepared->second.warmed || context->decoded.size() < size_t(parts) ||
@@ -327,9 +326,7 @@ static bool run_streamed_async(const torch::Tensor& a, const torch::Tensor& a_sc
             const int local_groups = entry.first.first, local_n = entry.first.second;
             auto& pair = entry.second;
             pair.decode = {n, k, local_n, local_groups, {dim3(1), dim3(256), 0}, {}};
-            // Row32 lanes cover1024 K values per warp. Only the short-call tail path
-            // uses the measured fence-free decoder; other paths retain V4.
-            pair.decode.skip_fence = short_call && (k % 1024 != 0);
+            pair.decode.skip_fence = execution.decode_fence == DecodeFencePolicy::FenceFree;
             // Active experts are read on the device on every call, including
             // Graph replay; empty experts never require decoded weight traffic.
             pair.decode.empty_flat = allow_sparse && local_n == n;
