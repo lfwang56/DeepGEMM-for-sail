@@ -23,6 +23,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SUITES = {'ZW-810E': 'checkin_810e.list', 'ZW-M890P': 'checkin_890p.list'}
 SCRIPT_SUITES = {
     'ZW-M890P-MegaMoE': ['-m pytest -q -s --disable-warnings -x -k smoke tests/test_mega_moe.py'],
+    'ZW-M890P-GemmRS': [
+        f'-m torch.distributed.run --standalone --nproc-per-node={tp} tests/test_gemm_comm.py --smoke'
+        for tp in (2, 4, 8)
+    ],
 }
 _worker_context = threading.local()
 
@@ -279,7 +283,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.suite in SCRIPT_SUITES:
         if args.phase == 'compile':
-            parser.error('MegaMoE runs compilation and correctness together; use --phase all or run')
+            parser.error('Script suites run compilation and correctness together; use --phase all or run')
         cases = SCRIPT_SUITES[args.suite]
         if args.list:
             print('\n'.join(f'{i}: {sys.executable} {spec}' for i, spec in enumerate(cases, 1)))
