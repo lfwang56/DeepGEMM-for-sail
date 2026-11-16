@@ -31,8 +31,59 @@ SCRIPT_SUITES = {
         'tests/test_mega_gate.py::test_mega_gate_sigmoid_partial_scores '
         'tests/test_mega_gate.py::test_mega_gate_api_contract',
     ],
+    'ZW-M890P-GemmRS': [
+        f'-m torch.distributed.run --standalone --nproc-per-node={tp} tests/test_gemm_comm.py --smoke'
+        for tp in (2, 4, 8)
+    ],
 }
 _worker_context = threading.local()
+
+
+def _process_tree(pid):
+    rows = subprocess.check_output(['ps', '-e', '-o', 'pid=,ppid=,pgid=,stat='], text=True)
+    processes = {int(p): (int(parent), int(group), state) for p, parent, group, state in
+                 (line.split() for line in rows.splitlines())}
+    descendants = {pid}
+    while True:
+        children = {p for p, (parent, _, _) in processes.items() if parent in descendants}
+        if children <= descendants:
+            return {p: processes[p] for p in descendants if p in processes}
+        descendants.update(children)
+
+
+def _stop_process(process):
+    # Elastic ranks have their own sessions; retain their groups before the
+    # launcher exits and they are reparented. Never signal our own process group.
+    descendants = _process_tree(process.pid)
+    groups = {process.pid, *(group for _, group, _ in descendants.values())} - {os.getpgrp()}
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for group in groups:
+            try:
+                os.killpg(group, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                if process.poll() is None:
+                    raise
+        if sig == signal.SIGTERM:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            descendants.update(_process_tree(process.pid))
+            groups.update(group for _, group, _ in descendants.values() if group != os.getpgrp())
+    process.wait()
+    deadline = time.monotonic() + 5
+    while descendants:
+        # The original descendants may have been adopted after launcher exit.
+        rows = subprocess.check_output(['ps', '-e', '-o', 'pid=,stat='], text=True)
+        alive = {int(p) for p, state in (line.split() for line in rows.splitlines()) if not state.startswith('Z')}
+        descendants = {p: info for p, info in descendants.items() if p in alive}
+        if not descendants:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f'worker processes did not exit: {sorted(descendants)}')
+        time.sleep(0.05)
 
 
 @dataclass
@@ -87,15 +138,7 @@ class Worker:
                 except (OSError, subprocess.TimeoutExpired):
                     kill = True
             if kill:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except PermissionError:
-                    # macOS may reject signalling an already-exited group.
-                    if process.poll() is None:
-                        raise
-                process.wait()
+                _stop_process(process)
                 try:
                     process.stdin.close()
                 except OSError:
@@ -186,12 +229,7 @@ def run_case(index, spec, phase, log_dir, timeout, base_env=None):
             try:
                 code = process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                # Kill the complete tree, including hgcc children.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
+                _stop_process(process)
                 error = f'Timeout after {timeout}s'
             else:
                 if code:

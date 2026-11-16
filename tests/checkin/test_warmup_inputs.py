@@ -1,13 +1,45 @@
-"""Device regression checks for compile-only input layouts (requires Torch/PPU)."""
+"""Checkin input-layout and process-lifetime regression checks."""
 import os
 from pathlib import Path
+import shlex
+import signal
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 import utils
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import run_checkin
+
+
+class CheckinProcessTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == 'posix', 'checkin uses POSIX process groups')
+    def test_timeout_reaps_rank_in_a_separate_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pid_file = Path(directory) / 'rank.pid'
+            rank = ('import os,signal,time;from pathlib import Path;'
+                    'signal.signal(signal.SIGTERM,signal.SIG_IGN);'
+                    f'Path({str(pid_file)!r}).write_text(str(os.getpid()));time.sleep(60)')
+            launcher = ('import subprocess,sys,time;'
+                        f'subprocess.Popen([sys.executable,"-c",{rank!r}],start_new_session=True);time.sleep(60)')
+            try:
+                result = run_checkin.run_case(1, '-c ' + shlex.quote(launcher), 'script', directory, 1)
+                self.assertIn('Timeout', result.error)
+                self.assertTrue(pid_file.exists())
+                pid = int(pid_file.read_text())
+                state = subprocess.run(['ps', '-p', str(pid), '-o', 'stat='],
+                                       text=True, capture_output=True).stdout.strip()
+                self.assertTrue(not state or state.startswith('Z'), f'orphaned rank {pid}: {state}')
+            finally:
+                if pid_file.exists():
+                    try:
+                        os.killpg(int(pid_file.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 class WarmupInputsTests(unittest.TestCase):
