@@ -31,6 +31,10 @@ SCRIPT_SUITES = {
         'tests/test_mega_gate.py::test_mega_gate_sigmoid_partial_scores '
         'tests/test_mega_gate.py::test_mega_gate_api_contract',
     ],
+    'ZW-M890P-GemmRS': [
+        f'-m torch.distributed.run --standalone --nproc-per-node={tp} tests/test_gemm_comm.py --smoke'
+        for tp in (2, 4, 8)
+    ],
 }
 _worker_context = threading.local()
 

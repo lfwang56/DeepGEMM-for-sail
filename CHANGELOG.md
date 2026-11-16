@@ -66,6 +66,12 @@ DeepGEMM-for-sail maintains its release identifiers independently of the upstrea
   `fast_math` selects fast reciprocal versus regular FP32 division for SiTU
   and post-activation FP8 quantization, independently of native sigmoid/tanh.
 
+- **GEMM + ReduceScatter**: supports any positive integer local row count
+  for BF16 and FP8 blockwise/channelwise inputs. Output shards remain equal
+  in size, and global M must be divisible by TP. Adds collective UT replay,
+  standard kernel logging and a manual TP2/4/8 checkin suite with shared
+  source-rounding and elementwise reduction checks.
+
 - **MegaMoE MMA names**: uses `mma_type="fp4xfp4"`, `"fp8xfp4"`,
   `"bf16xfp4"` and `"fp8xfp8"` consistently across workspace allocation,
   pre-dispatch and precision-specific compute entries. W4A4 also accepts
