@@ -211,6 +211,10 @@ public:
                     error_code.message().c_str(), tmp_dir_path.c_str());
             // The runtime cache owns this loaded module. Retain its artifact
             // for diagnostics instead of deleting the only visible copy.
+            // Also bind the canonical signature in this process: a delayed
+            // shared-filesystem lookup must not trigger compilation in a later
+            // graph capture after prepare() has already warmed this kernel.
+            kernel_runtime_cache->alias(dir_path, own_module);
             return own_module;
         }
         fsync_path(dir_path.parent_path());

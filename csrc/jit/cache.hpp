@@ -24,6 +24,10 @@ public:
             return cache[dir_path] = std::make_shared<KernelRuntime>(dir_path);
         return nullptr;
     }
+
+    void alias(const std::filesystem::path& dir_path, const std::shared_ptr<KernelRuntime>& runtime) {
+        cache[dir_path] = runtime;
+    }
 };
 
 static auto kernel_runtime_cache = std::make_shared<KernelRuntimeCache>();
