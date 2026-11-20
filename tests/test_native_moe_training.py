@@ -10,7 +10,7 @@ import unittest
 import torch
 import torch.distributed as dist
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, native_moe
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, native_moe
 from test_moe_training import reference, relative_rms
 
 
@@ -166,7 +166,7 @@ class NativeTests(unittest.TestCase):
                               "routing": mode, "relative_rms": errors}), flush=True)
 
 
-def ep_checks(compute, graph_mode=False, peer=False, stress=False):
+def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -188,7 +188,7 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False):
     w1 = global_w1[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     w2 = global_w2[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     dy = dys[rank].to(device)
-    plan_class = PeerMoEPlan if peer else NativeMoEPlan
+    plan_class = PersistentMoEPlan if persistent else PeerMoEPlan if peer else NativeMoEPlan
     plan = plan_class(256, 128, 2, 2, max(value.shape[0] for value in xs),
                         chunk_tokens=3, group=dist.group.WORLD, compute=compute, device=device)
     valid = torch.tensor(x.shape[0], device=device, dtype=torch.int32)
@@ -261,12 +261,13 @@ if __name__ == "__main__":
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--peer", action="store_true")
     parser.add_argument("--stress", action="store_true")
+    parser.add_argument("--persistent", action="store_true")
     options, remaining = parser.parse_known_args()
     torch.set_num_threads(2)
     recipe = "fp8" if options.fp8 else "bf16"
     if options.ep:
-        ep_checks(recipe, options.graph, options.peer, options.stress)
+        ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent)
     else:
         NativeTests.compute = recipe
-        NativeTests.plan_class = PeerMoEPlan if options.peer else NativeMoEPlan
+        NativeTests.plan_class = PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer else NativeMoEPlan
         unittest.main(argv=[__file__] + remaining, verbosity=2)

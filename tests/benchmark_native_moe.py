@@ -16,7 +16,7 @@ import time
 import torch
 import torch.distributed as dist
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan
 
 
 def sample_outputs(values):
@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--local-experts", type=int, default=4)
     parser.add_argument("--topk", type=int, default=2)
     parser.add_argument("--chunk-tokens", type=int, default=256)
-    parser.add_argument("--backend", choices=("collective", "peer", "both"), default="both")
+    parser.add_argument("--backend", choices=("collective", "peer", "persistent", "both", "all"), default="both")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--routing", choices=("balanced", "skewed", "masked"), default="balanced")
     parser.add_argument("--warmup", type=int, default=5)
@@ -74,7 +74,8 @@ def main():
     accumulators = (torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
     stream = torch.cuda.Stream(device)
     stream.wait_stream(torch.cuda.current_stream())
-    backends = ("collective", "peer") if args.backend == "both" else (args.backend,)
+    backends = (("collective", "peer", "persistent") if args.backend == "all" else
+                ("collective", "peer") if args.backend == "both" else (args.backend,))
     reference_samples = None
     with torch.cuda.stream(stream):
         for backend in backends:
@@ -83,7 +84,7 @@ def main():
             torch.cuda.synchronize(device)
             initial_memory = torch.cuda.memory_allocated(device)
             torch.cuda.reset_peak_memory_stats(device)
-            plan_class = PeerMoEPlan if backend == "peer" else NativeMoEPlan
+            plan_class = PersistentMoEPlan if backend == "persistent" else PeerMoEPlan if backend == "peer" else NativeMoEPlan
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
             options = options if backend == "peer" and args.gemm_config else {}
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
@@ -146,6 +147,7 @@ def main():
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
+                    "persistent_ctas": getattr(plan, "num_ctas", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,
                     "median_max_rank_event_ms": statistics.median(elapsed_event),
                     "median_max_rank_wall_ms": statistics.median(elapsed_wall),

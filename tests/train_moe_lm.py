@@ -17,7 +17,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, native_moe
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, native_moe
 
 
 DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
@@ -76,7 +76,7 @@ class Experts(nn.Module):
         probabilities = logits.softmax(-1)
         selected, ids = probabilities.topk(self.config.topk, dim=-1)
         scores = (selected / selected.sum(-1, keepdim=True)).contiguous()
-        if self.backend in ("native", "peer"):
+        if self.backend != "torch":
             routed = native_moe(flat, ids, scores, self.w1, self.w2, plan=self.plan)
         else:
             # One dense FC1 over all experts; then an independent batched FC2.
@@ -185,7 +185,7 @@ def evaluate(model, data, config, device, batches):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("native", "peer", "torch"), default="native")
+    parser.add_argument("--backend", choices=("native", "peer", "persistent", "torch"), default="native")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--steps", type=int, default=2000)
@@ -206,7 +206,7 @@ def main():
     options = parser.parse_args()
     if options.backend == "torch" and options.compute != "bf16":
         raise ValueError("the independent Torch reference uses BF16")
-    if options.backend == "peer" and options.compute != "bf16":
+    if options.backend in ("peer", "persistent") and options.compute != "bf16":
         raise ValueError("the peer-fused backend currently uses BF16")
     end_step = options.steps if options.stop_after is None else options.stop_after
     if not 0 < end_step <= options.steps:
@@ -219,7 +219,7 @@ def main():
     torch.cuda.set_device(device)
     torch.set_num_threads(4)
     torch.manual_seed(options.seed)
-    plan_class = PeerMoEPlan if options.backend == "peer" else NativeMoEPlan
+    plan_class = PersistentMoEPlan if options.backend == "persistent" else PeerMoEPlan if options.backend == "peer" else NativeMoEPlan
     plan = plan_class(config.hidden, config.intermediate, config.experts, config.topk,
                         config.batch * config.sequence, chunk_tokens=config.chunk_tokens,
                         compute=options.compute, device=device, check_errors=False) if options.backend != "torch" else None

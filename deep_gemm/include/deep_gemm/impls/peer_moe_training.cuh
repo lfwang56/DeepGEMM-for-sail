@@ -14,8 +14,9 @@ __device__ __forceinline__ T* peer_pointer(const Params& p, int index) {
 }
 
 template <PeerOperation Op>
-__device__ __forceinline__ void run_peer(const Params& p) {
-    const int64_t index = int64_t(blockIdx.x) * blockDim.x + threadIdx.x;
+__device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
+    if (block_index < 0) block_index = blockIdx.x;
+    const int64_t index = block_index * blockDim.x + threadIdx.x;
     if constexpr (Op == PeerOperation::CountRoutes) {
         // ID pointer table, counts, route expert, row, error flag.
         // dims: R, E_local, rank, P, routes per source rank.

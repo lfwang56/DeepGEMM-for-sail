@@ -31,11 +31,12 @@ __device__ __forceinline__ float warp_max(float value) {
 }
 
 template <Operation Op>
-__device__ __forceinline__ void run(const Params& p) {
+__device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
+    if (block_index < 0) block_index = blockIdx.x;
     const int thread = threadIdx.x;
     const int lane = thread & 31;
     const int warp = thread >> 5;
-    const int64_t index = int64_t(blockIdx.x) * blockDim.x + thread;
+    const int64_t index = block_index * blockDim.x + thread;
 
     if constexpr (Op == Operation::CountRoutes) {
         // ids, counts, route expert, within-expert row, status.
@@ -86,7 +87,7 @@ __device__ __forceinline__ void run(const Params& p) {
     } else if constexpr (Op == Operation::PackInput) {
         // gathered x, route experts, local rows, expert offsets, packed x,
         // permutation, status. dims: routes, H, top-k, physical capacity.
-        const int64_t route = blockIdx.x;
+        const int64_t route = block_index;
         if (route >= p.dim[0]) return;
         const int expert = pointer<int32_t>(p, 1)[route];
         if (expert < 0) return;
@@ -147,7 +148,7 @@ __device__ __forceinline__ void run(const Params& p) {
         }
     } else if constexpr (Op == Operation::QuantizeRows) {
         // BF16 matrix, E4M3 matrix, FP32 scales. dims: rows, K (128 aligned).
-        const int64_t group = int64_t(blockIdx.x) * (blockDim.x / 32) + warp;
+        const int64_t group = block_index * (blockDim.x / 32) + warp;
         const int64_t groups = p.dim[0] * (p.dim[1] / 128);
         if (group >= groups) return;  // Uniform within each participating warp.
         const int64_t base = group * 128;
@@ -169,8 +170,8 @@ __device__ __forceinline__ void run(const Params& p) {
         // BF16 weights[G,N,K], E4M3 weights, FP32 block scales[G,N/128,K/128].
         // dims: G,N,K; N/K are 128 aligned.
         const int n_blocks = p.dim[1] / 128, k_blocks = p.dim[2] / 128;
-        const int group = blockIdx.x / (n_blocks * k_blocks);
-        const int tile = blockIdx.x % (n_blocks * k_blocks);
+        const int group = block_index / (n_blocks * k_blocks);
+        const int tile = block_index % (n_blocks * k_blocks);
         const int row_base = (tile / k_blocks) * 128, col_base = (tile % k_blocks) * 128;
         float maximum = 0.f;
         for (int element = thread; element < 128 * 128; element += blockDim.x) {
@@ -187,7 +188,7 @@ __device__ __forceinline__ void run(const Params& p) {
         }
         __syncthreads();
         const float scale = maxima[0];
-        if (thread == 0) pointer<float>(p, 2)[blockIdx.x] = scale;
+        if (thread == 0) pointer<float>(p, 2)[block_index] = scale;
         for (int pair = thread; pair < 128 * 64; pair += blockDim.x) {
             const int64_t offset = (int64_t(group) * p.dim[1] + row_base + pair / 64) * p.dim[2] + col_base + (pair % 64) * 2;
             pointer<uint16_t>(p, 1)[offset / 2] = epilogue::quant::fp8_pair(
@@ -208,7 +209,7 @@ __device__ __forceinline__ void run(const Params& p) {
     } else if constexpr (Op == Operation::ScoreGradient) {
         // local unweighted expert outputs, full-input dy, full-input dscores.
         // dims: chunk tokens,H,top-k,input tokens,chunk start.
-        const int64_t route = blockIdx.x;
+        const int64_t route = block_index;
         const int64_t token = route / p.dim[2] + p.dim[4];
         if (route >= p.dim[0] * p.dim[2] || token >= p.dim[3]) return;
         float value = 0;

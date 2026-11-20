@@ -9,7 +9,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, bf16_moe, native_moe
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, bf16_moe, native_moe
 from test_moe_training import reference, relative_rms
 
 
@@ -39,12 +39,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("ddp", "fsdp2"), required=True)
     parser.add_argument("--ep-size", type=int, default=1)
-    parser.add_argument("--transport", choices=("collective", "symmetric", "peer"), default="collective")
+    parser.add_argument("--transport", choices=("collective", "symmetric", "peer", "persistent"), default="collective")
     parser.add_argument("--native-ring", action="store_true")
     parser.add_argument("--fp8", action="store_true")
     parser.add_argument("--grouped", action="store_true")
     args = parser.parse_args()
-    if args.transport == "peer" and not args.native_ring:
+    if args.transport in ("peer", "persistent") and not args.native_ring:
         raise ValueError("peer transport requires --native-ring")
     if args.native_ring and args.transport == "symmetric":
         raise ValueError("use peer for the native fused symmetric-memory path")
@@ -80,7 +80,7 @@ if __name__ == "__main__":
     expected_grads = torch.autograd.grad(expected, (rw1, rw2), torch.cat(dys).double() / dp_size)
     expected_grads = tuple(t[2 * ep_rank:2 * (ep_rank + 1)] for t in expected_grads)
     parameter_dtype = torch.float32 if args.mode == "fsdp2" or args.native_ring else torch.bfloat16
-    plan_class = PeerMoEPlan if args.transport == "peer" else NativeMoEPlan
+    plan_class = PersistentMoEPlan if args.transport == "persistent" else PeerMoEPlan if args.transport == "peer" else NativeMoEPlan
     plan = plan_class(256, 128, 2, 2, 5, chunk_tokens=3, group=ep_group, device=device,
                       compute="fp8" if args.fp8 else "bf16") if args.native_ring else None
     local_slice = slice(2 * ep_rank, 2 * (ep_rank + 1))

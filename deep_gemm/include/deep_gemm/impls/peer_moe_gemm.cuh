@@ -2,6 +2,8 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunknown-attributes"
 
+#include <type_traits>
+
 #include <deep_gemm/common/exception.cuh>
 #include <deep_gemm/common/types.cuh>
 #include <deep_gemm/common/peer_moe_training.cuh>
@@ -16,6 +18,7 @@
 #include <cute/algorithm/ppu_copy.hpp>
 
 #include <deep_gemm/scheduler/fused_scheduler.cuh>
+#include <deep_gemm/scheduler/training_fused_scheduler.cuh>
 #include <deep_gemm/impls/fused_gemm_util.cuh>
 #include <deep_gemm/common/utils_cutlass3.cuh>
 
@@ -29,7 +32,7 @@ namespace training {
 // into its shared-memory pipeline. Resolve each row through a peer pointer
 // table so that the GEMM itself performs the dispatch reads over ICN/fabric.
 template <typename SrcT, typename ACopyInst, typename TilerA,
-          uint32_t BLOCK_M, uint32_t BLOCK_K, uint32_t STRIDE_AM, class TAsA>
+          uint32_t BLOCK_M, uint32_t BLOCK_K, uint32_t STRIDE_AM, bool Coherent, class TAsA>
 __device__ __forceinline__ void copy_peer_A_to_tsm(
         TAsA&& destination, const uint64_t* peers, uint32_t rows_per_rank,
         const int* source_rows, uint32_t stage_offset, uint32_t shape_m, uint32_t thread_idx,
@@ -44,7 +47,8 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
     if (tid_m < BLOCK_M) {
         CUTLASS_PRAGMA_UNROLL
         for (uint32_t mi = 0; mi < M_ITER; ++mi) {
-            const uint32_t row = __ldg(source_rows + mi * TILE_M + tid_m);
+            const auto* row_ptr = source_rows + mi * TILE_M + tid_m;
+            const uint32_t row = Coherent ? tix::ld_acq_sys(row_ptr) : __ldg(row_ptr);
             const bool valid = row < shape_m;
             const uint32_t rank = valid ? row / rows_per_rank : 0;
             const uint32_t local_row = valid ? row % rows_per_rank : 0;
@@ -68,7 +72,7 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
     }
 }
 
-template <typename DstT, uint32_t SHAPE_N, class Accum, class Coordinates>
+template <typename DstT, uint32_t SHAPE_N, bool Coherent, class Accum, class Coordinates>
 __device__ __forceinline__ void scatter_peer_output(
         const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
         uint32_t row_base, uint32_t valid_rows, uint32_t column_base) {
@@ -80,7 +84,8 @@ __device__ __forceinline__ void scatter_peer_output(
         for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
             const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
             if (row >= valid_rows) continue;
-            const int route = __ldg(params.permutation + row_base + row);
+            const auto* route_ptr = params.permutation + row_base + row;
+            const int route = Coherent ? tix::ld_acq_sys(route_ptr) : __ldg(route_ptr);
             if (route < 0) continue;
             const uint32_t rank = uint32_t(route) / params.destination_rows_per_rank;
             if (rank >= params.num_ranks) continue;
@@ -107,7 +112,7 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t SHAPE_N, uint32_t SHAPE_K, uint32_t kNumGroups,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
-          uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite>
+          uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite, bool Coherent = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -131,7 +136,9 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       cute::MMA_Atom<MmaInst>,
       cute::Layout<Shape< Int<BLOCK_M / WARP_M>, Int<BLOCK_N / WARP_N>, _1>>>;
 
-    using TileScheduler = FusedGemmScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>;
+    using TileScheduler = std::conditional_t<Coherent,
+        training::CoherentFusedScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
+        FusedGemmScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>>;
 
     // Shared memory
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);
@@ -238,7 +245,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       for (int k_pipe = 0; k_pipe < kNumStages; ++k_pipe) {
         if (k_tile_count > 0) {
           if constexpr (PeerRead) {
-              training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
+              training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM, Coherent>(
                   tAsA(_,_,_,k_pipe), params.source_peers, params.source_rows_per_rank,
                   blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx,
                   const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
@@ -291,7 +298,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
           __syncthreads();
           if (k_tile_count > 0) {
             if constexpr (PeerRead) {
-                training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
+                training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM, Coherent>(
                     tAsA(_,_,_,smem_pipe_write), params.source_peers, params.source_rows_per_rank,
                     blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx,
                     const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
@@ -355,7 +362,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
 
 #if __HGGC_ARCH__ == 150
       if constexpr (PeerWrite) {
-          training::scatter_peer_output<DstT, SHAPE_N>(accum, tCcC, params,
+          training::scatter_peer_output<DstT, SHAPE_N, Coherent>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
       } else {
           epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM>(accum, tCcC, args.c_ptr,
