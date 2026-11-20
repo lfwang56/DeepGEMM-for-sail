@@ -23,10 +23,13 @@ class PeerMoEPlan(NativeMoEPlan):
 
     transport = "peer"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, gemm_configs=None, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         super().__init__(*args, **kwargs)
+        self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
+        if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
+            raise ValueError("unknown peer GEMM configuration role")
         if self.size > 64:
             raise ValueError("peer training supports at most 64 ranks per domain")
         c, h, k = self.chunk_tokens, self.h, self.k
@@ -89,12 +92,14 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.size, self.rank, 180 * 2_000_000_000, tag], compile_only)
 
     def _peer_gemm(self, a, weight, output, source_rows, *, read=False, write=False,
-                   source="local_x", destination="local_values", compile_only=False):
+                   source="local_x", destination="local_values", compile_only=False, pack_input=False):
         source_stride = self.chunk_tokens if source == "local_x" else self.chunk_tokens * self.k
+        role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
         dg._C._moe_training_peer_gemm(
             a, weight, output, self.pointer_tables[source], self.pointer_tables[destination],
             source_rows, self.permutation, self.work_info, self.num_blocks,
             source_stride, self.chunk_tokens * self.k, read, write, compile_only,
+            pack_input, self.gemm_configs.get(role, ()),
         )
 
     @torch.no_grad()
@@ -102,7 +107,12 @@ class PeerMoEPlan(NativeMoEPlan):
         """Compile all peer GEMM variants before entering device peer barriers."""
         with self._execution():
             if not self._prepared:
-                self._prepare(w1, w2)
+                error = None
+                try:
+                    self._prepare(w1, w2)
+                except Exception as exception:
+                    error = exception
+                self._finish_preparation(error)
 
     def _prepare(self, w1, w2):
         if torch.cuda.is_current_stream_capturing():
@@ -130,9 +140,6 @@ class PeerMoEPlan(NativeMoEPlan):
         dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden,
                                        torch.zeros_like(w2, dtype=torch.float32), self.lengths, self.rows)
         torch.cuda.synchronize(self.device)
-        if self.group is not None:
-            dist.barrier(group=self.group)
-        self._prepared = True
 
     def _route_chunk(self, x, ids, valid_tokens, start):
         _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
@@ -149,8 +156,8 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.routes, self.rows, self.k])
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
 
-    def _chunk_forward(self, w1, w2):
-        self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows, read=True)
+    def _chunk_forward(self, w1, w2, pack_input=False):
+        self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows, read=True, pack_input=pack_input)
         _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows, write=True)
         self._barrier(1)
@@ -168,6 +175,7 @@ class PeerMoEPlan(NativeMoEPlan):
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype:
             raise ValueError("dy must match x")
         with self._execution():
+            self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
             self._prepare_weights(w1, w2, backward=True)
@@ -176,13 +184,11 @@ class PeerMoEPlan(NativeMoEPlan):
                         if accumulators is None else accumulators)
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 self._route_chunk(x, ids, valid_tokens, start)
-                self._chunk_forward(w1, w2)
+                self._chunk_forward(w1, w2, pack_input=True)
                 dims = [self.chunk_tokens, self.h, self.k, x.shape[0], start]
                 _launch(12, [self.local_values, dy, dscores], dims)
                 _launch(11, [dy, scores, self.local_dy], dims)
                 self._barrier(start * 4 + 2)
-                _peer(4, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status],
-                      [self.rows, self.h, self.chunk_tokens, self.k, self.size])
                 _peer(4, [self.pointer_tables["local_dy"], self.permutation, self.packed_dy, self.status],
                       [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size])
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)

@@ -66,6 +66,7 @@ class NativeMoEPlan:
                 raise ValueError("EP ranks must create matching NativeMoEPlan configurations")
         self._lock = threading.RLock()
         self._stream = None
+        self._prepared = False
         self.buffers = {}
 
         def allocate(name, shape, dtype=torch.bfloat16):
@@ -183,6 +184,55 @@ class NativeMoEPlan:
                 self._quantize_weight("w1_t", self.w1_t)
                 self._quantize_weight("w2_t", self.w2_t)
 
+    @torch.no_grad()
+    def prepare(self, w1, w2):
+        """Warm local GEMMs before any EP payload collective is enqueued.
+
+        Construct and warm on the intended execution stream before capture.
+        No route data or collective payload is needed during cold compilation.
+        """
+        with self._execution():
+            if self._prepared:
+                return
+            if torch.cuda.is_current_stream_capturing():
+                raise RuntimeError("warm up NativeMoEPlan before graph capture")
+            error = None
+            try:
+                self._prepare_local(w1, w2)
+            except Exception as exception:
+                error = exception
+            self._finish_preparation(error)
+
+    def _finish_preparation(self, error):
+        # Agree on host-side compilation success before publishing peer data.
+        # Otherwise one failed compiler can strand other ranks in a GPU wait.
+        if self.group is not None:
+            errors = [None] * self.size
+            dist.all_gather_object(errors, None if error is None else str(error)[:2048], group=self.group)
+            failures = [(rank, message) for rank, message in enumerate(errors) if message is not None]
+            if failures:
+                raise RuntimeError(f"native MoE preparation failed on EP ranks: {failures}") from error
+        elif error is not None:
+            raise error
+        self._prepared = True
+
+    def _prepare_local(self, w1, w2):
+        w1, w2 = w1.to(torch.bfloat16), w2.to(torch.bfloat16)
+        self._prepare_weights(w1, w2, backward=True)
+        for buffer in (self.packed_x, self.gate_up, self.hidden, self.packed_dy):
+            buffer.zero_()
+        self.group_ids.zero_()
+        self.lengths.zero_()
+        self._gemm(self.packed_x, w1, self.gate_up, "w1")
+        self._gemm(self.hidden, w2, self.packed_output, "w2")
+        self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
+        self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
+        dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x,
+                                       torch.zeros_like(w1, dtype=torch.float32), self.lengths, self.rows)
+        dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden,
+                                       torch.zeros_like(w2, dtype=torch.float32), self.lengths, self.rows)
+        torch.cuda.synchronize(self.device)
+
     def _gemm(self, a, weight, output, name):
         if self.compute == "bf16":
             dg.m_grouped_bf16_gemm_nt_contiguous(a, weight, output, self.group_ids)
@@ -222,6 +272,7 @@ class NativeMoEPlan:
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         with self._execution():
+            self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
             self._prepare_weights(w1, w2)
@@ -243,6 +294,7 @@ class NativeMoEPlan:
         if dy.shape != x.shape or dy.dtype != x.dtype or dy.device != x.device:
             raise ValueError("dy must match x")
         with self._execution():
+            self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
             self._prepare_weights(w1, w2, backward=True)

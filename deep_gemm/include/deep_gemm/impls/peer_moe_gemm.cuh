@@ -32,7 +32,8 @@ template <typename SrcT, typename ACopyInst, typename TilerA,
           uint32_t BLOCK_M, uint32_t BLOCK_K, uint32_t STRIDE_AM, class TAsA>
 __device__ __forceinline__ void copy_peer_A_to_tsm(
         TAsA&& destination, const uint64_t* peers, uint32_t rows_per_rank,
-        const int* source_rows, uint32_t stage_offset, uint32_t shape_m, uint32_t thread_idx) {
+        const int* source_rows, uint32_t stage_offset, uint32_t shape_m, uint32_t thread_idx,
+        void* packed_input, uint32_t packed_row_base, bool pack_input) {
     constexpr uint32_t TILE_M = cute::get<0>(TilerA{});
     constexpr uint32_t TILE_K = cute::get<1>(TilerA{});
     constexpr uint32_t VECTOR = 128 / cutlass::sizeof_bits<SrcT>::value;
@@ -54,6 +55,14 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
                     + uint64_t(local_row) * STRIDE_AM + ki * TILE_K + tid_k * VECTOR + stage_offset);
                 auto* dst = reinterpret_cast<cutlass::uint128_t*>(cute::raw_pointer_cast(destination(_, mi, ki).data()));
                 ACopyInst::copy(*src, *dst, valid);
+                if (pack_input) {
+                    cutlass::uint128_t value{};
+                    if (valid) value = *src;
+                    auto* packed = reinterpret_cast<SrcT*>(packed_input)
+                        + uint64_t(packed_row_base + mi * TILE_M + tid_m) * STRIDE_AM
+                        + ki * TILE_K + tid_k * VECTOR + stage_offset;
+                    *reinterpret_cast<cutlass::uint128_t*>(packed) = value;
+                }
             }
         }
     }
@@ -231,7 +240,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
           if constexpr (PeerRead) {
               training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                   tAsA(_,_,_,k_pipe), params.source_peers, params.source_rows_per_rank,
-                  blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx);
+                  blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx,
+                  const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
           } else {
               copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                   tAsA(_,_,_,k_pipe), args.a_ptr,
@@ -283,7 +293,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
             if constexpr (PeerRead) {
                 training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                     tAsA(_,_,_,smem_pipe_write), params.source_peers, params.source_rows_per_rank,
-                    blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx);
+                    blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx,
+                    const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
             } else {
                 copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                     tAsA(_,_,_,smem_pipe_write), args.a_ptr,

@@ -196,12 +196,24 @@ public:
         std::error_code error_code;
         std::filesystem::rename(tmp_dir_path, dir_path, error_code);
         if (error_code) {
-            // Another rank beat us, then clean up our dir and use the existing one
-            // NOTES: avoid `std::filesystem::remove_all` here — it can segfault on
-            // distributed filesystems, when concurrent processes operate
-            // on the same parent directory, causing stale directory entries
-            safe_remove_all(tmp_dir_path);
+            // A failed rename does not prove that another rank's module is
+            // visible here. Keep our valid artifact until a module is loaded.
+            if (const auto winner = kernel_runtime_cache->get(dir_path); winner != nullptr) {
+                safe_remove_all(tmp_dir_path);
+                return winner;
+            }
+            const auto own_module = kernel_runtime_cache->get(tmp_dir_path);
+            if (own_module == nullptr)
+                DG_HOST_UNREACHABLE(fmt::format("JIT cache publication failed ({}): {} -> {}; "
+                                                "the compiled temporary module is also unavailable",
+                                                error_code.message(), tmp_dir_path.string(), dir_path.string()));
+            fprintf(stderr, "DeepGEMM JIT cache publication failed (%s); using compiled module at %s\n",
+                    error_code.message().c_str(), tmp_dir_path.c_str());
+            // The runtime cache owns this loaded module. Retain its artifact
+            // for diagnostics instead of deleting the only visible copy.
+            return own_module;
         }
+        fsync_path(dir_path.parent_path());
 
         // Put into the runtime cache
         const auto runtime = kernel_runtime_cache->get(dir_path);

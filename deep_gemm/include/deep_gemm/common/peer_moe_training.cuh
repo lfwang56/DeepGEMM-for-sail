@@ -22,6 +22,7 @@ struct PeerGemmParams {
     uint32_t source_rows_per_rank;
     uint32_t destination_rows_per_rank;
     uint32_t num_ranks;
+    bool pack_input;
 };
 
 }  // namespace deep_gemm::training

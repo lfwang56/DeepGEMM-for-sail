@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--eager", action="store_true")
     parser.add_argument("--profile", action="store_true", help="Profiler API brackets only timed iterations")
     parser.add_argument("--topology", default="unspecified")
+    parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
     args = parser.parse_args()
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
@@ -83,8 +84,10 @@ def main():
             initial_memory = torch.cuda.memory_allocated(device)
             torch.cuda.reset_peak_memory_stats(device)
             plan_class = PeerMoEPlan if backend == "peer" else NativeMoEPlan
+            options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
+            options = options if backend == "peer" and args.gemm_config else {}
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
-                              device=device, compute=args.compute, check_errors=False)
+                              device=device, compute=args.compute, check_errors=False, **options)
 
             def step():
                 plan.reset_errors()
@@ -142,6 +145,7 @@ def main():
                     "ep_size": size, "topology": args.topology, "graph": not args.eager,
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
+                    "gemm_configs": getattr(plan, "gemm_configs", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,
                     "median_max_rank_event_ms": statistics.median(elapsed_event),
                     "median_max_rank_wall_ms": statistics.median(elapsed_wall),
