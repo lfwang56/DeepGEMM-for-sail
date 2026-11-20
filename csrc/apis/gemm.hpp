@@ -4,6 +4,7 @@
 #include "../utils/layout.hpp"
 #include <torch/extension.h>
 #include <limits>
+#include <c10/cuda/CUDAGuard.h>
 #include "../jit_kernels/impls/epilogue_class.hpp"
 #include "../jit_kernels/impls/fp8_gemm.hpp"
 #include "../jit_kernels/impls/ppuxx_layout.hpp"
@@ -952,6 +953,35 @@ static void k_grouped_bf16_gemm_tn_contiguous(const torch::Tensor& a,
     } else {
         DG_HOST_UNREACHABLE("Unsupported architecture");
     }
+}
+
+// Graph-compatible wgrad: physical group K lengths remain entirely on device.
+// max_group_k is a static upper bound used only for tile selection. The producer
+// must supply nonnegative 128-aligned lengths whose sum fits the input capacity.
+static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
+                                        const torch::Tensor& b,
+                                        const torch::Tensor& d,
+                                        const torch::Tensor& grouped_layout,
+                                        const int max_group_k) {
+    DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && a.is_contiguous());
+    DG_HOST_ASSERT(b.is_cuda() && b.dim() == 2 && b.is_contiguous());
+    DG_HOST_ASSERT(d.is_cuda() && d.dim() == 3 && d.is_contiguous());
+    DG_HOST_ASSERT(a.device() == b.device() && a.device() == d.device());
+    DG_HOST_ASSERT(grouped_layout.device() == a.device() && grouped_layout.is_contiguous());
+    DG_HOST_ASSERT(grouped_layout.dim() == 1 && grouped_layout.scalar_type() == torch::kInt32);
+    DG_HOST_ASSERT(a.scalar_type() == torch::kBFloat16 && b.scalar_type() == torch::kBFloat16);
+    DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
+    const auto [groups, m, n] = get_shape<3>(d);
+    const auto [capacity, m_] = get_shape<2>(a);
+    const auto [capacity_, n_] = get_shape<2>(b);
+    DG_HOST_ASSERT(groups > 0 && m > 0 && n > 0 && m == m_ && n == n_);
+    DG_HOST_ASSERT(capacity == capacity_ && capacity % 128 == 0);
+    DG_HOST_ASSERT(grouped_layout.numel() == groups);
+    DG_HOST_ASSERT(max_group_k > 0 && max_group_k % 128 == 0 && max_group_k <= capacity);
+    DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
+    const c10::cuda::CUDAGuard guard(a.device());
+    k_grouped_bf16_gemm_tn_contiguous_impl(
+        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true);
 }
 
 void m_grouped_bf16_gemm_nt_contiguous(const torch::Tensor& lhs, const torch::Tensor& rhs,
@@ -1972,6 +2002,8 @@ static void acblaslt_gemm_tt(const torch::Tensor& a, const torch::Tensor& b,
 
 
 static void register_apis(pybind11::module_& m) {
+    m.def("k_grouped_bf16_gemm_tn_device", &k_grouped_bf16_gemm_tn_device,
+          py::arg("a"), py::arg("b"), py::arg("d"), py::arg("grouped_layout"), py::arg("max_group_k"));
     // BF16 GEMMs
     m.def("gemm_fp32_fp32_fp32_nt", &gemm_fp32_fp32_fp32_nt,
           py::arg("a"), py::arg("b"), py::arg("d"));

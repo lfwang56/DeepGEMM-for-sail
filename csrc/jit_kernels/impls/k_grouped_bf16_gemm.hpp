@@ -87,7 +87,8 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const torch::Tensor& a, const torch::Tensor& b,
     const std::optional<torch::Tensor>& c, const torch::Tensor& d,
     const int& m, const int& n, const int& sum_k,
-    const std::vector<int>& ks_cpu, const torch::Tensor& grouped_layout) {
+    const std::vector<int>& ks_cpu, const torch::Tensor& grouped_layout,
+    const bool device_lengths = false) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
     // Follow upstream: choose the config using the largest group's K.
     const auto max_k = *std::max_element(ks_cpu.begin(), ks_cpu.end());
@@ -127,7 +128,7 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     args.launch_args.grid_dim.x *= blocks_per_cu;
 
     DgProfParam dg_prof_params;
-    if (deep_gemm::profiling_enabled()) {
+    if (deep_gemm::profiling_enabled() && !device_lengths) {
         dg_prof_params.set_k_grouped_params(m, n, sum_k, ks_cpu,
                                            c->data_ptr() != d.data_ptr(), current_stream());
     }

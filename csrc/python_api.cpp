@@ -13,6 +13,7 @@
 #include "apis/mega_moe.hpp"
 #include "apis/runtime.hpp"
 #include "apis/gemm_comm.hpp"
+#include "apis/moe_training.hpp"
 
 #ifndef TORCH_EXTENSION_NAME
 #define TORCH_EXTENSION_NAME _C
@@ -34,4 +35,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     deep_gemm::mega::register_apis(m);
     deep_gemm::runtime::register_apis(m);
     deep_gemm::gemm_comm::register_apis(m);
+    deep_gemm::training::register_apis(m);
 }

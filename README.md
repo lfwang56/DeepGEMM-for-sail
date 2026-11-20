@@ -230,6 +230,19 @@ The grouped GEMMs above group tokens along the M axis while N and K stay fixed. 
 
 For more information, please refer to the `k_grouped_bf16_gemm_tn_contiguous` function documentation.
 
+#### Experimental BF16 MoE training
+
+`deep_gemm.training.bf16_moe` adds first-order autograd for routed SwiGLU
+experts on M890, including input and routing-score gradients, FP32 weight
+gradients, activation recomputation and expert-parallel transport through PCCL
+or PPU symmetric peer memory. An optional grouped BF16 scheduler and experimental
+E4M3 forward/dgrad recipe are included. Parameters and optimizer state remain caller-owned;
+shared experts can be composed outside the operation.
+
+This is a multi-kernel correctness baseline. It does not yet implement a fused
+training megakernel, a bounded activation ring or graph replay.
+See the [training API and validation commands](docs/moe_training.md).
+
 #### Fused MoE (with implicit permute)
 
 Unlike the standalone grouped GEMM layouts above (which expect tokens to already be routed and grouped per expert), the fused MoE path takes raw MoE routing results (`topk_ids`) and fuses the token permutation, per-expert block alignment, and grouped GEMM into a single flow. The "with implicit permute" naming distinguishes it from a plain grouped MoE GEMM: the permutation from token order to expert-grouped order is computed and applied inside these kernels, so no separate gather/scatter step is required.

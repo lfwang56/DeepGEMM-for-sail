@@ -1,0 +1,31 @@
+#pragma once
+
+#include <cstdint>
+
+namespace deep_gemm::training {
+
+// Fixed POD ABI shared by the host dispatcher and the JIT device entry points.
+// Tensor storage remains caller-owned for the entire asynchronous operation.
+struct Params {
+    void* ptr[12]{};
+    int64_t dim[12]{};
+};
+
+enum class Operation : int {
+    CountRoutes,
+    PrefixRoutes,
+    InitializeLayout,
+    PackInput,
+    UnpackRoutes,
+    PackRouteGrad,
+    Combine,
+    Activation,
+    ActivationBackward,
+    QuantizeRows,
+    QuantizeWeights,
+    WeightedGradient,
+    ScoreGradient,
+    ReadChunk,
+};
+
+}  // namespace deep_gemm::training
