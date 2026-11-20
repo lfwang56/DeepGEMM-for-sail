@@ -17,16 +17,20 @@ class PersistentMoEPlan(PeerMoEPlan):
 
     transport = "persistent_peer"
 
-    def __init__(self, *args, num_ctas=None, **kwargs):
+    def __init__(self, *args, num_ctas=None, maximize_ctas=False, **kwargs):
         if kwargs.get("gemm_configs"):
             raise ValueError("persistent training currently uses a fixed native GEMM tile")
         super().__init__(*args, **kwargs)
         available = torch.cuda.get_device_properties(self.device).multi_processor_count
+        self.available_cus = available
+        if maximize_ctas and num_ctas is not None:
+            raise ValueError("choose either num_ctas or maximize_ctas")
+        self.maximize_ctas = maximize_ctas
         # Leave one CU available to framework communication streams while a
         # persistent expert kernel waits for peers.
         self.num_ctas = max(1, available - 1) if num_ctas is None else num_ctas
-        if not isinstance(self.num_ctas, int) or not 0 < self.num_ctas <= available:
-            raise ValueError("num_ctas must be within the visible CU count")
+        if not isinstance(self.num_ctas, int) or not 0 < self.num_ctas <= 2**31 - 1:
+            raise ValueError("num_ctas must be a positive int32 value; residency is checked at preparation")
         self.grid_sync = torch.zeros(3, device=self.device, dtype=torch.int32)
         self.buffers["grid_sync"] = self.grid_sync
 
@@ -41,8 +45,8 @@ class PersistentMoEPlan(PeerMoEPlan):
                    self.source_rows, self.identity_rows, self.work_info, self.num_blocks,
                    self.status, self.barrier_state, tables["barrier_state"], tables["local_x"], tables["local_ids"],
                    tables["local_values"], tables["local_dx"], tables["local_dy"], self.grid_sync]
-        dg._C._moe_training_pipeline(tensors, [x.shape[0], self.max_tokens, self.rank, self.rows,
-                                             self.alignment, self.num_ctas], backward, compile_only)
+        return dg._C._moe_training_pipeline(tensors, [x.shape[0], self.max_tokens, self.rank, self.rows,
+                                                    self.alignment, self.num_ctas], backward, compile_only)
 
     def _prepare(self, w1, w2):
         super()._prepare(w1, w2)
@@ -51,9 +55,12 @@ class PersistentMoEPlan(PeerMoEPlan):
         ids = torch.empty((0, self.k), device=self.device, dtype=torch.int64)
         scores = torch.empty((0, self.k), device=self.device, dtype=torch.float32)
         valid = torch.zeros((), device=self.device, dtype=torch.int32)
-        self._pipeline(x, ids, scores, w1, w2, valid, x, compile_only=True)
+        forward_resident = self._pipeline(x, ids, scores, w1, w2, valid, x, compile_only=True)
         gradients = (x, torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32), scores)
-        self._pipeline(x, ids, scores, w1, w2, valid, x, dy=x, grads=gradients, compile_only=True)
+        backward_resident = self._pipeline(x, ids, scores, w1, w2, valid, x, dy=x, grads=gradients, compile_only=True)
+        self.resident_blocks_per_cu = min(forward_resident, backward_resident)
+        if self.maximize_ctas:
+            self.num_ctas = max(1, self.available_cus - 1) * self.resident_blocks_per_cu
         torch.cuda.synchronize(self.device)
 
     @torch.no_grad()

@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--profile", action="store_true", help="Profiler API brackets only timed iterations")
     parser.add_argument("--topology", default="unspecified")
     parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
+    parser.add_argument("--maximize-ctas", action="store_true")
     args = parser.parse_args()
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
@@ -87,6 +88,7 @@ def main():
             plan_class = PersistentMoEPlan if backend == "persistent" else PeerMoEPlan if backend == "peer" else NativeMoEPlan
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
             options = options if backend == "peer" and args.gemm_config else {}
+            if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
 
@@ -148,6 +150,7 @@ def main():
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
                     "persistent_ctas": getattr(plan, "num_ctas", None),
+                    "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,
                     "median_max_rank_event_ms": statistics.median(elapsed_event),
                     "median_max_rank_wall_ms": statistics.median(elapsed_wall),

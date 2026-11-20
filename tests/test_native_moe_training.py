@@ -38,6 +38,7 @@ def check(actual, target, compute):
 class NativeTests(unittest.TestCase):
     compute = "bf16"
     plan_class = NativeMoEPlan
+    plan_options = {}
 
     def inputs(self, tokens=7):
         generator = torch.Generator().manual_seed(10391)
@@ -52,7 +53,7 @@ class NativeTests(unittest.TestCase):
         return x, ids, scores, w1, w2, dy
 
     def plan(self, **options):
-        return self.plan_class(256, 128, 3, 2, 7, chunk_tokens=3, compute=self.compute, **options)
+        return self.plan_class(256, 128, 3, 2, 7, chunk_tokens=3, compute=self.compute, **self.plan_options, **options)
 
     def test_forward_backward_reference(self):
         x, ids, scores, w1, w2, dy = self.inputs()
@@ -102,7 +103,7 @@ class NativeTests(unittest.TestCase):
 
     def test_workspace_is_bounded(self):
         a = self.plan()
-        b = self.plan_class(256, 128, 3, 2, 700, chunk_tokens=3, compute=self.compute)
+        b = self.plan_class(256, 128, 3, 2, 700, chunk_tokens=3, compute=self.compute, **self.plan_options)
         self.assertEqual(a.workspace_bytes, b.workspace_bytes)
         self.assertEqual(a.activation_workspace_bytes, b.activation_workspace_bytes)
 
@@ -166,7 +167,7 @@ class NativeTests(unittest.TestCase):
                               "routing": mode, "relative_rms": errors}), flush=True)
 
 
-def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False):
+def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -189,8 +190,9 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     w2 = global_w2[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     dy = dys[rank].to(device)
     plan_class = PersistentMoEPlan if persistent else PeerMoEPlan if peer else NativeMoEPlan
+    plan_options = {"maximize_ctas": True} if persistent and maximize else {}
     plan = plan_class(256, 128, 2, 2, max(value.shape[0] for value in xs),
-                        chunk_tokens=3, group=dist.group.WORLD, compute=compute, device=device)
+                        chunk_tokens=3, group=dist.group.WORLD, compute=compute, device=device, **plan_options)
     valid = torch.tensor(x.shape[0], device=device, dtype=torch.int32)
     graph, stream = None, torch.cuda.Stream(device)
     stream.wait_stream(torch.cuda.current_stream())
@@ -262,12 +264,14 @@ if __name__ == "__main__":
     parser.add_argument("--peer", action="store_true")
     parser.add_argument("--stress", action="store_true")
     parser.add_argument("--persistent", action="store_true")
+    parser.add_argument("--maximize-ctas", action="store_true")
     options, remaining = parser.parse_known_args()
     torch.set_num_threads(2)
     recipe = "fp8" if options.fp8 else "bf16"
     if options.ep:
-        ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent)
+        ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer else NativeMoEPlan
+        NativeTests.plan_options = {"maximize_ctas": True} if options.persistent and options.maximize_ctas else {}
         unittest.main(argv=[__file__] + remaining, verbosity=2)

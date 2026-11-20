@@ -36,7 +36,7 @@ __global__ void {}(const deep_gemm::training::PipelineParams params) {{
     }
 };
 
-static void launch_training_pipeline(const std::vector<torch::Tensor>& tensors,
+static int launch_training_pipeline(const std::vector<torch::Tensor>& tensors,
                                      const std::vector<int64_t>& dims,
                                      bool backward, bool compile_only) {
     DG_HOST_ASSERT(tensors.size() == NumPipelineBuffers && dims.size() == 6);
@@ -55,7 +55,7 @@ static void launch_training_pipeline(const std::vector<torch::Tensor>& tensors,
     DG_HOST_ASSERT(alignment >= 128 && alignment % 128 == 0);
     DG_HOST_ASSERT(h > 0 && h % 256 == 0 && i > 0 && i % 128 == 0 && e > 0 && k > 0);
     DG_HOST_ASSERT(p > 0 && p <= 64 && c > 0 && int64_t(p) * c * k <= INT32_MAX);
-    DG_HOST_ASSERT(ctas > 0 && ctas <= device_runtime->get_prop()->multiProcessorCount);
+    DG_HOST_ASSERT(ctas > 0 && ctas <= INT32_MAX);
     const auto expect = [&](int index, std::initializer_list<int64_t> shape, torch::ScalarType dtype) {
         DG_HOST_ASSERT(tensors[index].sizes() == at::IntArrayRef(shape));
         DG_HOST_ASSERT(tensors[index].scalar_type() == dtype);
@@ -98,7 +98,9 @@ static void launch_training_pipeline(const std::vector<torch::Tensor>& tensors,
     int resident = 0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&resident, runtime->kernel, 128, smem));
     DG_HOST_ASSERT(resident >= 1);
+    DG_HOST_ASSERT(ctas <= int64_t(device_runtime->get_prop()->multiProcessorCount) * resident);
     if (!compile_only) TrainingPipelineRuntime::launch(runtime, args);
+    return resident;
 }
 
 static void register_pipeline_apis(pybind11::module_& m) {
