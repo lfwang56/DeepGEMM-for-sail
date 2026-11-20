@@ -230,18 +230,20 @@ The grouped GEMMs above group tokens along the M axis while N and K stay fixed. 
 
 For more information, please refer to the `k_grouped_bf16_gemm_tn_contiguous` function documentation.
 
-#### Experimental BF16 MoE training
+#### MoE training on M890
 
-`deep_gemm.training.bf16_moe` adds first-order autograd for routed SwiGLU
-experts on M890, including input and routing-score gradients, FP32 weight
-gradients, activation recomputation and expert-parallel transport through PCCL
-or PPU symmetric peer memory. An optional grouped BF16 scheduler and experimental
-E4M3 forward/dgrad recipe are included. Parameters and optimizer state remain caller-owned;
-shared experts can be composed outside the operation.
+`deep_gemm.training.native_moe` adds routed SwiGLU autograd, FP32 master weights
+and wgrad, GPU routing schedules, a bounded activation ring and warmed training
+graph replay. `NativeMoEPlan` supports BF16 or blockwise E4M3 forward/dgrad with
+PCCL transport, including cross-supernode RDMA. `PeerMoEPlan` fuses direct peer
+dispatch/return with BF16 GEMMs inside a supernode. The opt-in
+`PersistentMoEPlan` runs one core kernel per forward/backward, including replay
+and both wgrads. Shared experts, routing and optimizer remain caller-owned.
 
-This is a multi-kernel correctness baseline. It does not yet implement a fused
-training megakernel, a bounded activation ring or graph replay.
-See the [training API and validation commands](docs/moe_training.md).
+Choose the backend and chunk size from measured latency and memory requirements;
+a persistent kernel is not necessarily the fastest path. The earlier
+`bf16_moe` reference API remains available with its distinct eager-only contract.
+See the [training API, precision and validation guide](docs/moe_training.md).
 
 #### Fused MoE (with implicit permute)
 

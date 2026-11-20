@@ -1,6 +1,7 @@
 """Bounded native MoE training, changing GPU routes and full backward graphs."""
 
 import argparse
+from datetime import timedelta
 import gc
 import json
 import math
@@ -12,6 +13,7 @@ import torch.distributed as dist
 
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, native_moe
 from test_moe_training import reference, relative_rms
+from moe_distributed_utils import destroy_training_process_group
 
 
 def expected(x, ids, scores, w1, w2, dy, valid=None):
@@ -53,7 +55,8 @@ class NativeTests(unittest.TestCase):
         return x, ids, scores, w1, w2, dy
 
     def plan(self, **options):
-        return self.plan_class(256, 128, 3, 2, 7, chunk_tokens=3, compute=self.compute, **self.plan_options, **options)
+        return self.plan_class(256, 128, 3, 2, 7, chunk_tokens=3, compute=self.compute,
+                               **(self.plan_options | options))
 
     def test_forward_backward_reference(self):
         x, ids, scores, w1, w2, dy = self.inputs()
@@ -91,6 +94,22 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(w2.grad.dtype, torch.float32)
         check((y, x.grad, w1.grad, w2.grad, scores.grad), expected(x, ids, scores, w1, w2, dy), self.compute)
 
+    def test_accumulator_aliases_and_flat_bucket(self):
+        x, ids, scores, w1, w2, dy = self.inputs()
+        w1, w2 = w1.detach().float().requires_grad_(), w2.detach().float().requires_grad_()
+        plan = self.plan()
+        arena = torch.zeros(w1.numel() + w2.numel(), device="cuda")
+        gradients = (arena[:w1.numel()].view_as(w1), arena[w1.numel():].view_as(w2))
+        for invalid in ((w1.detach(), gradients[1]),
+                        (gradients[0], arena[:w2.numel()].view_as(w2))):
+            with self.assertRaisesRegex(ValueError, "overlap"):
+                native_moe(x, ids, scores, w1, w2, plan=plan, weight_grad_accumulators=invalid)
+        y = native_moe(x, ids, scores, w1, w2, plan=plan, weight_grad_accumulators=gradients)
+        y.backward(dy)
+        self.assertIsNone(w1.grad)
+        self.assertIsNone(w2.grad)
+        check((y, x.grad, *gradients, scores.grad), expected(x, ids, scores, w1, w2, dy), self.compute)
+
     def test_empty_and_dynamic_valid_tokens(self):
         for tokens in (0, 7):
             x, ids, scores, w1, w2, dy = self.inputs(tokens)
@@ -107,6 +126,52 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(a.workspace_bytes, b.workspace_bytes)
         self.assertEqual(a.activation_workspace_bytes, b.activation_workspace_bytes)
 
+    def test_index_limits_before_allocation(self):
+        with self.assertRaisesRegex(ValueError, "indexing"):
+            self.plan_class(65536, 65536, 2, 2, 7, chunk_tokens=3, compute=self.compute)
+        with self.assertRaisesRegex(ValueError, "indexing"):
+            self.plan_class(256, 128, 2, 2, 7, chunk_tokens=2**23, compute=self.compute)
+        if self.plan_class is NativeMoEPlan:
+            with self.assertRaisesRegex(ValueError, "1024"):
+                self.plan_class(256, 128, 1025, 2, 7, chunk_tokens=3, compute=self.compute)
+
+    def test_direct_backward_validation(self):
+        x, ids, scores, w1, w2, dy = self.inputs()
+        plan = self.plan()
+        valid = torch.full((), x.shape[0], device="cuda", dtype=torch.int32)
+        with self.assertRaisesRegex(ValueError, "dtype"):
+            plan.backward(dy, x, ids.int(), scores, w1, w2, valid)
+        noncontiguous = torch.empty((x.shape[0], 2 * x.shape[1]), device="cuda", dtype=x.dtype)[:, ::2]
+        with self.assertRaisesRegex(ValueError, "contiguous"):
+            plan.backward(noncontiguous, x, ids, scores, w1, w2, valid)
+
+    def test_fp8_fused_and_separate_quantization(self):
+        if self.compute != "fp8" or self.plan_class is not NativeMoEPlan:
+            self.skipTest("FP8 collective recipe ablation")
+        x, ids, scores, w1, w2, dy = self.inputs()
+        valid = torch.full((), x.shape[0], device="cuda", dtype=torch.int32)
+        results = []
+        for fused in (True, False):
+            plan = self.plan(fuse_activation_quant=fused)
+            y = plan.forward(x, ids, scores, w1, w2, valid)
+            results.append((y, *plan.backward(dy, x, ids, scores, w1, w2, valid)))
+        for actual, reference in zip(results[0], results[1]):
+            torch.testing.assert_close(actual, reference, rtol=2e-5, atol=1e-7)
+
+    def test_peer_fusion_switches(self):
+        if self.plan_class is not PeerMoEPlan:
+            self.skipTest("direct peer transport ablation")
+        for dispatch, returned in ((False, False), (False, True), (True, False), (True, True)):
+            x, ids, scores, w1, w2, dy = self.inputs()
+            ids[2].fill_(1)
+            ids[3, 1] = -1
+            valid = torch.full((), 5, device="cuda", dtype=torch.int32)
+            plan = self.plan(fuse_dispatch=dispatch, fuse_return=returned)
+            y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
+            y.backward(dy)
+            check((y, x.grad, w1.grad, w2.grad, scores.grad),
+                  expected(x, ids, scores, w1, w2, dy, 5), self.compute)
+
     def test_many_experts_device_schedule(self):
         if self.plan_class is not NativeMoEPlan:
             self.skipTest("checks the collective GEMM scheduler's >=128-expert path")
@@ -121,6 +186,36 @@ class NativeTests(unittest.TestCase):
         y = native_moe(x, ids, scores, w1, w2, plan=plan)
         y.backward(dy)
         check((y, x.grad, w1.grad, w2.grad, scores.grad), expected(x, ids, scores, w1, w2, dy), self.compute)
+
+    def test_graph_replay_updated_parameters(self):
+        x, ids, scores, w1, w2, dy = self.inputs()
+        w1, w2 = w1.detach().float().requires_grad_(), w2.detach().float().requires_grad_()
+        plan = self.plan()
+        stream = torch.cuda.Stream()
+        stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(stream):
+            for _ in range(2):
+                for value in (x, scores, w1, w2):
+                    value.grad = None
+                native_moe(x, ids, scores, w1, w2, plan=plan).backward(dy)
+            for value in (x, scores, w1, w2):
+                value.grad = None
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph, stream=stream):
+                y = native_moe(x, ids, scores, w1, w2, plan=plan)
+                y.backward(dy)
+            for updated in (False, True):
+                if updated:
+                    with torch.no_grad():
+                        x.add_(0.02)
+                        scores.mul_(0.8)
+                        w1.mul_(0.75)
+                        w2.mul_(-0.5)
+                graph.replay()
+                plan.check()
+                check((y, x.grad, w1.grad, w2.grad, scores.grad),
+                      expected(x, ids, scores, w1, w2, dy), self.compute)
+        del graph
 
     def test_sticky_graph_errors(self):
         x, ids, scores, w1, w2, _ = self.inputs()
@@ -182,11 +277,12 @@ class NativeTests(unittest.TestCase):
                               "routing": mode, "relative_rms": errors}), flush=True)
 
 
-def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False):
+def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
+              gemm_config=None, fuse_dispatch=True, fuse_return=True):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
-    dist.init_process_group("nccl", device_id=device)
+    dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=300))
     generator = torch.Generator().manual_seed(62831)
     global_w1 = (torch.randn(size * 2, 256, 256, generator=generator) * 0.1).bfloat16()
     global_w2 = (torch.randn(size * 2, 256, 128, generator=generator) * 0.1).bfloat16()
@@ -206,6 +302,10 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     dy = dys[rank].to(device)
     plan_class = PersistentMoEPlan if persistent else PeerMoEPlan if peer else NativeMoEPlan
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
+    if gemm_config:
+        plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
+    if peer and not persistent:
+        plan_options.update(fuse_dispatch=fuse_dispatch, fuse_return=fuse_return)
     plan = plan_class(256, 128, 2, 2, max(value.shape[0] for value in xs),
                         chunk_tokens=3, group=dist.group.WORLD, compute=compute, device=device, **plan_options)
     valid = torch.tensor(x.shape[0], device=device, dtype=torch.int32)
@@ -266,9 +366,11 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     # PCCL retains communicator resources for live executable graphs. Release
     # those graph references before synchronous process-group destruction.
     del graph
+    for value in (x, scores, w1, w2):
+        value.grad = None
+    del y, x, ids, scores, w1, w2, dy, valid, plan, stream
     gc.collect()
-    dist.barrier()
-    dist.destroy_process_group()
+    destroy_training_process_group()
 
 
 if __name__ == "__main__":
@@ -280,13 +382,26 @@ if __name__ == "__main__":
     parser.add_argument("--stress", action="store_true")
     parser.add_argument("--persistent", action="store_true")
     parser.add_argument("--maximize-ctas", action="store_true")
+    parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
+    parser.add_argument("--no-fuse-dispatch", action="store_true")
+    parser.add_argument("--no-fuse-return", action="store_true")
     options, remaining = parser.parse_known_args()
+    if options.gemm_config and (not options.peer or options.persistent or options.fp8):
+        parser.error("explicit GEMM tiles require --peer with BF16 compute")
+    if (options.no_fuse_dispatch or options.no_fuse_return) and (not options.peer or options.persistent):
+        parser.error("peer fusion switches require --peer")
     torch.set_num_threads(2)
     recipe = "fp8" if options.fp8 else "bf16"
     if options.ep:
-        ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas)
+        ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
+                  options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer else NativeMoEPlan
         NativeTests.plan_options = {"maximize_ctas": True} if options.persistent and options.maximize_ctas else {}
+        if options.gemm_config:
+            NativeTests.plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
+        if options.peer and not options.persistent:
+            NativeTests.plan_options.update(fuse_dispatch=not options.no_fuse_dispatch,
+                                            fuse_return=not options.no_fuse_return)
         unittest.main(argv=[__file__] + remaining, verbosity=2)

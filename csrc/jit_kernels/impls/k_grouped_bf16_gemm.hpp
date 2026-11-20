@@ -154,8 +154,12 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
         DG_HGGC_DRIVER_CHECK(lazy_hgFuncGetAttribute(&local_size, HG_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, kernel));
 #endif
 
-        std::printf("[KGroupedContiguous_BF16:]\n");
-        std::printf("groups:%d, m:%d, n:%d, sum_k:%d, max_k:%d\n", num_groups, m, n, sum_k, max_k);
+        std::printf("[%s_BF16:]\n", device_lengths ? "KGroupedDeviceLengths" : "KGroupedContiguous");
+        if (device_lengths)
+            std::printf("groups:%d, m:%d, n:%d, capacity_rows:%d, tile_bound_k:%d\n",
+                        num_groups, m, n, sum_k, max_k);
+        else
+            std::printf("groups:%d, m:%d, n:%d, sum_k:%d, max_k:%d\n", num_groups, m, n, sum_k, max_k);
         std::printf("num_sms:%d, max_active_tb_num:%d, threadblock_count:%u, threads:%d\n",
                     num_sms, blocks_per_cu, args.launch_args.grid_dim.x, block_size);
         std::printf("ThreadblockShape[%d, %d, %d], WarpShape[%d, %d, %d], num_stages:%d\n",

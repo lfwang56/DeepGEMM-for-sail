@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdio>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 #include <deep_gemm/common/moe_training_pipeline.cuh>
@@ -45,6 +46,8 @@ static int launch_training_pipeline(const std::vector<torch::Tensor>& tensors,
     const c10::cuda::CUDAGuard guard(x.device());
     DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
     for (const auto& t : tensors) DG_HOST_ASSERT(t.device() == x.device() && t.is_contiguous());
+    for (int index : {W1, W2, W1T, W2T, PackedX, GateUp, Hidden, PackedDY, LocalY, LocalDX, LocalDY})
+        DG_HOST_ASSERT(tensors[index].numel() <= INT32_MAX);
     DG_HOST_ASSERT(tensors[Ids].dim() == 2 && tensors[LocalX].dim() == 2);
     const int64_t t = x.size(0), h = x.size(1), i = tensors[W1].size(1) / 2;
     const int64_t e = tensors[W1].size(0), k = tensors[Ids].size(1);
@@ -99,6 +102,15 @@ static int launch_training_pipeline(const std::vector<torch::Tensor>& tensors,
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&resident, runtime->kernel, 128, smem));
     DG_HOST_ASSERT(resident >= 1);
     DG_HOST_ASSERT(ctas <= int64_t(device_runtime->get_prop()->multiProcessorCount) * resident);
+    if (get_env<int>("show_log")) {
+        std::printf("[PersistentTraining_BF16:]\n");
+        std::printf("backward:%d, groups:%d, h:%d, i:%d, topk:%d, ranks:%d, chunk_tokens:%d, "
+                    "capacity_rows:%lld\n", backward, int(e), int(h), int(i), int(k), int(p), int(c),
+                    static_cast<long long>(m));
+        std::printf("tile:[128,128,64], warp:[64,64], stages:3, threads:128, "
+                    "dynamic_smem_bytes:%d, blocks_per_cu:%d, grid:%lld\n",
+                    smem, resident, static_cast<long long>(ctas));
+    }
     if (!compile_only) TrainingPipelineRuntime::launch(runtime, args);
     return resident;
 }

@@ -43,7 +43,10 @@ if __name__ == "__main__":
     parser.add_argument("--native-ring", action="store_true")
     parser.add_argument("--fp8", action="store_true")
     parser.add_argument("--grouped", action="store_true")
+    parser.add_argument("--fp32-params", action="store_true", help="FSDP keeps unrounded FP32 expert gradients")
     args = parser.parse_args()
+    if args.fp32_params and args.mode != "fsdp2":
+        raise ValueError("fp32-params selects the FSDP mixed-precision policy")
     if args.transport in ("peer", "persistent") and not args.native_ring:
         raise ValueError("peer transport requires --native-ring")
     if args.native_ring and args.transport == "symmetric":
@@ -93,7 +96,8 @@ if __name__ == "__main__":
         from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
         fully_shard(model, mesh=mesh["dp"], mp_policy=MixedPrecisionPolicy(
-            param_dtype=torch.bfloat16, reduce_dtype=torch.float32, cast_forward_inputs=False,
+            param_dtype=torch.float32 if args.fp32_params else torch.bfloat16,
+            reduce_dtype=torch.float32, cast_forward_inputs=False,
         ))
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
     initial = tuple(full(p).detach().clone() for p in model.parameters())
@@ -101,6 +105,8 @@ if __name__ == "__main__":
         optimizer.zero_grad()
         y = model(xs[rank].to(device), ids_list[rank].to(device), ps[rank].to(device))
         y.backward(dys[rank].to(device))
+        if args.fp32_params and any(parameter.grad.dtype != torch.float32 for parameter in model.parameters()):
+            raise AssertionError("FSDP FP32 parameter policy did not retain FP32 gradients")
         if step == 0:
             errors = {name: relative_rms(full(parameter.grad), target) for (name, parameter), target in zip(
                 model.named_parameters(), expected_grads
@@ -111,6 +117,7 @@ if __name__ == "__main__":
             print(json.dumps({"mode": args.mode, "rank": rank, "ep_size": args.ep_size,
                               "transport": args.transport, "fp8": args.fp8, "grouped_gemm": args.grouped,
                               "native_ring": args.native_ring,
+                              "fp32_params": args.fp32_params,
                               "gradient_relative_rms": errors}), flush=True)
         optimizer.step()
         for parameter in model.parameters():
@@ -123,5 +130,6 @@ if __name__ == "__main__":
     print(json.dumps({"mode": args.mode, "rank": rank, "ep_size": args.ep_size,
                       "transport": args.transport, "fp8": args.fp8, "grouped_gemm": args.grouped,
                       "native_ring": args.native_ring,
+                      "fp32_params": args.fp32_params,
                       "optimizer_steps": 2, "passed": True}), flush=True)
     dist.destroy_process_group()

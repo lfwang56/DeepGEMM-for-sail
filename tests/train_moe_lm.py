@@ -14,6 +14,7 @@ import time
 import urllib.request
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 
@@ -69,15 +70,53 @@ class Experts(nn.Module):
         nn.init.normal_(self.w1, std=0.02)
         nn.init.normal_(self.w2, std=0.02)
 
+    @staticmethod
+    def quantized_rows_reference(x):
+        values = x.float()
+        tiles = values.reshape(*values.shape[:-1], values.shape[-1] // 128, 128)
+        scales = tiles.detach().abs().amax(-1, keepdim=True).clamp_min(1e-4) / 448
+        restored = ((tiles.detach() / scales).to(torch.float8_e4m3fn).float() * scales).reshape_as(values)
+        return values + (restored - values).detach()
+
+    @staticmethod
+    def quantized_weights_reference(x):
+        e, n, k = x.shape
+        values = x.float()
+        tiles = values.reshape(e, n // 128, 128, k // 128, 128)
+        scales = tiles.detach().abs().amax((2, 4), keepdim=True).clamp_min(1e-4) / 448
+        restored = ((tiles.detach() / scales).to(torch.float8_e4m3fn).float() * scales).reshape_as(values)
+        return values + (restored - values).detach()
+
     def forward(self, x):
         shape = x.shape
         flat = x.reshape(-1, self.config.hidden).bfloat16()
         logits = self.router(flat).float()
         probabilities = logits.softmax(-1)
         selected, ids = probabilities.topk(self.config.topk, dim=-1)
+        reference_ids = getattr(self, "reference_ids", None)
+        if reference_ids is not None:
+            ids = reference_ids
+            selected = probabilities.gather(-1, ids)
+        if getattr(self, "capture_reference_ids", False):
+            self.observed_reference_ids = ids.detach().clone()
         scores = (selected / selected.sum(-1, keepdim=True)).contiguous()
-        if self.backend != "torch":
+        if self.backend not in ("torch", "torch_fp8_reference"):
             routed = native_moe(flat, ids, scores, self.w1, self.w2, plan=self.plan)
+        elif self.backend == "torch_fp8_reference":
+            # Independent dequantized-input reference; FP32 GEMMs express the
+            # quantized forward math. STE backward is a comparison reference,
+            # not an emulation of production's independently quantized dgrad.
+            with torch.autocast("cuda", enabled=False):
+                qx = self.quantized_rows_reference(flat)
+                qw1 = self.quantized_weights_reference(self.w1.bfloat16())
+                gu = F.linear(qx, qw1.flatten(0, 1)).bfloat16().reshape(flat.shape[0], self.config.experts, -1)
+                gate, up = gu.float().chunk(2, -1)
+                hidden = (F.silu(gate) * up).bfloat16()
+                qhidden = self.quantized_rows_reference(hidden)
+                qw2 = self.quantized_weights_reference(self.w2.bfloat16())
+                all_outputs = torch.bmm(qhidden.transpose(0, 1).contiguous(), qw2.transpose(1, 2)).bfloat16().transpose(0, 1)
+            chosen = all_outputs.gather(1, ids[:, :, None].expand(-1, -1, self.config.hidden))
+            routed = (chosen.float() * scores[:, :, None]).sum(1).bfloat16()
         else:
             # One dense FC1 over all experts; then an independent batched FC2.
             gu = F.linear(flat, self.w1.bfloat16().flatten(0, 1)).reshape(flat.shape[0], self.config.experts, -1)
@@ -92,6 +131,11 @@ class Experts(nn.Module):
         combined = routed.float() + self.shared_gate(flat).float().sigmoid() * shared.float()
         one_hot = (ids[:, :, None] == torch.arange(self.config.experts, device=ids.device)).float()
         load = one_hot.mean((0, 1)).detach()
+        if self.plan is not None and self.plan.size > 1:
+            # Each rank differentiates its local probability contribution;
+            # the detached load target describes the complete EP batch.
+            dist.all_reduce(load, group=self.plan.group)
+            load.div_(self.plan.size)
         auxiliary = self.config.experts * (probabilities.mean(0) * load).sum()
         return combined.reshape(shape), auxiliary
 
@@ -203,7 +247,16 @@ def main():
     parser.add_argument("--batch", type=int, default=8)
     parser.add_argument("--sequence", type=int, default=128)
     parser.add_argument("--chunk-tokens", type=int, default=256)
+    parser.add_argument("--no-fuse-dispatch", action="store_true")
+    parser.add_argument("--no-fuse-return", action="store_true")
     options = parser.parse_args()
+    checkpoint = Path(options.checkpoint)
+    if options.resume and not checkpoint.is_file():
+        raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint}")
+    if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend != "peer":
+        parser.error("peer fusion switches require --backend peer")
+    backend_options = (dict(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return)
+                       if options.backend == "peer" else {})
     if options.backend == "torch" and options.compute != "bf16":
         raise ValueError("the independent Torch reference uses BF16")
     if options.backend in ("peer", "persistent") and options.compute != "bf16":
@@ -222,20 +275,22 @@ def main():
     plan_class = PersistentMoEPlan if options.backend == "persistent" else PeerMoEPlan if options.backend == "peer" else NativeMoEPlan
     plan = plan_class(config.hidden, config.intermediate, config.experts, config.topk,
                         config.batch * config.sequence, chunk_tokens=config.chunk_tokens,
-                        compute=options.compute, device=device, check_errors=False) if options.backend != "torch" else None
+                        compute=options.compute, device=device, check_errors=False,
+                        **backend_options) if options.backend != "torch" else None
     model = LanguageModel(config, vocabulary, options.backend, plan).to(device)
     learning_rate = torch.tensor(3e-4, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, betas=(0.9, 0.95),
                                  weight_decay=0.1, capturable=True, foreach=False)
     generator = torch.Generator().manual_seed(options.seed + 100)
-    checkpoint = Path(options.checkpoint)
     checkpoint.parent.mkdir(parents=True, exist_ok=True)
     start_step, original_initial_loss = 0, None
     restored = None
     if options.resume and checkpoint.exists():
         restored = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        legacy_options = dict(fuse_dispatch=True, fuse_return=True) if options.backend == "peer" else {}
         if (restored["configuration"] != asdict(config) or restored["manifest"] != manifest
                 or restored["compute"] != options.compute or restored["backend"] != options.backend
+                or restored.get("backend_options", legacy_options) != backend_options
                 or restored.get("seed") != options.seed or restored.get("planned_steps") != options.steps):
             raise ValueError("checkpoint configuration/data/recipe mismatch")
         model.load_state_dict(restored["model"])
@@ -257,6 +312,7 @@ def main():
         initial_hash = hashlib.sha256(b"".join(value.numpy().tobytes() for value in state_before_warmup.values())).hexdigest()
         print(json.dumps({"case": "lm_start", "configuration": asdict(config), "manifest": manifest,
                           "backend": options.backend, "compute": options.compute, "graph": options.graph,
+                          "backend_options": backend_options,
                           "seed": options.seed, "parameters": sum(p.numel() for p in model.parameters()),
                           "initial_state_sha256": initial_hash, "initial_validation_loss": initial_loss,
                           "resume_step": start_step, "workspace_bytes": plan.workspace_bytes if plan else None}), flush=True)
@@ -344,6 +400,7 @@ def main():
                 payload = dict(model=model.state_dict(), optimizer=optimizer.state_dict(),
                                configuration=asdict(config), manifest=manifest, compute=options.compute,
                                backend=options.backend, step=iteration + 1, generator_state=generator.get_state(),
+                               backend_options=backend_options,
                                seed=options.seed, planned_steps=options.steps,
                                initial_validation_loss=original_initial_loss, validation_loss=last_validation)
                 temporary = checkpoint.with_suffix(checkpoint.suffix + ".tmp")
@@ -351,6 +408,7 @@ def main():
                 temporary.replace(checkpoint)
         torch.cuda.synchronize()
         print(json.dumps({"case": "lm_finished", "backend": options.backend, "compute": options.compute,
+                          "backend_options": backend_options,
                           "graph": options.graph, "seed": options.seed, "steps": end_step,
                           "planned_steps": options.steps,
                           "initial_validation_loss": original_initial_loss,

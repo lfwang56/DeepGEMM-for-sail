@@ -22,6 +22,13 @@ import xml.etree.ElementTree as ET
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SUITES = {'ZW-810E': 'checkin_810e.list', 'ZW-M890P': 'checkin_890p.list'}
 SCRIPT_SUITES = {
+    'ZW-M890P-MoETraining': [
+        'tests/test_moe_training_kernels.py',
+        'tests/test_native_moe_training.py',
+        'tests/test_native_moe_training.py --fp8',
+        'tests/test_native_moe_training.py --peer',
+        'tests/test_native_moe_training.py --persistent',
+    ],
     'ZW-M890P-MegaMoE': [
         '-m pytest -q -s --disable-warnings -x -k smoke tests/test_mega_moe.py',
         '-m pytest -q -s --disable-warnings -x '

@@ -32,15 +32,17 @@ class NativeMoEPlan:
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  chunk_tokens=128, compute="bf16", group=None, device=None,
-                 check_errors=True, m_schedule="nopad"):
+                 check_errors=True, m_schedule="nopad", fuse_activation_quant=True):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
-        if min(local_experts, topk, chunk_tokens) < 1 or max_tokens < 0:
+        if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
             raise ValueError("invalid expert, top-k or token capacity")
         if compute not in ("bf16", "fp8"):
             raise ValueError("compute must be 'bf16' or 'fp8'")
         if m_schedule not in ("nopad", "contiguous"):
             raise ValueError("m_schedule must be 'nopad' or 'contiguous'")
+        if not isinstance(fuse_activation_quant, bool):
+            raise TypeError("fuse_activation_quant must be bool")
         self.device = torch.device("cuda", torch.cuda.current_device()) if device is None else torch.device(device)
         if self.device.type != "cuda":
             raise ValueError("NativeMoEPlan requires a PPU/CUDA device")
@@ -55,15 +57,24 @@ class NativeMoEPlan:
         self.max_tokens, self.chunk_tokens = max_tokens, chunk_tokens
         self.compute, self.check_errors = compute, check_errors
         self.m_schedule = m_schedule
+        self.fuse_activation_quant = fuse_activation_quant
         self.alignment = math.lcm(128, dg.get_m_alignment_for_contiguous_layout())
         self.routes = self.size * chunk_tokens * topk
         # Sum ceil(count_e/alignment)*alignment <= routes + E*(alignment-1).
         self.rows = math.ceil((self.routes + local_experts * (self.alignment - 1)) / self.alignment) * self.alignment
         if self.rows > 2**31 - 1 or self.routes > 2**31 - 1:
             raise ValueError("native route capacity exceeds int32 metadata")
+        # Reused Tensor Cell mainloops contain 32-bit element offsets. Bound
+        # weights and ring matrices before allocation, including skew capacity.
+        if (self.rows * max(hidden, 2 * intermediate) > 2**31 - 1
+                or local_experts * 2 * intermediate * hidden > 2**31 - 1):
+            raise ValueError("native tensor capacity exceeds int32 element indexing")
+        if self.transport == "collective" and m_schedule == "nopad" and local_experts > 1024:
+            raise ValueError("nopad training supports at most 1024 local experts")
         if group is not None:
+            recipe = compute if fuse_activation_quant else compute + ":separate_activation_quant"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                           compute, self.transport, m_schedule)
+                           recipe, self.transport, m_schedule)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -221,6 +232,7 @@ class NativeMoEPlan:
         self._prepared = True
 
     def _prepare_local(self, w1, w2):
+        self._prepare_pointwise()
         w1, w2 = w1.to(torch.bfloat16), w2.to(torch.bfloat16)
         self._prepare_weights(w1, w2, backward=True)
         for buffer in (self.packed_x, self.gate_up, self.hidden, self.packed_dy):
@@ -231,7 +243,7 @@ class NativeMoEPlan:
         self._gemm(self.hidden, w2, self.packed_output, "w2")
         self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
         self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
-        if self.compute == "fp8":
+        if self.compute == "fp8" and self.fuse_activation_quant:
             _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
             _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
         dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x,
@@ -239,6 +251,15 @@ class NativeMoEPlan:
         dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden,
                                        torch.zeros_like(w2, dtype=torch.float32), self.lengths, self.rows)
         torch.cuda.synchronize(self.device)
+
+    def _prepare_pointwise(self):
+        operations = ({1, 6, 7, 8, 11, 12, 13} if self.transport != "collective"
+                      else {0, 1, 2, 3, 4, 5, 6, 11, 12, 13})
+        if self.compute == "fp8":
+            operations.update((9, 10, 14, 15) if self.fuse_activation_quant else (7, 8, 9, 10))
+        else:
+            operations.update((7, 8))
+        dg._C._moe_training_precompile(self.device.index, sorted(operations))
 
     def _gemm(self, a, weight, output, name, prequantized=False):
         # The physical ring covers the worst routing skew. GPU lengths select
@@ -279,11 +300,12 @@ class NativeMoEPlan:
 
     def _chunk_forward(self, w1, w2):
         self._gemm(self.packed_x, w1, self.gate_up, "w1")
-        if self.compute == "fp8":
+        fused = self.compute == "fp8" and self.fuse_activation_quant
+        if fused:
             _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
         else:
             _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
-        self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=self.compute == "fp8")
+        self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
         self._scatter_output()
 
     def _scatter_output(self):
@@ -313,9 +335,10 @@ class NativeMoEPlan:
     def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None):
         from .bf16 import _validate_accumulators
 
+        self._validate(x, ids, scores, w1, w2, valid_tokens)
         _validate_accumulators(accumulators, w1, w2)
-        if dy.shape != x.shape or dy.dtype != x.dtype or dy.device != x.device:
-            raise ValueError("dy must match x")
+        if dy.shape != x.shape or dy.dtype != x.dtype or dy.device != x.device or not dy.is_contiguous():
+            raise ValueError("dy must be contiguous and match x")
         with self._execution():
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
@@ -336,12 +359,13 @@ class NativeMoEPlan:
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
                 # Reuse activation buffers only after their wgrad readers.
                 self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
-                if self.compute == "fp8":
+                fused = self.compute == "fp8" and self.fuse_activation_quant
+                if fused:
                     _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
                 else:
                     _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
-                self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t", prequantized=self.compute == "fp8")
+                self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t", prequantized=fused)
                 self._scatter_output()
                 _launch(6, [self.local_values, scores, dx], dims + [0])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():

@@ -351,6 +351,23 @@ def _validate_accumulators(accumulators, w1, w2):
                 or accumulator.requires_grad):
             raise ValueError("weight-gradient accumulators must be contiguous FP32 buffers matching the weights")
 
+    def overlaps(a, b):
+        if not a.numel() or not b.numel():
+            return False
+        # Accumulators are contiguous; the span also conservatively covers a
+        # strided reference weight without reading any device values.
+        def interval(tensor):
+            span = 1 + sum((size - 1) * stride for size, stride in zip(tensor.shape, tensor.stride()))
+            start = tensor.data_ptr()
+            return start, start + span * tensor.element_size()
+        a_begin, a_end = interval(a)
+        b_begin, b_end = interval(b)
+        return a_begin < b_end and b_begin < a_end
+
+    if overlaps(accumulators[0], accumulators[1]) or any(
+            overlaps(accumulator, weight) for accumulator in accumulators for weight in (w1, w2)):
+        raise ValueError("weight-gradient accumulators must not overlap each other or expert weights")
+
 
 def _swiglu_backward(gate_up, dh, dtype):
     acc_dtype = _acc_dtype(gate_up)

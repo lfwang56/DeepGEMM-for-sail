@@ -971,6 +971,7 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
     DG_HOST_ASSERT(grouped_layout.dim() == 1 && grouped_layout.scalar_type() == torch::kInt32);
     DG_HOST_ASSERT(a.scalar_type() == torch::kBFloat16 && b.scalar_type() == torch::kBFloat16);
     DG_HOST_ASSERT(d.scalar_type() == torch::kFloat);
+    DG_HOST_ASSERT(a.numel() <= INT32_MAX && b.numel() <= INT32_MAX && d.numel() <= INT32_MAX);
     const auto [groups, m, n] = get_shape<3>(d);
     const auto [capacity, m_] = get_shape<2>(a);
     const auto [capacity_, n_] = get_shape<2>(b);
@@ -978,8 +979,15 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
     DG_HOST_ASSERT(capacity == capacity_ && capacity % 128 == 0);
     DG_HOST_ASSERT(grouped_layout.numel() == groups);
     DG_HOST_ASSERT(max_group_k > 0 && max_group_k % 128 == 0 && max_group_k <= capacity);
-    DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
     const c10::cuda::CUDAGuard guard(a.device());
+    DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
+    const auto overlaps = [](const torch::Tensor& lhs, const torch::Tensor& rhs) {
+        const auto left = reinterpret_cast<uintptr_t>(lhs.data_ptr());
+        const auto right = reinterpret_cast<uintptr_t>(rhs.data_ptr());
+        return lhs.numel() && rhs.numel() && left < right + rhs.numel() * rhs.element_size()
+            && right < left + lhs.numel() * lhs.element_size();
+    };
+    DG_HOST_ASSERT(!overlaps(d, a) && !overlaps(d, b) && !overlaps(d, grouped_layout));
     k_grouped_bf16_gemm_tn_contiguous_impl(
         a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true);
 }

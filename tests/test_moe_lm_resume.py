@@ -19,10 +19,14 @@ def norm_error(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("native", "peer"), default="native")
+    parser.add_argument("--backend", choices=("native", "peer", "persistent"), default="native")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--directory", required=True)
+    parser.add_argument("--no-fuse-dispatch", action="store_true")
+    parser.add_argument("--no-fuse-return", action="store_true")
     options = parser.parse_args()
+    if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend != "peer":
+        parser.error("peer fusion switches require --backend peer")
     directory = Path(options.directory)
     directory.mkdir(parents=True, exist_ok=True)
     uninterrupted, repeated, resumed = directory / "continuous.pt", directory / "repeated.pt", directory / "resumed.pt"
@@ -30,6 +34,8 @@ def main():
               "--backend", options.backend, "--compute", options.compute, "--graph", "--steps", "400",
               "--seed", "7301", "--hidden", "256", "--layers", "2", "--experts", "4",
               "--batch", "2", "--sequence", "64", "--chunk-tokens", "64", "--eval-interval", "100"]
+    if options.no_fuse_dispatch: common.append("--no-fuse-dispatch")
+    if options.no_fuse_return: common.append("--no-fuse-return")
     for checkpoint, extra in ((uninterrupted, []), (repeated, []),
                               (resumed, ["--stop-after", "200"]), (resumed, ["--resume"])):
         subprocess.run(common + ["--checkpoint", str(checkpoint)] + extra, check=True)
@@ -49,6 +55,7 @@ def main():
     optimizer_steps = [float(state["step"]) for state in b["optimizer"]["state"].values()]
     loss_difference = abs(a["validation_loss"] - b["validation_loss"])
     result = {"case": "lm_checkpoint_resume", "backend": options.backend, "compute": options.compute,
+              "backend_options": b.get("backend_options", {}),
               "continuous_validation_loss": a["validation_loss"], "resumed_validation_loss": b["validation_loss"],
               "validation_loss_difference": loss_difference, "parameter_relative_l2": parameter_error,
               "independent_repeat_parameter_relative_l2": repeat_parameter_error,

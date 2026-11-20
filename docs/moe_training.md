@@ -1,274 +1,257 @@
-# Experimental PPU MoE training
+# MoE training on M890
 
-`deep_gemm.training` provides a correctness-first routed MoE training backend
-for M890. It uses DeepGEMM's native BF16/FP8 NT GEMMs, BF16 K-grouped weight-gradient
-GEMM and either PCCL collectives or PPU symmetric peer memory. It does not require
-NVIDIA multicast, TMEM or two-CTA cluster execution.
+`deep_gemm.training.native_moe` provides first-order autograd for routed SwiGLU
+experts with BF16 inputs, BF16 or FP32 master weights, FP32 routing scores and
+FP32 weight-gradient accumulation. It uses native PPU Tensor Cell GEMMs and a
+reusable activation ring. Validation uses native PyTorch 2.10 and SAIL SDK 2.2.0
+on M890 (PPU0015). CUDA-compatible API names do not imply NVIDIA instruction
+support.
 
-This initial backend is a sequence of kernels and communication operations. It
-is not the inference MegaMoE kernel with an automatically generated backward,
-and no training-throughput improvement is claimed.
+## Backends and topology
 
-## Autograd interface
+| Plan | Expert GEMMs | Communication | Core execution |
+| --- | --- | --- | --- |
+| `NativeMoEPlan` | BF16 or blockwise FP8 | PCCL all-gather/reduce-scatter, including cross-supernode RDMA | Several kernels per chunk |
+| `PeerMoEPlan` | BF16 | Direct peer reads in dispatch GEMMs and peer writes in return GEMMs | Separate metadata, GEMM and activation kernels |
+| `PersistentMoEPlan` | BF16 | Direct peer reads and writes | One forward core kernel and one backward core kernel over all chunks |
 
-```python
-from deep_gemm.training import bf16_moe
+Peer and persistent plans require an EP group inside one direct-access domain,
+which can span several hosts in a supernode. Containers need the PPU devices
+and the driver's IMEX channel for cross-host mappings. The plan honors the
+runtime direct-access flag when present. Native PPU Torch 2.10 omits this flag;
+its CUDA symmetric-memory backend requires successful driver import/mapping of
+every peer buffer. Unknown backends cannot be treated as direct peer memory.
 
-# x: [tokens, H], BF16
-# expert_ids: [tokens, topk], int32 or int64, global expert IDs
-# scores: [tokens, topk], floating point
-# w1: [local_experts, 2 * I, H], BF16, concatenated [gate | up]
-# w2: [local_experts, H, I], BF16
-y = bf16_moe(
-    x, expert_ids, scores, w1, w2,
-    group=expert_parallel_group,  # None for local experts without EP
-    transport="symmetric",       # or "collective" for PCCL all-to-all
-    recompute=True,
-)
-loss = loss_function(y)
-loss.backward()
-optimizer.step()
-```
+Native collective EP can span supernodes over PCCL/RDMA. It exchanges fixed
+capacities, including zero-filled routes; it is not a sparse hierarchical RDMA
+dispatcher. Select groups and chunk sizes for the actual topology. The peer
+metadata's 64-rank construction limit is not a 64-rank benchmark claim.
 
-The caller owns all parameters, optimizer state and checkpoints. Shared experts
-and optional shared-output gates remain external and can be added to `y` through
-ordinary differentiable composition. Biases and other gated activations are not
-implemented by this API.
+Persistent execution is opt-in. Its core includes GPU routing, FC1, SwiGLU,
+FC2, full backward replay and both wgrads. Weight casts/transposes, shared
+experts, the router and optimizer remain outside that core. Benchmark all
+applicable backends; fewer launches do not guarantee lower latency.
 
-Native inputs and weights must be contiguous BF16 device tensors; H must be a
-multiple of 256 and I a multiple of 128. Rank r owns the consecutive expert IDs
-`[r * local_experts, (r + 1) * local_experts)`. All ranks must agree on H, I,
-local expert count, top-k, backend and transport. Per-rank token counts may differ,
-including zero. Masked slots use expert ID -1. Valid zero routing scores retain
-their score derivative; the implementation does not divide by routing scores.
+Peer plans expose `fuse_dispatch` and `fuse_return` switches, both `True` by
+default. Disabling dispatch first packs peer input with a separate copy kernel;
+disabling return scatters packed GEMM results with a separate peer-store kernel.
+Both separate-copy controls visit current padded expert rows selected on the
+GPU, rather than zero-filling the entire worst-skew ring capacity.
+The routes, peer transport, GEMM tiles, activations and FP32 wgrads stay the same.
+These switches support controlled fusion measurements and topology-specific
+staging choices. Persistent plans always fuse both directions.
 
-The default autograd gradients have the corresponding parameter dtype. Only
-first-order differentiation is supported. Higher-order differentiation is
-explicitly disabled.
+On measured M890 EP8/EP16 workloads, staging inputs and fusing the return was
+faster than fusing both directions. Select `fuse_dispatch=False,
+fuse_return=True` to use that mode. A measured large-GEMM configuration is
+`gemm_configs={role: (256,64,64,64,2) for role in
+("fc1","fc2","dhidden","dx")}`: `(block_N,block_K,warp_M,warp_N,stages)`;
+block M is 128. Sweep chunk size for the workload's memory budget. These
+measurements do not establish a universal best tile or a sparse-RDMA speedup.
 
-## Functional interface and FP32 accumulation
-
-```python
-from deep_gemm.training import bf16_moe_forward, bf16_moe_backward
-
-y, context = bf16_moe_forward(
-    x, expert_ids, scores, w1, w2,
-    group=expert_parallel_group, transport="collective", recompute=True,
-)
-dx, dw1, dw2, dscores = bf16_moe_backward(dy, context)
-# Native dw1 and dw2 are FP32. Alternatively, accumulate directly:
-# dx, dw1, dw2, dscores = bf16_moe_backward(
-#     dy, context, weight_grad_accumulators=(main_grad_w1, main_grad_w2))
-```
-
-The autograd wrapper also accepts `weight_grad_accumulators=(main_grad_w1,
-main_grad_w2)`. Both must be contiguous, non-differentiable FP32 tensors matching
-the weight shapes and devices. Every backward adds into them. The caller clears
-them at the desired optimizer boundary and supplies the optimizer integration.
-In this mode weight `.grad` is not populated. This option does not implicitly
-implement Megatron-DDP or FSDP gradient hooks.
-
-The functional backward accepts the same accumulators and returns aliases of
-them. Native K-grouped GEMM uses these buffers as both C and D, without a separate
-temporary weight-gradient allocation or subsequent add. Empty experts preserve
-the existing accumulator contents.
-
-The native wgrad primitive pads each expert's physical token count to a multiple
-of 128 with zero rows. It consumes a host length list and matching device layout.
-Empty experts produce zero new gradients. The BF16 data-gradient paths construct
-contiguous transposed weights and use native NT kernels instead of unimplemented
-NN aliases.
-
-## Precision and gradient contract
-
-FC1 produces BF16 gate/up values. SwiGLU is evaluated in FP32 and its result is
-rounded to BF16 before FC2. FC2 produces BF16 expert outputs. Routing weights
-are applied exactly once after FC2, and contributions are summed in FP32 before
-the final BF16 output conversion.
-
-Backward scales upstream expert gradients by the routing scores, computes BF16
-data gradients, and accumulates weight gradients in FP32. Score gradients use a
-dot product with the saved, unweighted expert output. These rounding boundaries
-are explicit; bitwise equivalence with other MoE precision recipes is not claimed.
-
-`backend="torch"` is an independent debugging/reference route. CPU float64 is
-supported there for numerical gradcheck; it is not a native PPU performance path.
-
-### Experimental E4M3 recipe
-
-Select `backend="deep_gemm_fp8"` for FP8 forward and data-gradient GEMMs.
-Parameters, communicated payloads, nonlinear activations and GEMM outputs remain
-BF16; wgrad still uses BF16 operands and FP32 accumulation. Each GEMM dynamically
-quantizes its LHS per row per 128 K elements and RHS per 128x128 block, using
-E4M3FN values and FP32 scales (`max(amax, 1e-4) / 448`). Scales are not rounded to
-UE8M0, and no delayed scaling history is maintained. Data-gradient weights are
-transposed in BF16 first, then independently requantized in the required NT layout.
-Quantized forward weight buffers cannot be reused as transposed dgrad weights.
-
-Backward implements an approximate training gradient; it does not differentiate
-through discrete FP8 rounding. Native tests check output/gradient error against
-an FP64 MoE and check the scaling layout against an independent CPU quantization
-model. These numerical checks do not establish full-model convergence.
-Quantization currently uses separate tensor operations and is repeated at each
-GEMM, so this recipe does not imply a throughput improvement.
-
-### Grouped BF16 compute
-
-With `backend="deep_gemm", grouped_gemm=True`, FC1, FC2 and both dgrad GEMMs
-use native M-grouped contiguous GEMMs. A per-forward permutation and aligned
-ragged expert layout are reused by forward, recompute, dgrad and K-grouped wgrad.
-Packing uses a single indexed copy per operand. Empty experts occupy no rows;
-other experts are zero-padded to the native M alignment, at least 128. This
-avoids padding every expert to the largest expert's token count.
-
-This option reuses the native grouped GEMM scheduler. Communication and activation
-operations remain separate. It is opt-in and currently supports BF16 compute
-only; combining it with the FP8 recipe is rejected.
-
-## State, recomputation and communication
-
-Every forward owns a separate context, including its route permutation and
-returned expert outputs. Multiple forwards can remain pending before backward;
-one forward does not overwrite another's context. Inputs, IDs, scores and weights
-must not be changed before the matching backward, and version checks reject such
-changes.
-
-The autograd wrapper registers its tensor state with `save_for_backward`, so
-normal backward releases saved activations even if the output remains alive.
-Its transport cache is released after backward. Repeated backward with
-`retain_graph=True` is supported when all EP ranks repeat the same sequence;
-transport buffers are reacquired as needed. The functional API's context remains
-caller-owned until the caller releases it.
-
-With `recompute=True`, the context omits received expert inputs and gate/up/hidden
-activations. Backward re-dispatches the original input and rebuilds only FC1 and
-SwiGLU. It does not replay FC2 or combine. This first version still retains the
-source-side expert outputs for score gradients; it does not implement MoK's
-bounded activation ring or in-kernel ring replay.
-
-`transport="collective"` uses the initialized EP group's all-to-all operations.
-`transport="symmetric"` uses the same PyTorch PPU symmetric-memory allocation
-and peer-pointer foundation as the existing PPU inference MegaMoE. Each sender
-publishes into a separate source-rank slice at the destination. Explicit device
-completion and rank barriers protect publication and buffer reuse. It requires
-a peer-accessible ICN domain and is not a cross-supernode RDMA implementation.
-
-All EP ranks, including empty ranks, must enter forward/backward collectives in
-the same order. Executions sharing an EP group must be serialized. Route building
-and wgrad layout preparation currently synchronize with the host. CUDA Graph
-capture is rejected explicitly; `torch.compile(fullgraph=True)` and full-iteration
-graph replay are not supported by this initial implementation.
-
-## Validation
-
-```bash
-# CPU analytical/finite-difference checks (use the source package).
-PYTHONPATH=. python tests/test_moe_training.py
-
-# Native BF16 forward, backward, accumulation, mutation checks and recompute.
-PYTHONPATH=. python tests/test_moe_training.py --native
-
-# Grouped BF16 scheduler and experimental FP8 recipe.
-PYTHONPATH=. python tests/test_moe_training.py --grouped
-PYTHONPATH=. python tests/test_moe_training.py --fp8
-
-# Two-rank EP, both transports, saved/recomputed contexts, skew and empty ranks.
-PYTHONPATH=. torchrun --standalone --nproc-per-node=2 \
-  tests/test_moe_training.py --native --ep
-
-# Data-parallel and sharded-parameter optimizer integration.
-PYTHONPATH=. torchrun --standalone --nproc-per-node=2 \
-  tests/test_moe_training_parallel.py --mode ddp
-PYTHONPATH=. torchrun --standalone --nproc-per-node=2 \
-  tests/test_moe_training_parallel.py --mode fsdp2
-
-# EP=2 and FSDP=2, with symmetric peer transport and grouped BF16 GEMMs.
-PYTHONPATH=. torchrun --standalone --nproc-per-node=4 \
-  tests/test_moe_training_parallel.py --mode fsdp2 --ep-size 2 \
-  --transport symmetric --grouped
-
-# Warm wall time includes host scheduling, communication, forward and backward.
-PYTHONPATH=. torchrun --standalone --nproc-per-node=2 \
-  tests/benchmark_moe_training.py --grouped --transport collective
-```
-
-Use a native SAIL PyTorch build compatible with this repository's native HGGC
-headers. A CUDA-compatibility inference build can run tensors while exposing a
-different C++ header ABI; mixing unconverted CUDA headers with HGGC headers is
-not a supported build recipe.
-
-Separate cold JIT compilation from a runtime hang. During initial investigation,
-the generic BLAS BF16 autograd path remained inside HGRTC compilation past a
-30-second timeout, then completed successfully when allowed to finish. Warm
-execution completed normally. Native training tests should retain their JIT
-cache and allow first-compilation time.
-
-Further work includes GPU-resident route metadata, reusable bounded workspaces,
-communication/GEMM fusion, training graph replay, fused quantization and full-model
-convergence validation of the FP8 recipe. These are not implied by passing the
-operator correctness checks.
-
-## GPU schedules and bounded native replay
-
-`NativeMoEPlan` and `native_moe` provide a second backend with native GPU route
-count/prefix/packing, fused SwiGLU forward/backward and fused E4M3 quantizers.
-Unlike the reference backend above, this path does not read route counts or K
-lengths on the CPU. Its K-grouped wgrad API consumes a GPU length vector and a
-static upper bound used only for tile selection.
+## Calling contract
 
 ```python
+import torch
 from deep_gemm.training import NativeMoEPlan, native_moe
 
+device = torch.device("cuda", torch.cuda.current_device())
 plan = NativeMoEPlan(
-    H, I, local_experts, topk, max_tokens,
-    chunk_tokens=128, compute="bf16", group=ep_group, device=x.device,
+    hidden=1024, intermediate=512, local_experts=4, topk=2,
+    max_tokens=4096, chunk_tokens=256, compute="bf16",
+    device=device, group=None,  # or the initialized EP process group
 )
+x = torch.randn(1024, 1024, device=device).bfloat16().requires_grad_()
+w1 = torch.randn(4, 1024, 1024, device=device, requires_grad=True)
+w2 = torch.randn(4, 1024, 512, device=device, requires_grad=True)
+ids = torch.randint(4, (1024, 2), device=device)
+scores = torch.rand(1024, 2, device=device, requires_grad=True)
 y = native_moe(x, ids, scores, w1, w2, plan=plan)
-y.backward(dy)
+y.float().square().mean().backward()
 ```
 
-The native plan accepts BF16 inputs/weights and FP32 scores. IDs may be int32 or
-int64. An optional int32 device scalar `valid_tokens` masks the padded tail of
-the input without changing the captured shape. All EP ranks create matching
-plans, but their actual input tensor token counts may differ up to `max_tokens`.
+- `x`: contiguous BF16 `[T,H]`; positive `H` divisible by 256.
+- `w1`: contiguous `[E_local,2I,H]`; `w2`: contiguous `[E_local,H,I]`.
+  Positive `I` divisible by 128. Weights are BF16 or FP32 masters.
+- `ids`: contiguous int32/int64 `[T,K]`, with global expert IDs in
+  `[0,EP_size*E_local)`. `-1` masks a slot; duplicates are allowed.
+- `scores`: contiguous FP32 `[T,K]`. The caller supplies normalization.
+  Scores apply once after FC2; zero scores retain their score derivative.
+- Optional `valid_tokens`: one-element int32 device tensor selecting the leading
+  valid input rows. Padded outputs/gradients are zero. Its value can change
+  between graph replays within the captured input shape.
+- All tensors and the plan use one device; inputs and scores are finite.
+  Ranks can have different `T`, including zero, up to `max_tokens`.
 
-The activation ring holds one chunk and has a fixed capacity independent of
-`max_tokens`. Each expert's physical rows are aligned separately; capacity covers
-the worst-case route distribution plus per-expert alignment. Backward replays
-FC1, SwiGLU **and FC2**, avoiding a full-batch saved `[T,topk,H]` tensor for score
-gradients. Input/parameter snapshots still follow ordinary autograd lifetimes.
-The same plan can be shared by sequential layers or pending forwards with matching
-shapes because their expanded activations are reconstructed during backward.
-One plan is restricted to one stream; separate streams require separate plans.
+Reused Tensor Cell paths use 32-bit element offsets. Each weight and ring matrix
+must contain at most `2**31-1` elements; the constructor rejects larger capacities
+before allocation. The collective nopad scheduler supports at most 1024 local
+experts. Input/output token storage is separate from the fixed ring.
 
-This path uses fixed-size all-gather/reduce-scatter communication per chunk. The
-collectives work both within a peer domain and across domains through PCCL's
-selected network transport; metadata and activation capacity never depend on a
-host-side count exchange. It currently performs communication separately from
-the GEMM kernels.
+EP ranks construct matching dimensions, capacities, chunks, compute and transport,
+then issue operations in matching order. Keep inputs, IDs, scores, weights and
+valid-token tensors unchanged until their backward; autograd enforces saved
+tensor version checks. Several pending forwards and `retain_graph=True` are
+supported with matching rank order. Higher-order gradients and
+`torch.compile(fullgraph=True)` are unsupported.
 
-For graph capture, construct a separate plan and warm it on the stream that will
-be captured. Capture forward, loss/backward and optimizer operations in the
-normal PyTorch manner. Route metadata is rebuilt on every replay, including when
-the routing distribution or `valid_tokens` changes. Call `plan.check()` outside
-capture/replay to inspect device-side invalid-ID/capacity checks.
+Shared experts, their gates, router logits, top-k normalization and balancing
+loss remain ordinary differentiable PyTorch code; see `tests/train_moe_lm.py`.
 
-Executable graphs retain PCCL communicator resources. Before destroying a process
-group, release its graph objects and collect them (`del graph; gc.collect()`).
-Tests verify that numerical graph replay **and process-group shutdown** complete.
+## Workspace and recomputation
+
+The activation ring holds one chunk. For chunk size `C`, EP size `P` and top-k
+`K`, route capacity is `P*C*K` plus per-expert alignment padding. Counts,
+offsets, permutations and GEMM/wgrad lengths are built on the device. Increasing
+`max_tokens` or the number of sequential layers sharing a plan does not enlarge
+this ring; actual inputs, outputs and saved input tensors still scale with shape.
+
+Backward replays FC1, SwiGLU **and FC2** per chunk. It saves no full-batch
+`[T,K,H]` expert-output tensor for score gradients. BF16 operands for the two
+native FP32 wgrads are packed with zero padding to multiples of 128.
+
+Collective plans default to `m_schedule="nopad"`: grouped GEMMs use GPU expert
+lengths and skip unused trailing capacity. `"contiguous"` retains the original
+capacity-wide schedule as a benchmark control. Quantization/pointwise kernels
+still cover their allocated capacity. Use the nopad baseline when attributing
+gains to communication fusion.
+
+Logical `workspace_bytes`/`activation_workspace_bytes` exclude caller tensors,
+optimizer state, driver/VMM reservations and spills. Compare allocator peaks in
+separate processes; sequential executable graphs can retain older allocations.
+
+A plan serializes submissions on one execution stream. Share it across sequential
+layers, or use independent native/peer plans for independent streams. Persistent
+grids require every CTA to be resident: serialize persistent expert work on the
+device. The default grid leaves capacity for framework communication. Advanced
+`num_ctas`/`maximize_ctas=True` options are checked against both kernels' actual
+occupancy; maximizing residency requires separate framework-overlap validation.
+
+## Precision and gradients
+
+BF16 GEMMs accumulate in FP32 and write BF16 intermediates. SwiGLU and its
+derivative evaluate in FP32 before BF16 rounding. Combination and routing-score
+derivatives accumulate in FP32. FP32 master weights receive FP32 wgrad.
+
+`compute="fp8"` uses E4M3FN, per-row/per-128-channel activation scales and
+per-128-by-128 weight scales. The FP32 scale is `max(amax,1e-4)/448`. This is
+blockwise FP8, not Blackwell MXFP8; communication stays BF16. SwiGLU producers
+fuse activation/backward and FP8 quantization, retaining the same BF16 values
+needed by wgrad. Transposed dgrad weights have separately prepared scales.
+Wgrad remains BF16-to-FP32. Quantization rounding is not differentiated: this is
+an approximate training gradient.
+
+`fuse_activation_quant=False` selects the equivalent separate BF16 activation
+and row-quantization kernels for controlled measurement. The default is `True`.
+
+`weight_grad_accumulators=(main_grad_w1,main_grad_w2)` optionally writes beta=1
+into caller-owned contiguous FP32 buffers matching weight shapes. Zero them at
+the optimizer boundary. Buffers must be disjoint from each other, weights,
+other inputs and plan workspace. Disjoint slices of one flat gradient bucket
+are supported. Expert `.grad` is absent in this mode; the caller
+integrates optimizer/distributed hooks. Standard returned gradients are the path
+tested with DDP/FSDP2.
+
+Returned gradients follow the parameter dtype seen by autograd. For FSDP2,
+`param_dtype=torch.bfloat16` rounds them at that framework boundary, even with
+FP32 reduction. Keep FSDP parameters in FP32 when preserving the unrounded FP32
+expert gradient is required; `native_moe` casts internally for BF16 compute.
+
+Atomic packing can change reduction order; training is not bitwise deterministic.
+Checkpoint checks require exact restored model/AdamW/batch-generator state and
+compare subsequent drift with an independent uninterrupted repeat.
+
+## Preparation and graph replay
+
+Construct the plan outside capture. Warm forward/backward on its execution
+stream first. `prepare(w1,w2)` compiles local kernels before payload collectives;
+ranks agree on readiness before entering peer waits. Shared-cache publication
+conflicts retain a valid temporary module and canonical in-process alias.
+
+Use `check_errors=False` in the hot path, `reset_errors()` at the iteration
+boundary, and `check()` after replay outside capture. Sticky flags are:
+1 invalid ID, 2 capacity violation, 4 invalid valid-token count, 8 synchronization
+timeout. Discard the plan after a timeout; clearing flags cannot restore phases.
+
+Delete executable graphs and collect their Python references before destroying
+the process group. Release captured outputs, gradients and plan buffers too.
+Multi-host test harnesses synchronize each device, rendezvous through the CPU
+store before destroying communicators, and retain the store through a final
+shutdown handshake. This avoids starting communicator destruction while a
+different host is still draining device work.
+Full-model examples capture forward, loss,
+backward, clipping and optimizer. The distributed example also reduces replicated
+gradients and forms a global clipping norm. Its gathered final checkpoint is an
+evaluation model; rank-local checkpoints include local AdamW state.
+
+## Validation and measurement
+
+Build the C++ extension in the native PPU environment; keep `hgobjdump` on `PATH`.
 
 ```bash
 PYTHONPATH=. python tests/test_moe_training_kernels.py
 PYTHONPATH=. python tests/test_native_moe_training.py
 PYTHONPATH=. python tests/test_native_moe_training.py --fp8
-PYTHONPATH=. torchrun --standalone --nproc-per-node=2 \
-  tests/test_native_moe_training.py --ep --graph
+PYTHONPATH=. python tests/test_native_moe_training.py --peer
+PYTHONPATH=. python tests/test_native_moe_training.py --persistent
+PYTHONPATH=. torchrun --standalone --nproc-per-node=8 \
+  tests/test_native_moe_training.py --peer --ep --graph --stress
+PYTHONPATH=. torchrun --standalone --nproc-per-node=4 \
+  tests/test_moe_training_parallel.py --native-ring --mode fsdp2 --ep-size=2 --fp8
+PYTHONPATH=. torchrun --standalone --nproc-per-node=8 \
+  tests/benchmark_native_moe.py --backend all --maximize-ctas
 ```
 
-On the supplied topology, each eight listed hosts form one supernode. Same-host,
-same-supernode cross-host, and cross-supernode evidence must be recorded
-separately. The same-supernode cross-host PCCL test used `P2P/IPC pointer
-inter-node`; the cross-supernode test used NET/IB. Containers need RDMA devices
-for the latter and `/dev/alixpu-caps-imex-channels/channel0` for the inter-host
-fabric mapping used by the former. A missing IMEX device must not be diagnosed
-as a kernel arithmetic failure.
+`tests/launch_moe_local_ranks.py` supports multi-host runs with one log per rank.
+Run one instance per host with a common master address/port and distinct node
+ranks. It avoids an elastic agent's extra TCPStore exit barrier after test
+shutdown. Distinguish same-host, same-supernode cross-host and cross-supernode
+results. In the supplied cluster each supernode has eight hosts, each with eight
+PPUs; these are different topology levels.
+
+Benchmarks include forward, full backward replay and FP32 wgrad zero/accumulation;
+optimizer and JIT are excluded. Output/gradient samples are compared with the
+first backend. Sweep chunk size as well as GEMM tiles: small chunks bound memory
+but repeat large FP32 wgrad updates. Report graph/eager timings separately.
+
+Standard UT dump/replay covers reused eager grouped GEMMs, but cannot serialize
+distributed peer-pointer plans or dynamic GPU-length wgrad into a host K-list.
+Use dedicated training tests/external profiling for these paths. Disable
+parameter dumping during capture.
+
+For BF16 tile controls, `benchmark_native_moe.py --collective-gemm-config`
+selects explicit existing nopad tiles. Pass the same five values to
+`--gemm-config` for peer kernels; also compare both against the automatic nopad
+baseline. `--separate-fp8-quantization` isolates FP8 activation/quantizer fusion.
+`--peer-ablation` compares all four dispatch/return combinations;
+`--fp8-ablation --backend collective --compute fp8` compares separate and fused
+activation quantization on identical input tensors in one process.
+
+```bash
+PYTHONPATH=. python tests/train_moe_lm.py --backend native --compute fp8 \
+  --graph --steps 2000 --checkpoint build/lm-fp8.pt
+PYTHONPATH=. torchrun --standalone --nproc-per-node=2 \
+  tests/train_moe_lm_distributed.py --compute bf16 --graph --reference-check \
+  --steps 2000 --checkpoint build/lm-ep2.pt
+PYTHONPATH=. python tests/evaluate_moe_lm.py --checkpoint build/lm-fp8.pt
+PYTHONPATH=. python tests/train_moe_lm.py --backend peer --no-fuse-dispatch \
+  --graph --steps 2000 --checkpoint build/lm-peer-hybrid.pt
+```
+
+The four-layer model uses pinned public TinyShakespeare, eight routed experts,
+top-2 routing and a shared expert. Training monitors fixed validation samples;
+full evaluation visits every held-out successor once with nonoverlapping causal
+windows. BF16/FP8 can choose different experts in later layers. FP8's complete
+gradient diagnostic uses an independent dequantized-input Torch STE reference
+on the selected branches; training always recomputes dynamic routes. Dense Torch
+computes all experts and is a convergence reference, not a sparse speed baseline.
+Small-model convergence does not establish large-model pretraining convergence.
+
+## Earlier reference API
+
+`bf16_moe`, `bf16_moe_forward` and `bf16_moe_backward` remain correctness-oriented
+APIs with native dense/grouped GEMMs or a float64 CPU Torch reference. This
+legacy path reads route/layout data on the host, retains source expert outputs,
+and rejects graph capture. Its `recompute=True` replays FC1/SwiGLU only. Its
+timings/memory contract differ from ring plans. Tests are in
+`tests/test_moe_training.py`; it is not a persistent megakernel.

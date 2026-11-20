@@ -183,8 +183,20 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
     Runtime::launch(runtime, args);
 }
 
+// Compile the fixed pointwise variants without publishing EP payloads. GEMM
+// preparation alone cannot protect peers from a later pointwise compiler error.
+static void precompile(const int device, const std::vector<int>& operations) {
+    const c10::cuda::CUDAGuard guard(device);
+    for (const auto operation : operations) {
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantize));
+        Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
+        compiler->build(fmt::format("moe_training_{}", operation), Runtime::generate(args));
+    }
+}
+
 static void register_apis(pybind11::module_& m) {
     m.def("_moe_training_launch", &launch, py::arg("operation"), py::arg("tensors"), py::arg("dims"));
+    m.def("_moe_training_precompile", &precompile, py::arg("device"), py::arg("operations"));
 }
 
 }  // namespace deep_gemm::training

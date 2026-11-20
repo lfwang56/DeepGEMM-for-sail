@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdio>
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
 #include <deep_gemm/common/peer_moe_training.cuh>
@@ -37,7 +38,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::Barrier));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PackActive));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -93,6 +94,23 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             DG_HOST_ASSERT(dims[0] > 0 && dims[0] <= 64 && dims[1] < dims[0] && dims[2] > 0);
             expect(0, dims[0], i64); expect(1, 4, i32); expect(2, 1, i32);
             blocks = 1;
+            break;
+        case PeerOperation::Scatter:
+            schema(5, 4);
+            DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[3] > 0 && dims[3] <= 64);
+            expect(0, dims[0] * dims[1], bf); expect(1, dims[0], i32);
+            expect(2, dims[3], i64); expect(3, 1, i32);
+            expect(4, 1, i32);
+            work = dims[0] * dims[1];
+            blocks = std::min((work + 255) / 256, int64_t(get_num_sms()) * 2);
+            break;
+        case PeerOperation::PackActive:
+            schema(5, 5);
+            DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[3] > 0 && dims[4] > 0 && dims[4] <= 64);
+            expect(0, dims[4], i64); expect(1, dims[0], i32);
+            expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
+            work = dims[0] * dims[1];
+            blocks = std::min((work + 255) / 256, int64_t(get_num_sms()) * 2);
             break;
     }
     if (blocks < 0) blocks = (work + 255) / 256;
@@ -154,6 +172,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
         DG_HOST_ASSERT(tensor.device() == a.device() && tensor.is_contiguous());
     DG_HOST_ASSERT(a.scalar_type() == torch::kBFloat16 && weight.scalar_type() == torch::kBFloat16);
     DG_HOST_ASSERT(out.scalar_type() == torch::kBFloat16);
+    DG_HOST_ASSERT(a.numel() <= INT32_MAX && weight.numel() <= INT32_MAX && out.numel() <= INT32_MAX);
     const auto [m, k] = get_shape<2>(a);
     const auto [groups, n, k_] = get_shape<3>(weight);
     DG_HOST_ASSERT(k == k_ && out.size(0) == m && out.size(1) == n && m > 0 && m % 128 == 0);
@@ -209,6 +228,14 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
     DG_HOST_ASSERT(occupancy > 0);
     args.launch_args.grid_dim.x *= occupancy;
+    if (get_env<int>("show_log")) {
+        std::printf("[PeerTraining_BF16:]\n");
+        std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
+                    int(groups), int(n), int(k), read_peer, write_peer, int(m));
+        std::printf("tile:[128,%d,%d], warp:[%d,%d], stages:%d, threads:%d, "
+                    "dynamic_smem_bytes:%d, blocks_per_cu:%d, grid:%u\n",
+                    bn, bk, wm, wn, stages, threads, smem, occupancy, args.launch_args.grid_dim.x);
+    }
     if (!compile_only) PeerGemmRuntime::launch(runtime, args);
 }
 

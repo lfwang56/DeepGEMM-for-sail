@@ -95,6 +95,24 @@ torchrun --standalone --nproc-per-node=2 --max-restarts=0 \
   -m pytest -q -s --disable-warnings -x -k smoke tests/test_mega_moe.py
 ```
 
+## MoE training
+
+The manual single-device training suite covers GPU route/quantization primitives,
+BF16 and blockwise FP8 autograd, direct peer and persistent execution, dynamic
+routes, empty experts, FP32 master-weight updates between graph replays, and
+bounded workspace reuse. It writes the standard per-script logs and JUnit report:
+
+```bash
+python tests/checkin/run_checkin.py --suite ZW-M890P-MoETraining
+```
+
+It is separate from the board's GEMM-format caselist and automatic shared PR CI.
+Distributed pointer plans and GPU-length wgrads cannot be replayed through the
+host K-list UT format. Multi-device/host EP, DDP/FSDP2 and complete-model
+convergence commands are in [the training guide](../../docs/moe_training.md).
+The suite executes compilation and accuracy together; `--phase compile` is
+unsupported. It inherits the caller's selected visible PPU and requires M890.
+
 ## Additional functional specifications
 
 The unified entry point calls `test_activation.py` and `test_fp4_core.py` directly for the corresponding regressions. Their warm-up and accuracy phases share the same test functions.

@@ -4,6 +4,28 @@ This document records user-visible changes for formal DeepGEMM-for-sail releases
 
 DeepGEMM-for-sail maintains its release identifiers independently of the upstream [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM) project.
 
+## Unreleased
+
+### Added
+
+- **M890 MoE training**: routed SwiGLU autograd with GPU routing schedules,
+  bounded activation replay, FP32 master weights and weight gradients, and
+  warmed graph replay. Collective BF16/blockwise FP8 plans support PCCL/RDMA;
+  direct peer BF16 plans fuse dispatch/return with GEMMs. An optional persistent
+  BF16 pipeline includes both forward and full backward in one core launch per
+  direction. See the [training guide](docs/moe_training.md) for precision,
+  topology, workspace, concurrency and framework contracts.
+- **GPU-length weight gradients**: `k_grouped_bf16_gemm_tn_device` consumes
+  aligned device lengths with a static capacity bound, avoiding host route reads
+  and supporting warmed graphs. Its dynamic layout is outside host K-list UT
+  dump/replay; dedicated tests cover changing and empty groups.
+
+### Fixed
+
+- **Shared JIT cache publication**: retain a valid compiled temporary module
+  when a rename fails before a peer's cache entry is visible, and bind its
+  canonical in-process cache key to prevent later compilation during capture.
+
 ## 1.1.0+v1.1.0
 
 ### Fixed

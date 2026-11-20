@@ -23,9 +23,12 @@ class PeerMoEPlan(NativeMoEPlan):
 
     transport = "peer"
 
-    def __init__(self, *args, gemm_configs=None, **kwargs):
+    def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
+        if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
+            raise TypeError("peer fusion switches must be bool")
+        self.fuse_dispatch, self.fuse_return = fuse_dispatch, fuse_return
         super().__init__(*args, **kwargs)
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
@@ -55,9 +58,15 @@ class PeerMoEPlan(NativeMoEPlan):
 
             self.payload = sm.empty((size,), dtype=torch.uint8, device=self.device)
             self.symm_handle = sm.rendezvous(self.payload, self.group)
-            direct = getattr(self.symm_handle, "world_within_direct_access", True)
+            direct = getattr(self.symm_handle, "world_within_direct_access", None)
             direct = direct() if callable(direct) else direct
-            if not direct:
+            # The native PPU Torch 2.10 CUDA backend imports/maps every peer
+            # allocation through the driver, but omits the newer topology flag.
+            # Accept that direct-buffer backend after successful rendezvous;
+            # do not infer direct pointers for an unknown/RDMA memory backend.
+            if direct is None and sm.get_backend(self.device) != "CUDA":
+                raise RuntimeError("symmetric-memory backend cannot supply verified direct buffers; use NativeMoEPlan")
+            if direct is not None and not direct:
                 raise RuntimeError("peer training requires an EP group within one direct-access domain")
             self.peer_buffers = [self.symm_handle.get_buffer(rank, (size,), torch.uint8) for rank in range(self.size)]
         self.payload.zero_()
@@ -92,9 +101,10 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.size, self.rank, 180 * 2_000_000_000, tag], compile_only)
 
     def _peer_gemm(self, a, weight, output, source_rows, *, read=False, write=False,
-                   source="local_x", destination="local_values", compile_only=False, pack_input=False):
+                   source="local_x", destination="local_values", compile_only=False, pack_input=False, role=None):
         source_stride = self.chunk_tokens if source == "local_x" else self.chunk_tokens * self.k
-        role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
+        if role is None:
+            role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
         dg._C._moe_training_peer_gemm(
             a, weight, output, self.pointer_tables[source], self.pointer_tables[destination],
             source_rows, self.permutation, self.work_info, self.num_blocks,
@@ -117,6 +127,7 @@ class PeerMoEPlan(NativeMoEPlan):
     def _prepare(self, w1, w2):
         if torch.cuda.is_current_stream_capturing():
             raise RuntimeError("warm up PeerMoEPlan before graph capture")
+        self._prepare_pointwise()
         w1, w2 = w1.to(torch.bfloat16), w2.to(torch.bfloat16)
         self._prepare_weights(w1, w2, backward=True)
         self._barrier(0, compile_only=True)
@@ -128,12 +139,20 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128], True)
         _peer(4, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size], True)
-        self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows, read=True, compile_only=True)
-        self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows, write=True, compile_only=True)
-        self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.permutation,
-                        read=True, source="local_dy", compile_only=True)
+        if not self.fuse_dispatch:
+            self._stage_input(compile_only=True)
+        self._peer_gemm(self.packed_x, w1, self.gate_up,
+                        self.source_rows if self.fuse_dispatch else self.identity_rows,
+                        read=self.fuse_dispatch, compile_only=True, role="fc1")
+        self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
+                        write=self.fuse_return, compile_only=True)
+        self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
+                        self.permutation if self.fuse_dispatch else self.identity_rows,
+                        read=self.fuse_dispatch, source="local_dy", compile_only=True, role="dhidden")
         self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
-                        write=True, destination="local_dx", compile_only=True)
+                        write=self.fuse_return, destination="local_dx", compile_only=True)
+        if not self.fuse_return:
+            self._scatter_peer("local_values", compile_only=True)
         self.lengths.zero_()
         dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x,
                                        torch.zeros_like(w1, dtype=torch.float32), self.lengths, self.rows)
@@ -157,10 +176,24 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
 
     def _chunk_forward(self, w1, w2, pack_input=False):
-        self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows, read=True, pack_input=pack_input)
+        if not self.fuse_dispatch:
+            self._stage_input()
+        self._peer_gemm(self.packed_x, w1, self.gate_up,
+                        self.source_rows if self.fuse_dispatch else self.identity_rows,
+                        read=self.fuse_dispatch, pack_input=pack_input and self.fuse_dispatch, role="fc1")
         _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
-        self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows, write=True)
+        self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows, write=self.fuse_return)
+        if not self.fuse_return:
+            self._scatter_peer("local_values")
         self._barrier(1)
+
+    def _scatter_peer(self, destination, compile_only=False):
+        _peer(6, [self.packed_output, self.permutation, self.pointer_tables[destination], self.status, self.num_blocks],
+              [self.rows, self.h, self.chunk_tokens * self.k, self.size], compile_only)
+
+    def _stage_input(self, compile_only=False):
+        _peer(7, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
+              [self.rows, self.h, self.chunk_tokens, self.k, self.size], compile_only)
 
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
@@ -171,9 +204,10 @@ class PeerMoEPlan(NativeMoEPlan):
 
     @torch.no_grad()
     def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None):
+        self._validate(x, ids, scores, w1, w2, valid_tokens)
         _validate_accumulators(accumulators, w1, w2)
-        if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype:
-            raise ValueError("dy must match x")
+        if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():
+            raise ValueError("dy must be contiguous and match x")
         with self._execution():
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
@@ -192,11 +226,15 @@ class PeerMoEPlan(NativeMoEPlan):
                 _peer(4, [self.pointer_tables["local_dy"], self.permutation, self.packed_dy, self.status],
                       [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size])
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
-                self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.permutation, read=True, source="local_dy")
+                self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
+                                self.permutation if self.fuse_dispatch else self.identity_rows,
+                                read=self.fuse_dispatch, source="local_dy", role="dhidden")
                 _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
-                                write=True, destination="local_dx")
+                                write=self.fuse_return, destination="local_dx")
+                if not self.fuse_return:
+                    self._scatter_peer("local_dx")
                 self._barrier(start * 4 + 3)
                 _launch(6, [self.local_dx, scores, dx], dims + [0])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():

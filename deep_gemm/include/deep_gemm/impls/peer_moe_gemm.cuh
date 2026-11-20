@@ -32,10 +32,10 @@ namespace training {
 // into its shared-memory pipeline. Resolve each row through a peer pointer
 // table so that the GEMM itself performs the dispatch reads over ICN/fabric.
 template <typename SrcT, typename ACopyInst, typename TilerA,
-          uint32_t BLOCK_M, uint32_t BLOCK_K, uint32_t STRIDE_AM, bool Coherent, class TAsA>
+          uint32_t BLOCK_M, uint32_t BLOCK_K, uint32_t STRIDE_AM, class TAsA>
 __device__ __forceinline__ void copy_peer_A_to_tsm(
-        TAsA&& destination, const uint64_t* peers, uint32_t rows_per_rank,
-        const int* source_rows, uint32_t stage_offset, uint32_t shape_m, uint32_t thread_idx,
+        TAsA&& destination, const uint64_t* source_addresses, const uint64_t* peers,
+        uint32_t stage_offset, uint32_t thread_idx,
         void* packed_input, uint32_t packed_row_base, bool pack_input) {
     constexpr uint32_t TILE_M = cute::get<0>(TilerA{});
     constexpr uint32_t TILE_K = cute::get<1>(TilerA{});
@@ -47,17 +47,15 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
     if (tid_m < BLOCK_M) {
         CUTLASS_PRAGMA_UNROLL
         for (uint32_t mi = 0; mi < M_ITER; ++mi) {
-            const auto* row_ptr = source_rows + mi * TILE_M + tid_m;
-            // Persistent callers preload these indices once into shared memory.
-            const uint32_t row = Coherent ? *row_ptr : __ldg(row_ptr);
-            const bool valid = row < shape_m;
-            const uint32_t rank = valid ? row / rows_per_rank : 0;
-            const uint32_t local_row = valid ? row % rows_per_rank : 0;
-            const auto* source = reinterpret_cast<const SrcT*>(__ldg(peers + rank));
+            // Resolve peer ownership and the row's byte offset once per work
+            // tile, rather than repeating divisions during every K stage.
+            const uint64_t address = source_addresses[mi * TILE_M + tid_m];
+            const bool valid = address != 0;
+            const auto* source = reinterpret_cast<const SrcT*>(valid ? address : __ldg(peers));
             CUTLASS_PRAGMA_UNROLL
             for (uint32_t ki = 0; ki < K_ITER; ++ki) {
                 const auto* src = reinterpret_cast<const cutlass::uint128_t*>(source
-                    + uint64_t(local_row) * STRIDE_AM + ki * TILE_K + tid_k * VECTOR + stage_offset);
+                    + ki * TILE_K + tid_k * VECTOR + stage_offset);
                 auto* dst = reinterpret_cast<cutlass::uint128_t*>(cute::raw_pointer_cast(destination(_, mi, ki).data()));
                 ACopyInst::copy(*src, *dst, valid);
                 if (pack_input) {
@@ -233,13 +231,23 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       auto blk_coord_mnkl = make_coord(m_block_idx, n_block_idx, _, _1{});
       uint32_t blk_n_offset = n_block_idx * BLOCK_N;
       const int* blk_token_base = args.sorted_token_ids + deep_scheduler.cumsum_m_block_idx * BLOCK_M;
-      if constexpr (Coherent && PeerRead) {
-          __shared__ int32_t cached_source_rows[BLOCK_M];
+      const uint64_t* source_addresses = nullptr;
+      if constexpr (PeerRead) {
+          __shared__ uint64_t cached_source_addresses[BLOCK_M];
           __syncthreads();
-          for (int row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE)
-              cached_source_rows[row] = training::load_pipeline_metadata(blk_token_base + row);
+          for (int row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE) {
+              const uint32_t source_row = Coherent ? training::load_pipeline_metadata(blk_token_base + row)
+                                                    : __ldg(blk_token_base + row);
+              uint64_t address = 0;
+              if (source_row < shape_m) {
+                  const uint32_t rank = source_row / params.source_rows_per_rank;
+                  const uint32_t local_row = source_row % params.source_rows_per_rank;
+                  address = __ldg(params.source_peers + rank) + uint64_t(local_row) * STRIDE_AM * sizeof(SrcT);
+              }
+              cached_source_addresses[row] = address;
+          }
           __syncthreads();
-          blk_token_base = cached_source_rows;
+          source_addresses = cached_source_addresses;
       }
       // gmem_b in block
       SrcT* gmem_b = (SrcT*)args.b_ptr + deep_scheduler.curr_group_idx * STRIDE_BE;
@@ -254,9 +262,9 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       for (int k_pipe = 0; k_pipe < kNumStages; ++k_pipe) {
         if (k_tile_count > 0) {
           if constexpr (PeerRead) {
-              training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM, Coherent>(
-                  tAsA(_,_,_,k_pipe), params.source_peers, params.source_rows_per_rank,
-                  blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx,
+              training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
+                  tAsA(_,_,_,k_pipe), source_addresses, params.source_peers,
+                  BLOCK_K * k_tile_iter, thread_idx,
                   const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
           } else {
               copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
@@ -307,9 +315,9 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
           __syncthreads();
           if (k_tile_count > 0) {
             if constexpr (PeerRead) {
-                training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM, Coherent>(
-                    tAsA(_,_,_,smem_pipe_write), params.source_peers, params.source_rows_per_rank,
-                    blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx,
+                training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
+                    tAsA(_,_,_,smem_pipe_write), source_addresses, params.source_peers,
+                    BLOCK_K * k_tile_iter, thread_idx,
                     const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
             } else {
                 copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(

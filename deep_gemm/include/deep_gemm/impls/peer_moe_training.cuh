@@ -85,6 +85,44 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
         }
         peer_pointer<__ppu_bfloat16>(p, 2)[index] = __float2bfloat16(value);
+    } else if constexpr (Op == PeerOperation::PackActive) {
+        // Explicit dispatch control: stage only the current padded rows. Avoid
+        // making the unfused control pay for the worst-skew ring capacity.
+        // Peer pointers, permutation, output, status, work count.
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * 128;
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
+        } else for (int64_t position = index; position < rows * p.dim[1];
+                    position += int64_t(gridDim.x) * blockDim.x) {
+            const int route = peer_pointer<int32_t>(p, 1)[position / p.dim[1]];
+            __ppu_bfloat16 value = __float2bfloat16(0.f);
+            if (route >= 0) {
+                const int source_row = route / p.dim[3], owner = source_row / p.dim[2];
+                if (owner < p.dim[4]) {
+                    const auto* source = reinterpret_cast<const __ppu_bfloat16*>(peer_pointer<uint64_t>(p, 0)[owner]);
+                    value = source[int64_t(source_row % p.dim[2]) * p.dim[1] + position % p.dim[1]];
+                } else atomicOr(peer_pointer<int32_t>(p, 3), 2);
+            }
+            peer_pointer<__ppu_bfloat16>(p, 2)[position] = value;
+        }
+    } else if constexpr (Op == PeerOperation::Scatter) {
+        // Packed result, permutation, destination pointers, status, work count.
+        // dims: capacity, H, destination rows per rank, P.
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * 128;
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
+        } else for (int64_t position = index; position < rows * p.dim[1];
+                    position += int64_t(gridDim.x) * blockDim.x) {
+            const int route = peer_pointer<int32_t>(p, 1)[position / p.dim[1]];
+            if (route < 0) continue;
+            const int owner = route / p.dim[2];
+            if (owner >= p.dim[3]) {
+                atomicOr(peer_pointer<int32_t>(p, 3), 2);
+                continue;
+            }
+            auto* destination = reinterpret_cast<__ppu_bfloat16*>(peer_pointer<uint64_t>(p, 2)[owner]);
+            destination[int64_t(route % p.dim[2]) * p.dim[1] + position % p.dim[1]] = peer_pointer<__ppu_bfloat16>(p, 0)[position];
+        }
     } else if constexpr (Op == PeerOperation::Barrier) {
         // Peer signal pointer table, local signals, error flag.
         // dims: P, rank, timeout cycles, diagnostic tag. One resident CTA.

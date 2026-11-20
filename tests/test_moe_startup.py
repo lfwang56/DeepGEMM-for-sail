@@ -9,11 +9,13 @@ import torch
 import torch.distributed as dist
 
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan
+from moe_distributed_utils import destroy_training_process_group
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--peer", action="store_true")
+    parser.add_argument("--pointwise", action="store_true")
     options = parser.parse_args()
     rank = int(os.environ["RANK"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
@@ -24,7 +26,7 @@ def main():
     plan = plan_class(256, 128, 2, 2, 5, chunk_tokens=3, device=device, group=dist.group.WORLD)
     w1 = torch.zeros((2, 256, 256), device=device, dtype=torch.bfloat16)
     w2 = torch.zeros((2, 256, 128), device=device, dtype=torch.bfloat16)
-    method = "_prepare" if options.peer else "_prepare_local"
+    method = "_prepare_pointwise" if options.pointwise else "_prepare" if options.peer else "_prepare_local"
     target = getattr(plan, method)
 
     def fail(*_):
@@ -44,8 +46,9 @@ def main():
     dist.barrier()
     print(json.dumps({"case": "moe_startup_failure_agreement", "rank": rank,
                       "transport": plan.transport, "error_observed": True,
+                      "failure_stage": method,
                       "retry_after_fix_passed": True}), flush=True)
-    dist.destroy_process_group()
+    destroy_training_process_group()
 
 
 if __name__ == "__main__":

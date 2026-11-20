@@ -18,6 +18,8 @@ class PersistentMoEPlan(PeerMoEPlan):
     transport = "persistent_peer"
 
     def __init__(self, *args, num_ctas=None, maximize_ctas=False, **kwargs):
+        if not kwargs.get("fuse_dispatch", True) or not kwargs.get("fuse_return", True):
+            raise ValueError("persistent training always fuses dispatch and return")
         if kwargs.get("gemm_configs"):
             raise ValueError("persistent training currently uses a fixed native GEMM tile")
         super().__init__(*args, **kwargs)
@@ -78,6 +80,7 @@ class PersistentMoEPlan(PeerMoEPlan):
 
     @torch.no_grad()
     def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None):
+        self._validate(x, ids, scores, w1, w2, valid_tokens)
         _validate_accumulators(accumulators, w1, w2)
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():
             raise ValueError("dy must be contiguous and match x")

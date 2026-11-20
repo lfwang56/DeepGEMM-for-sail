@@ -12,6 +12,8 @@ enum class PeerOperation : int {
     BuildWorkInfo,
     Pack,
     Barrier,
+    Scatter,
+    PackActive,
 };
 
 struct PeerGemmParams {

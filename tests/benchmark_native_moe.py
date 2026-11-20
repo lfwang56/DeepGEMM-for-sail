@@ -7,16 +7,20 @@ step; wall time additionally includes host submission and synchronization.
 """
 
 import argparse
+from datetime import timedelta
 import gc
 import json
 import os
+import socket
 import statistics
 import time
 
 import torch
 import torch.distributed as dist
 
+import deep_gemm as dg
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan
+from moe_distributed_utils import destroy_training_process_group
 
 
 def sample_outputs(values):
@@ -27,6 +31,16 @@ def relative_rms(actual, expected):
     if not actual.numel():
         return 0.0
     return float((actual - expected).square().mean().sqrt() / expected.square().mean().sqrt().clamp_min(1e-12))
+
+
+class ConfiguredCollectivePlan(NativeMoEPlan):
+    """Benchmark control using explicit tiles in the existing nopad GEMMs."""
+
+    def _gemm(self, a, weight, output, name, prequantized=False):
+        bn, bk, wm, wn, stages = self.benchmark_gemm_config
+        configs = (dg.get_num_sms(), 128, bn, bk, wm, wn, stages, (0, 0, 0))
+        dg.m_grouped_bf16_gemm_nt_nopad(a, weight, output, self.group_ids,
+                                       m_rows=self.lengths, configs=configs)
 
 
 def main():
@@ -47,9 +61,21 @@ def main():
     parser.add_argument("--profile", action="store_true", help="Profiler API brackets only timed iterations")
     parser.add_argument("--topology", default="unspecified")
     parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
+    parser.add_argument("--collective-gemm-config", type=int, nargs=5,
+                        metavar=("BN", "BK", "WM", "WN", "STAGES"),
+                        help="Explicit BF16 nopad tiles for the collective control")
     parser.add_argument("--maximize-ctas", action="store_true")
     parser.add_argument("--m-schedule", choices=("nopad", "contiguous"), default="nopad")
+    parser.add_argument("--separate-fp8-quantization", action="store_true")
+    parser.add_argument("--fp8-ablation", action="store_true")
+    parser.add_argument("--peer-ablation", action="store_true")
     args = parser.parse_args()
+    if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
+        parser.error("explicit collective tiles require BF16 nopad compute")
+    if args.fp8_ablation and (args.backend != "collective" or args.compute != "fp8"):
+        parser.error("FP8 ablation requires --backend collective --compute fp8")
+    if args.peer_ablation and (args.backend not in ("peer", "both", "all") or args.compute != "bf16"):
+        parser.error("peer ablation requires a BF16 peer backend")
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
         raise ValueError("dimensions and iteration counts must be positive")
@@ -58,7 +84,7 @@ def main():
     torch.cuda.set_device(device)
     torch.set_num_threads(2)
     if size > 1:
-        dist.init_process_group("nccl", device_id=device)
+        dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=600))
     group = dist.group.WORLD if size > 1 else None
     torch.manual_seed(98231 + rank)
     h, i, e, k, t = args.hidden, args.intermediate, args.local_experts, args.topk, args.tokens
@@ -78,21 +104,37 @@ def main():
     stream.wait_stream(torch.cuda.current_stream())
     backends = (("collective", "peer", "persistent") if args.backend == "all" else
                 ("collective", "peer") if args.backend == "both" else (args.backend,))
+    experiments = []
+    for backend in backends:
+        if args.fp8_ablation:
+            experiments.extend((backend, {"fuse_activation_quant": fused}) for fused in (False, True))
+        elif backend == "peer" and args.peer_ablation:
+            experiments.extend((backend, {"fuse_dispatch": dispatch, "fuse_return": returned})
+                               for dispatch, returned in ((False, False), (False, True), (True, False), (True, True)))
+        else:
+            experiments.append((backend, {}))
     reference_samples = None
     with torch.cuda.stream(stream):
-        for backend in backends:
+        for backend, controls in experiments:
             graph = None
             if group is not None: dist.barrier(group=group)
             torch.cuda.synchronize(device)
             initial_memory = torch.cuda.memory_allocated(device)
             torch.cuda.reset_peak_memory_stats(device)
             plan_class = PersistentMoEPlan if backend == "persistent" else PeerMoEPlan if backend == "peer" else NativeMoEPlan
+            if backend == "collective" and args.collective_gemm_config:
+                plan_class = ConfiguredCollectivePlan
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
             options = options if backend == "peer" and args.gemm_config else {}
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
-            if backend == "collective": options = {"m_schedule": args.m_schedule}
+            if backend == "collective":
+                options = {"m_schedule": args.m_schedule,
+                           "fuse_activation_quant": not args.separate_fp8_quantization}
+            options.update(controls)
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
+            if isinstance(plan, ConfiguredCollectivePlan):
+                plan.benchmark_gemm_config = args.collective_gemm_config
 
             def step():
                 plan.reset_errors()
@@ -147,11 +189,18 @@ def main():
             if rank == 0:
                 print(json.dumps({
                     "case": "bounded_training_benchmark", "backend": backend, "compute": args.compute,
+                    "host": socket.gethostname(), "device": torch.cuda.get_device_name(device),
+                    "torch": torch.__version__,
                     "ep_size": size, "topology": args.topology, "graph": not args.eager,
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
                     "collective_m_schedule": plan.m_schedule if backend == "collective" else None,
+                    "collective_gemm_config": args.collective_gemm_config if backend == "collective" else None,
+                    "fused_activation_quantization": (plan.fuse_activation_quant
+                                                       if backend == "collective" and args.compute == "fp8" else None),
+                    "peer_fuse_dispatch": getattr(plan, "fuse_dispatch", None),
+                    "peer_fuse_return": getattr(plan, "fuse_return", None),
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,
@@ -171,8 +220,7 @@ def main():
             gc.collect()
             torch.cuda.synchronize(device)
     if group is not None:
-        dist.barrier(group=group)
-        dist.destroy_process_group()
+        destroy_training_process_group()
 
 
 if __name__ == "__main__":

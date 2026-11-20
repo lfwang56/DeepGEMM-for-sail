@@ -1,4 +1,4 @@
-"""Experimental BF16 MoE training on PPU; see docs/moe_training.md."""
+"""BF16 and blockwise FP8 MoE training on PPU; see docs/moe_training.md."""
 
 from .bf16 import MoEContext, bf16_moe, bf16_moe_backward, bf16_moe_forward
 from .native import NativeMoEPlan, native_moe
