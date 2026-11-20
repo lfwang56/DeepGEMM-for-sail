@@ -43,22 +43,22 @@ __device__ __forceinline__ void pipeline_zero(const PipelineParams& s, PipelineB
 }
 
 __device__ __forceinline__ bool pipeline_grid_barrier(const PipelineParams& s, uint32_t& sequence) {
-    auto* signals = pipeline_pointer<int32_t>(s, GridSync);
-    auto* status = pipeline_pointer<int32_t>(s, Status);
+    auto* signals = pipeline_pointer<uint32_t>(s, GridSync);
+    auto* status = pipeline_pointer<uint32_t>(s, Status);
     const uint32_t phase = sequence & 1u, sign = (sequence >> 1) & 1u;
     __shared__ int failed;
     __syncthreads();
     if (threadIdx.x == 0) {
-        tix::red_add_rel_sys(signals + phase, sign ? -1 : 1);
-        const int target = sign ? 0 : gridDim.x;
+        tix::red_add_rel(signals + phase, sign ? uint32_t(-1) : 1u);
+        const uint32_t target = sign ? 0 : gridDim.x;
         const uint64_t begin = clock64();
-        while (tix::ld_acq_sys(signals + phase) != target) {
-            if ((tix::ld_acq_sys(status) & 8) || clock64() - begin > s.timeout_cycles) {
-                atomicOr(status, 8);
+        while (tix::ld_acq(signals + phase) != target) {
+            if ((tix::ld_acq(status) & 8) || clock64() - begin > s.timeout_cycles) {
+                atomicOr(status, 8u);
                 break;
             }
         }
-        failed = (tix::ld_acq_sys(status) & 8) != 0;
+        failed = (tix::ld_acq(status) & 8) != 0;
     }
     __syncthreads();
     ++sequence;
@@ -112,10 +112,10 @@ __device__ __forceinline__ void pipeline_wgrad(const PipelineParams& s,
 template <int H, int I, int E, int K, int P, int C, bool Backward>
 __device__ __forceinline__ void run_training_pipeline(const PipelineParams s) {
     static_assert(H % 256 == 0 && I % 128 == 0 && P <= 64);
-    auto* status = pipeline_pointer<int32_t>(s, Status);
-    auto* grid_state = pipeline_pointer<int32_t>(s, GridSync);
-    uint32_t sequence = uint32_t(tix::ld_acq_sys(grid_state + 2));
-    if (tix::ld_acq_sys(status) & 8) return;
+    auto* status = pipeline_pointer<uint32_t>(s, Status);
+    auto* grid_state = pipeline_pointer<uint32_t>(s, GridSync);
+    uint32_t sequence = tix::ld_acq(grid_state + 2);
+    if (tix::ld_acq(status) & 8) return;
     constexpr int64_t R = int64_t(P) * C * K;
     const int64_t rows = s.rows;
     const auto blocks = [](int64_t elements) { return (elements + 127) / 128; };
@@ -143,7 +143,7 @@ __device__ __forceinline__ void run_training_pipeline(const PipelineParams s) {
         DG_TRAINING_GRID_SYNC();
         pipeline_gemm<2 * I, H, E, P, C, K, true, false>(s, PackedX, W1, GateUp, SourceRows, XPeers, YPeers, Backward);
         DG_TRAINING_GRID_SYNC();
-        const int active_rows = tix::ld_acq_sys(pipeline_pointer<int32_t>(s, Offsets) + E);
+        const int active_rows = load_pipeline_metadata(pipeline_pointer<int32_t>(s, Offsets) + E);
         pipeline_op<Operation::Activation, GateUp, Hidden>(s, blocks(int64_t(active_rows) * I), active_rows, I);
         DG_TRAINING_GRID_SYNC();
         pipeline_gemm<H, I, E, P, C, K, false, true>(s, Hidden, W2, PackedDY, IdentityRows, XPeers, YPeers);
@@ -180,7 +180,7 @@ __device__ __forceinline__ void run_training_pipeline(const PipelineParams s) {
         DG_TRAINING_GRID_SYNC();
     }
 #undef DG_TRAINING_GRID_SYNC
-    if (blockIdx.x == 0 && threadIdx.x == 0) grid_state[2] = int32_t(sequence);
+    if (blockIdx.x == 0 && threadIdx.x == 0) grid_state[2] = sequence;
 }
 
 }  // namespace deep_gemm::training

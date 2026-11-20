@@ -48,7 +48,7 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
         CUTLASS_PRAGMA_UNROLL
         for (uint32_t mi = 0; mi < M_ITER; ++mi) {
             const auto* row_ptr = source_rows + mi * TILE_M + tid_m;
-            const uint32_t row = Coherent ? tix::ld_acq_sys(row_ptr) : __ldg(row_ptr);
+            const uint32_t row = Coherent ? load_pipeline_metadata(row_ptr) : __ldg(row_ptr);
             const bool valid = row < shape_m;
             const uint32_t rank = valid ? row / rows_per_rank : 0;
             const uint32_t local_row = valid ? row % rows_per_rank : 0;
@@ -85,7 +85,7 @@ __device__ __forceinline__ void scatter_peer_output(
             const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
             if (row >= valid_rows) continue;
             const auto* route_ptr = params.permutation + row_base + row;
-            const int route = Coherent ? tix::ld_acq_sys(route_ptr) : __ldg(route_ptr);
+            const int route = Coherent ? load_pipeline_metadata(route_ptr) : __ldg(route_ptr);
             if (route < 0) continue;
             const uint32_t rank = uint32_t(route) / params.destination_rows_per_rank;
             if (rank >= params.num_ranks) continue;
