@@ -32,13 +32,15 @@ class NativeMoEPlan:
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  chunk_tokens=128, compute="bf16", group=None, device=None,
-                 check_errors=True):
+                 check_errors=True, m_schedule="nopad"):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or max_tokens < 0:
             raise ValueError("invalid expert, top-k or token capacity")
         if compute not in ("bf16", "fp8"):
             raise ValueError("compute must be 'bf16' or 'fp8'")
+        if m_schedule not in ("nopad", "contiguous"):
+            raise ValueError("m_schedule must be 'nopad' or 'contiguous'")
         self.device = torch.device("cuda", torch.cuda.current_device()) if device is None else torch.device(device)
         if self.device.type != "cuda":
             raise ValueError("NativeMoEPlan requires a PPU/CUDA device")
@@ -52,6 +54,7 @@ class NativeMoEPlan:
         self.h, self.i, self.e, self.k = hidden, intermediate, local_experts, topk
         self.max_tokens, self.chunk_tokens = max_tokens, chunk_tokens
         self.compute, self.check_errors = compute, check_errors
+        self.m_schedule = m_schedule
         self.alignment = math.lcm(128, dg.get_m_alignment_for_contiguous_layout())
         self.routes = self.size * chunk_tokens * topk
         # Sum ceil(count_e/alignment)*alignment <= routes + E*(alignment-1).
@@ -59,7 +62,8 @@ class NativeMoEPlan:
         if self.rows > 2**31 - 1 or self.routes > 2**31 - 1:
             raise ValueError("native route capacity exceeds int32 metadata")
         if group is not None:
-            description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens, compute, self.transport)
+            description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
+                           compute, self.transport, m_schedule)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -237,15 +241,27 @@ class NativeMoEPlan:
         torch.cuda.synchronize(self.device)
 
     def _gemm(self, a, weight, output, name, prequantized=False):
+        # The physical ring covers the worst routing skew. GPU lengths select
+        # only current expert rows; unused trailing capacity needs no GEMM work.
+        # Keep the original contiguous schedule as an explicit benchmark control.
         if self.compute == "bf16":
-            dg.m_grouped_bf16_gemm_nt_contiguous(a, weight, output, self.group_ids)
+            if self.m_schedule == "nopad":
+                dg.m_grouped_bf16_gemm_nt_nopad(a, weight, output, self.group_ids, m_rows=self.lengths)
+            else:
+                dg.m_grouped_bf16_gemm_nt_contiguous(a, weight, output, self.group_ids)
         else:
             quantized_a = self.quantized[a.shape[1]]
             if not prequantized:
                 _launch(9, [a, *quantized_a], list(a.shape))
-            dg.m_grouped_fp8_gemm_nt_contiguous(
-                quantized_a, self.quantized[name], output, self.group_ids, disable_ue8m0_cast=True,
-            )
+            if self.m_schedule == "nopad":
+                dg.m_grouped_fp8_gemm_nt_nopad(
+                    quantized_a, self.quantized[name], output, self.group_ids,
+                    m_rows=self.lengths, disable_ue8m0_cast=True,
+                )
+            else:
+                dg.m_grouped_fp8_gemm_nt_contiguous(
+                    quantized_a, self.quantized[name], output, self.group_ids, disable_ue8m0_cast=True,
+                )
 
     def _route_chunk(self, x, ids, valid_tokens, start):
         t, c, h, k = x.shape[0], self.chunk_tokens, self.h, self.k

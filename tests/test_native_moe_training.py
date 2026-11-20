@@ -107,6 +107,21 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(a.workspace_bytes, b.workspace_bytes)
         self.assertEqual(a.activation_workspace_bytes, b.activation_workspace_bytes)
 
+    def test_many_experts_device_schedule(self):
+        if self.plan_class is not NativeMoEPlan:
+            self.skipTest("checks the collective GEMM scheduler's >=128-expert path")
+        x, ids, scores, _, _, dy = self.inputs()
+        generator = torch.Generator().manual_seed(40501)
+        experts = 129
+        w1 = (torch.randn(experts, 256, 256, generator=generator) * 0.1).bfloat16().cuda().requires_grad_()
+        w2 = (torch.randn(experts, 256, 128, generator=generator) * 0.1).bfloat16().cuda().requires_grad_()
+        ids.copy_(torch.tensor([[0, 128], [64, -1], [128, 0], [0, 64],
+                               [128, 128], [-1, -1], [64, 0]], device="cuda"))
+        plan = self.plan_class(256, 128, experts, 2, 7, chunk_tokens=3, compute=self.compute)
+        y = native_moe(x, ids, scores, w1, w2, plan=plan)
+        y.backward(dy)
+        check((y, x.grad, w1.grad, w2.grad, scores.grad), expected(x, ids, scores, w1, w2, dy), self.compute)
+
     def test_sticky_graph_errors(self):
         x, ids, scores, w1, w2, _ = self.inputs()
         plan = self.plan(check_errors=False)

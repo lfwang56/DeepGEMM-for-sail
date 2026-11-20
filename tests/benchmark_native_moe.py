@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--topology", default="unspecified")
     parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
     parser.add_argument("--maximize-ctas", action="store_true")
+    parser.add_argument("--m-schedule", choices=("nopad", "contiguous"), default="nopad")
     args = parser.parse_args()
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
@@ -89,6 +90,7 @@ def main():
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
             options = options if backend == "peer" and args.gemm_config else {}
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
+            if backend == "collective": options = {"m_schedule": args.m_schedule}
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
 
@@ -149,6 +151,7 @@ def main():
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
+                    "collective_m_schedule": plan.m_schedule if backend == "collective" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,
