@@ -48,7 +48,8 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
         CUTLASS_PRAGMA_UNROLL
         for (uint32_t mi = 0; mi < M_ITER; ++mi) {
             const auto* row_ptr = source_rows + mi * TILE_M + tid_m;
-            const uint32_t row = Coherent ? load_pipeline_metadata(row_ptr) : __ldg(row_ptr);
+            // Persistent callers preload these indices once into shared memory.
+            const uint32_t row = Coherent ? *row_ptr : __ldg(row_ptr);
             const bool valid = row < shape_m;
             const uint32_t rank = valid ? row / rows_per_rank : 0;
             const uint32_t local_row = valid ? row % rows_per_rank : 0;
@@ -232,6 +233,14 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       auto blk_coord_mnkl = make_coord(m_block_idx, n_block_idx, _, _1{});
       uint32_t blk_n_offset = n_block_idx * BLOCK_N;
       const int* blk_token_base = args.sorted_token_ids + deep_scheduler.cumsum_m_block_idx * BLOCK_M;
+      if constexpr (Coherent && PeerRead) {
+          __shared__ int32_t cached_source_rows[BLOCK_M];
+          __syncthreads();
+          for (int row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE)
+              cached_source_rows[row] = training::load_pipeline_metadata(blk_token_base + row);
+          __syncthreads();
+          blk_token_base = cached_source_rows;
+      }
       // gmem_b in block
       SrcT* gmem_b = (SrcT*)args.b_ptr + deep_scheduler.curr_group_idx * STRIDE_BE;
       Tensor mB_nk = cute::make_tensor(cute::make_gmem_ptr(gmem_b), shape_B, stride_B);
