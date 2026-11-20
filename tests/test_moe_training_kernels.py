@@ -53,6 +53,35 @@ class KernelTests(unittest.TestCase):
             torch.testing.assert_close(qs[group].cpu(), expected_scales, rtol=1e-6, atol=0)
             torch.testing.assert_close(qo[group].float().cpu(), expected.float(), rtol=0.07, atol=0.002)
 
+    def test_activation_quantization_fusion(self):
+        for intermediate in (128, 256):
+            rows = 5
+            gu = torch.randn(rows, 2 * intermediate).bfloat16().cuda()
+            dh = torch.randn(rows, intermediate).bfloat16().cuda()
+            gu[0].zero_()
+            gu[1].mul_(16)
+            gu[2].mul_(0.001)
+            dh[3].zero_()
+            hidden = torch.empty_like(dh)
+            gradient = torch.empty_like(gu)
+            launch(7, [gu, hidden], [rows, intermediate])
+            launch(8, [gu, dh, gradient], [rows, intermediate])
+            for backward, expected in ((False, hidden), (True, gradient)):
+                width = expected.shape[1]
+                reference_q = torch.empty_like(expected, dtype=torch.float8_e4m3fn)
+                reference_s = torch.empty((rows, width // 128), device="cuda")
+                launch(9, [expected, reference_q, reference_s], [rows, width])
+                q, scales = torch.empty_like(reference_q), torch.empty_like(reference_s)
+                if backward:
+                    output = gu.clone()
+                    launch(15, [output, dh, output, q, scales], [rows, intermediate])
+                else:
+                    output = torch.empty_like(hidden)
+                    launch(14, [gu, output, q, scales], [rows, intermediate])
+                torch.testing.assert_close(output, expected, rtol=0, atol=0)
+                torch.testing.assert_close(q.view(torch.uint8), reference_q.view(torch.uint8), rtol=0, atol=0)
+                torch.testing.assert_close(scales, reference_s, rtol=0, atol=0)
+
     def test_route_pack_and_inverse(self):
         routes, hidden, topk, experts = 20, 256, 2, 3
         ids_cpu = torch.tensor([0, 1, 0, 4, -1, 5, 2, 2, 3, 0, 1, 1, 4, 5, 0, -1, 2, 0, 5, 9])

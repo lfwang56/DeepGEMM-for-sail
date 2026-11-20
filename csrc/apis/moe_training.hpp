@@ -39,7 +39,7 @@ __global__ void moe_training_{}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ReadChunk));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantize));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -125,6 +125,20 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(2, dims[0] * (dims[1] / 128), fp);
             blocks = (dims[0] * (dims[1] / 128) + 7) / 8;
             break;
+        case Operation::ActivationQuantize:
+        case Operation::ActivationBackwardQuantize: {
+            const bool backward = static_cast<Operation>(operation) == Operation::ActivationBackwardQuantize;
+            schema(backward ? 5 : 4, 2);
+            const auto m = dims[0], width = dims[1];
+            DG_HOST_ASSERT(width > 0 && width % 128 == 0);
+            expect(0, m * 2 * width, bf); expect(1, m * width, bf);
+            if (backward) expect(2, m * 2 * width, bf);
+            const auto output_width = backward ? 2 * width : width;
+            expect(backward ? 3 : 2, m * output_width, f8);
+            expect(backward ? 4 : 3, m * (output_width / 128), fp);
+            blocks = (m * (width / 128) + 7) / 8;
+            break;
+        }
         case Operation::QuantizeWeights:
             schema(3, 3);
             DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[2] > 0);

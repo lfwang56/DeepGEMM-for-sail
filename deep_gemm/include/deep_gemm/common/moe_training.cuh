@@ -26,6 +26,8 @@ enum class Operation : int {
     WeightedGradient,
     ScoreGradient,
     ReadChunk,
+    ActivationQuantize,
+    ActivationBackwardQuantize,
 };
 
 }  // namespace deep_gemm::training

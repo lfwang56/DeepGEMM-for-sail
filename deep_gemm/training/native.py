@@ -227,18 +227,22 @@ class NativeMoEPlan:
         self._gemm(self.hidden, w2, self.packed_output, "w2")
         self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
         self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
+        if self.compute == "fp8":
+            _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
+            _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
         dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x,
                                        torch.zeros_like(w1, dtype=torch.float32), self.lengths, self.rows)
         dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden,
                                        torch.zeros_like(w2, dtype=torch.float32), self.lengths, self.rows)
         torch.cuda.synchronize(self.device)
 
-    def _gemm(self, a, weight, output, name):
+    def _gemm(self, a, weight, output, name, prequantized=False):
         if self.compute == "bf16":
             dg.m_grouped_bf16_gemm_nt_contiguous(a, weight, output, self.group_ids)
         else:
             quantized_a = self.quantized[a.shape[1]]
-            _launch(9, [a, *quantized_a], list(a.shape))
+            if not prequantized:
+                _launch(9, [a, *quantized_a], list(a.shape))
             dg.m_grouped_fp8_gemm_nt_contiguous(
                 quantized_a, self.quantized[name], output, self.group_ids, disable_ue8m0_cast=True,
             )
@@ -259,8 +263,11 @@ class NativeMoEPlan:
 
     def _chunk_forward(self, w1, w2):
         self._gemm(self.packed_x, w1, self.gate_up, "w1")
-        _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
-        self._gemm(self.hidden, w2, self.packed_output, "w2")
+        if self.compute == "fp8":
+            _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
+        else:
+            _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
+        self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=self.compute == "fp8")
         self._scatter_output()
 
     def _scatter_output(self):
@@ -313,9 +320,12 @@ class NativeMoEPlan:
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
                 # Reuse activation buffers only after their wgrad readers.
                 self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
-                _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
+                if self.compute == "fp8":
+                    _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
+                else:
+                    _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
-                self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
+                self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t", prequantized=self.compute == "fp8")
                 self._scatter_output()
                 _launch(6, [self.local_values, scores, dx], dims + [0])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():

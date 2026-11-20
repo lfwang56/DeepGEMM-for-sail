@@ -146,6 +146,56 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
             pointer<Bf16>(p, 2)[offset] = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
             pointer<Bf16>(p, 2)[offset + p.dim[1]] = __float2bfloat16(dh * silu);
         }
+    } else if constexpr (Op == Operation::ActivationQuantize || Op == Operation::ActivationBackwardQuantize) {
+        // Preserve the BF16 activation/gradient rounding boundary for wgrad,
+        // then immediately quantize those same values for the next FP8 GEMM.
+        constexpr bool backward = Op == Operation::ActivationBackwardQuantize;
+        const int64_t group = block_index * (blockDim.x / 32) + warp;
+        const int64_t segments = p.dim[1] / 128;
+        if (group >= p.dim[0] * segments) return;
+        const int64_t row = group / segments, segment = group % segments;
+        const int64_t input_base = row * 2 * p.dim[1] + segment * 128;
+        const int64_t output_base = row * (backward ? 2 : 1) * p.dim[1] + segment * 128;
+        float first[4], second[4], maximum_first = 0.f, maximum_second = 0.f;
+        #pragma unroll
+        for (int element = 0; element < 4; ++element) {
+            const int column = lane * 2 + (element / 2) * 64 + element % 2;
+            const float gate = __bfloat162float(pointer<Bf16>(p, 0)[input_base + column]);
+            const float up = __bfloat162float(pointer<Bf16>(p, 0)[input_base + column + p.dim[1]]);
+            const float sigmoid = 1.f / (1.f + expf(-gate));
+            const float silu = gate * sigmoid;
+            if constexpr (backward) {
+                const float dh = __bfloat162float(pointer<Bf16>(p, 1)[row * p.dim[1] + segment * 128 + column]);
+                const Bf16 dg = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
+                const Bf16 du = __float2bfloat16(dh * silu);
+                pointer<Bf16>(p, 2)[output_base + column] = dg;
+                pointer<Bf16>(p, 2)[output_base + column + p.dim[1]] = du;
+                first[element] = __bfloat162float(dg);
+                second[element] = __bfloat162float(du);
+                maximum_second = fmaxf(maximum_second, fabsf(second[element]));
+            } else {
+                const Bf16 hidden = __float2bfloat16(silu * up);
+                pointer<Bf16>(p, 1)[output_base + column] = hidden;
+                first[element] = __bfloat162float(hidden);
+            }
+            maximum_first = fmaxf(maximum_first, fabsf(first[element]));
+        }
+        const float scale_first = fmaxf(warp_max(maximum_first), 1e-4f) / 448.f;
+        auto* quantized = pointer<uint16_t>(p, backward ? 3 : 2);
+        auto* scales = pointer<float>(p, backward ? 4 : 3);
+        if (lane == 0) scales[output_base / 128] = scale_first;
+        #pragma unroll
+        for (int pair = 0; pair < 2; ++pair)
+            quantized[output_base / 2 + lane + pair * 32] = epilogue::quant::fp8_pair(
+                first[2 * pair] / scale_first, first[2 * pair + 1] / scale_first);
+        if constexpr (backward) {
+            const float scale_second = fmaxf(warp_max(maximum_second), 1e-4f) / 448.f;
+            if (lane == 0) scales[(output_base + p.dim[1]) / 128] = scale_second;
+            #pragma unroll
+            for (int pair = 0; pair < 2; ++pair)
+                quantized[(output_base + p.dim[1]) / 2 + lane + pair * 32] = epilogue::quant::fp8_pair(
+                    second[2 * pair] / scale_second, second[2 * pair + 1] / scale_second);
+        }
     } else if constexpr (Op == Operation::QuantizeRows) {
         // BF16 matrix, E4M3 matrix, FP32 scales. dims: rows, K (128 aligned).
         const int64_t group = block_index * (blockDim.x / 32) + warp;
