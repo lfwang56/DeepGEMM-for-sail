@@ -28,6 +28,8 @@ class NativeMoEPlan:
     holds one chunk, independent of max_tokens and the number of pending layers.
     """
 
+    transport = "collective"
+
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  chunk_tokens=128, compute="bf16", group=None, device=None,
                  check_errors=True):
@@ -57,7 +59,7 @@ class NativeMoEPlan:
         if self.rows > 2**31 - 1 or self.routes > 2**31 - 1:
             raise ValueError("native route capacity exceeds int32 metadata")
         if group is not None:
-            description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens, compute)
+            description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens, compute, self.transport)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -133,7 +135,12 @@ class NativeMoEPlan:
             if status & 1: errors.append("expert ID outside [-1, global_experts)")
             if status & 2: errors.append("route workspace capacity exceeded")
             if status & 4: errors.append("valid_tokens outside input capacity")
+            if status & 8: errors.append("peer synchronization timed out")
             raise RuntimeError("native MoE: " + "; ".join(errors))
+
+    def reset_errors(self):
+        """Clear sticky validation flags once at a captured iteration boundary."""
+        self.status.zero_()
 
     def _validate(self, x, ids, scores, w1, w2, valid_tokens):
         if x.ndim != 2 or x.shape[1] != self.h or x.shape[0] > self.max_tokens:
@@ -215,7 +222,8 @@ class NativeMoEPlan:
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         with self._execution():
-            self.status.zero_()
+            if self.check_errors and not torch.cuda.is_current_stream_capturing():
+                self.reset_errors()
             self._prepare_weights(w1, w2)
             output = torch.empty_like(x)
             for start in range(0, self.max_tokens, self.chunk_tokens):
@@ -235,7 +243,8 @@ class NativeMoEPlan:
         if dy.shape != x.shape or dy.dtype != x.dtype or dy.device != x.device:
             raise ValueError("dy must match x")
         with self._execution():
-            self.status.zero_()
+            if self.check_errors and not torch.cuda.is_current_stream_capturing():
+                self.reset_errors()
             self._prepare_weights(w1, w2, backward=True)
             dx, dscores = torch.empty_like(x), torch.empty_like(scores)
             dw1, dw2 = ((torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
@@ -268,7 +277,9 @@ class _NativeMoE(torch.autograd.Function):
         from .bf16 import _validate_accumulators
 
         _validate_accumulators(accumulators, w1, w2)
-        output = plan.forward(x, ids, scores, w1, w2, valid_tokens)
+        if any(weight.dtype not in (torch.bfloat16, torch.float32) for weight in (w1, w2)):
+            raise TypeError("expert weights must be BF16 or FP32 master parameters")
+        output = plan.forward(x, ids, scores, w1.to(torch.bfloat16), w2.to(torch.bfloat16), valid_tokens)
         ctx.save_for_backward(x, ids, scores, w1, w2, valid_tokens)
         ctx.plan, ctx.accumulators = plan, accumulators
         return output
@@ -278,7 +289,7 @@ class _NativeMoE(torch.autograd.Function):
     def backward(ctx, dy):
         x, ids, scores, w1, w2, valid_tokens = ctx.saved_tensors
         dx, dw1, dw2, dscores = ctx.plan.backward(
-            dy.contiguous(), x, ids, scores, w1, w2, valid_tokens, ctx.accumulators,
+            dy.contiguous(), x, ids, scores, w1.to(torch.bfloat16), w2.to(torch.bfloat16), valid_tokens, ctx.accumulators,
         )
         if ctx.accumulators is not None:
             dw1 = dw2 = None
@@ -290,7 +301,8 @@ class _NativeMoE(torch.autograd.Function):
 def native_moe(x, expert_ids, scores, w1, w2, *, plan, valid_tokens=None, weight_grad_accumulators=None):
     """Routed SwiGLU training using GPU schedules and bounded replay storage.
 
-    Parameters/input are BF16 and scores FP32. IDs may be int32 or int64; masked
+    Input is BF16, parameters BF16 or FP32 masters, and scores FP32. FP32 masters
+    are cast for compute and receive FP32 wgrad directly. IDs may be int32/int64; masked
     slots use -1. valid_tokens is an optional int32 device scalar for dynamic
     padding within a captured input shape. After graph replay, call plan.check()
     outside capture to inspect invalid-route/capacity errors.
@@ -300,6 +312,8 @@ def native_moe(x, expert_ids, scores, w1, w2, *, plan, valid_tokens=None, weight
     if expert_ids.dtype not in (torch.int32, torch.int64):
         raise TypeError("expert IDs must be int32 or int64")
     if valid_tokens is None:
-        valid_tokens = torch.tensor(x.shape[0], device=x.device, dtype=torch.int32)
+        # A device fill is capturable; torch.tensor(host_scalar, device=...)
+        # performs a host-to-device transfer which the runtime rejects in capture.
+        valid_tokens = torch.full((), x.shape[0], device=x.device, dtype=torch.int32)
     return _NativeMoE.apply(x, expert_ids.to(torch.int64), scores, w1, w2,
                             valid_tokens, plan, weight_grad_accumulators)

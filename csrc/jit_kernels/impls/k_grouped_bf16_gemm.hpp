@@ -132,7 +132,11 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
         dg_prof_params.set_k_grouped_params(m, n, sum_k, ks_cpu,
                                            c->data_ptr() != d.data_ptr(), current_stream());
     }
-    {
+    if (device_lengths) {
+        // The internal profiler's CPU K list cannot describe a dynamic device
+        // layout. External profilers still observe the actual kernel normally.
+        Bf16KGroupedRuntime::launch(runtime, args);
+    } else {
         auto profiling_guard = deep_gemm::show_gemm_ut(dg_prof_params);
         Bf16KGroupedRuntime::launch(runtime, args);
     }
