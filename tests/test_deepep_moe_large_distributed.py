@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--topk", type=int, default=10)
     parser.add_argument("--tokens", type=int, default=19)
     parser.add_argument("--chunk-tokens", type=int, default=256)
+    parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--comm-sms", type=int, default=38)
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
@@ -84,7 +85,7 @@ def main():
     w2 = (torch.randn(e, h, i, generator=weight_rng) * .02).bfloat16().to(device)
     if args.gate_up_layout == "g8":
         w1 = to_g8_weight(w1)
-    configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
+    configs = {role: tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     plan_options = (dict(comm_sms=args.comm_sms) if args.backend == "deepep" else
                     dict(dag_fusion=args.dag_fusion, dag_backward=args.dag_backward,
                          dag_direct_return=args.dag_direct_return,
@@ -169,7 +170,7 @@ def main():
             ring_rows=args.ring_rows, packed_ring_rows=plan.rows,
             block_m=plan.block_m,
             route_window_count=plan.route_window_count,
-            backend=args.backend, gate_up_layout=args.gate_up_layout,
+            backend=args.backend, gemm_config=args.gemm_config, gate_up_layout=args.gate_up_layout,
             dag_fusion=args.dag_fusion, dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return,
             input_copy_ilp=args.input_copy_ilp if args.backend == "peer" else None,
             inline_dispatch=getattr(plan, "inline_dispatch", None),

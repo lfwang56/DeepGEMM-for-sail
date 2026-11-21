@@ -30,6 +30,7 @@ parser.add_argument('--input-assist-ablation', type=int)
 parser.add_argument('--input-external', action='store_true')
 parser.add_argument('--input-external-serial', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
+parser.add_argument('--gemm-geometry-ablation', type=int, nargs=5)
 args = parser.parse_args()
 if args.dag_backward_only:
     args.dag_ablation = args.dag_backward = True
@@ -50,7 +51,7 @@ dy = (torch.randn_like(x) * .1).bfloat16()
 w1 = (torch.randn(e, 2*i, h, device='cuda') * .02).bfloat16()
 w2 = (torch.randn(e, h, i, device='cuda') * .02).bfloat16()
 if (args.fc1_activation_ablation or args.dag_g8 or args.input_copy_ilp_ablation
-        or args.wgrad_overlap_ablation or args.dy_prefetch_ablation or args.input_assist_ablation is not None):
+        or args.wgrad_overlap_ablation or args.dy_prefetch_ablation or args.input_assist_ablation is not None or args.gemm_geometry_ablation):
     w1 = to_g8_weight(w1)
 ids = torch.randn(t, e, device='cuda').topk(k, -1).indices.contiguous()
 original_ids = ids.clone()
@@ -130,9 +131,14 @@ with torch.cuda.stream(stream):
                            producer_local_aiu=not cache, inline_dispatch=cache and not args.input_external,
                            dispatch_external=cache and args.input_external,
                            dispatch_external_serial=cache and args.input_external_serial, dispatch_assist_ctas=args.input_assist_ablation if cache else 0)
+        if args.gemm_geometry_ablation:
+            options = dict(expert_local_grad=True, ring_rows=1024, block_m=256,
+                           gate_up_layout='g8', fuse_fc1_activation=True, input_copy_ilp=8,
+                           dispatch_producer=True, producer_input_aiu=True, producer_local_aiu=True)
+        config = tuple(args.gemm_geometry_ablation) if cache and args.gemm_geometry_ablation else (256,64,64,64,2)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
-                          gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
+                          gemm_configs={role:config for role in ('fc1','fc2','dhidden','dx')}, **options)
         plans.append(plan)
         accumulators = (torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
 
@@ -180,7 +186,8 @@ with torch.cuda.stream(stream):
                            else (('dw1',2),('dw2',3))):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        case = ('input_assist_graph_equivalence' if args.input_assist_ablation is not None else
+        case = ('gemm_geometry_graph_equivalence' if args.gemm_geometry_ablation else
+                'input_assist_graph_equivalence' if args.input_assist_ablation is not None else
                 'dy_prefetch_graph_equivalence' if args.dy_prefetch_ablation else
                 'wgrad_stream_graph_equivalence' if args.wgrad_overlap_ablation else
                 'input_copy_ilp_graph_equivalence' if args.input_copy_ilp_ablation else
@@ -191,7 +198,7 @@ with torch.cuda.stream(stream):
                 'routed_row_window_graph_equivalence' if args.ring_rows_ablation is not None else
                 'expert_grad_graph_equivalence' if args.expert_local_grad_ablation else
                 'ffn_graph_equivalence' if args.ffn_fusion_ablation else 'return_cache_graph_equivalence')
-        print(json.dumps({'case':case,'pattern':pattern,
+        print(json.dumps({'case':case,'pattern':pattern,'gemm_geometry':args.gemm_geometry_ablation,
                           'dag_shared_pool':args.dag_shared_pool,
                           'modes':[dict(forward_dag=p.dag_fusion,backward_dag=p.dag_backward,
                                         direct_return=p.dag_direct_return,input_copy_ilp=p.input_copy_ilp,

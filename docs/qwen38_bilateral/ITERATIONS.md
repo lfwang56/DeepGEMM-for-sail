@@ -3205,3 +3205,32 @@ Best peerqwen38-wlf-ep32-iter36-yield-producer-control-attempt1: 97.596191ms. St
 Native extension SHA256: 51c05037ef0150ef0e6e9d865eee54cf6d139627b4694480e9b722d26d72bc51
 
 Artifacts: `outputs/qwen38/iter36-yield-assist-controls.json`, `ep32-input-assist-reference.json`.
+
+
+## Iteration 37 — full-width peer GEMM geometry
+
+**Evidence and change.** Iterations34–36 show that extra concurrent input copying lengthens both copy and ready-wait GEMM spans. The required stall review is archived in `stall-review-before37.md` with the live primary PPU guide. Test stage depth, BK, warp shapes and BN using the existing native API, without precision changes. Four fixed GPU queues gate every configuration on independent full-width FP32 and mutable graph checks; unsupported resource configurations are rejected rather than timed. BK32 is outside the API contract.
+
+**Validation.** H8192/I2048/E16/top10, FP32 comparisons of all output and gradient elements, four graph input patterns, then actual EP32 distributed every-element references before timing. BF16, G8, producer ILP8, BM256, ring65536, T4096/C4096, full forward + rematerialized backward including FP32 DW zero/accumulation. DeepEP uses matching geometry; an additional early-DY control is retained. All phases require four clean whole-host audits. No kernel implementation or default geometry changes.
+
+| Configuration | Backend | GEMM configurations | Complete layer ms |
+| --- | --- | --- | ---: |
+| qwen38-wlf-ep32-iter37-gemm-bn128 | deepep | {'fc1': [128, 64, 64, 64, 2], 'fc2': [128, 64, 64, 64, 2], 'dhidden': [128, 64, 64, 64, 2], 'dx': [128, 64, 64, 64, 2]} | 130.798035 |
+| qwen38-wlf-ep32-iter37-gemm-bn128 | peer | {'fc1': [128, 64, 64, 64, 2], 'fc2': [128, 64, 64, 64, 2], 'dhidden': [128, 64, 64, 64, 2], 'dx': [128, 64, 64, 64, 2]} | 103.317969 |
+| qwen38-wlf-ep32-iter37-gemm-bn128-bk128 | deepep | {'fc1': [128, 128, 64, 64, 2], 'fc2': [128, 128, 64, 64, 2], 'dhidden': [128, 128, 64, 64, 2], 'dx': [128, 128, 64, 64, 2]} | 137.183154 |
+| qwen38-wlf-ep32-iter37-gemm-bn128-bk128 | peer | {'fc1': [128, 128, 64, 64, 2], 'fc2': [128, 128, 64, 64, 2], 'dhidden': [128, 128, 64, 64, 2], 'dx': [128, 128, 64, 64, 2]} | 117.061731 |
+| qwen38-wlf-ep32-iter37-gemm-control-attempt0 | deepep | {'fc1': [256, 64, 64, 64, 2], 'fc2': [256, 64, 64, 64, 2], 'dhidden': [256, 64, 64, 64, 2], 'dx': [256, 64, 64, 64, 2]} | 121.185852 |
+| qwen38-wlf-ep32-iter37-gemm-control-attempt0 | peer | {'fc1': [256, 64, 64, 64, 2], 'fc2': [256, 64, 64, 64, 2], 'dhidden': [256, 64, 64, 64, 2], 'dx': [256, 64, 64, 64, 2]} | 97.500012 |
+| qwen38-wlf-ep32-iter37-gemm-deepep-early-control | deepep | {'fc1': [256, 64, 64, 64, 2], 'fc2': [256, 64, 64, 64, 2], 'dhidden': [256, 64, 64, 64, 2], 'dx': [256, 64, 64, 64, 2]} | 120.214099 |
+| qwen38-wlf-ep32-iter37-gemm-stage3 | deepep | {'fc1': [256, 64, 64, 64, 3], 'fc2': [256, 64, 64, 64, 3], 'dhidden': [256, 64, 64, 64, 3], 'dx': [256, 64, 64, 64, 3]} | 110.157800 |
+| qwen38-wlf-ep32-iter37-gemm-stage3 | peer | {'fc1': [256, 64, 64, 64, 3], 'fc2': [256, 64, 64, 64, 3], 'dhidden': [256, 64, 64, 64, 3], 'dx': [256, 64, 64, 64, 3]} | 84.258929 |
+| qwen38-wlf-ep32-iter37-gemm-wm32 | deepep | {'fc1': [256, 64, 32, 64, 2], 'fc2': [256, 64, 32, 64, 2], 'dhidden': [256, 64, 32, 64, 2], 'dx': [256, 64, 32, 64, 2]} | 121.791284 |
+| qwen38-wlf-ep32-iter37-gemm-wm32 | peer | {'fc1': [256, 64, 32, 64, 2], 'fc2': [256, 64, 32, 64, 2], 'dhidden': [256, 64, 32, 64, 2], 'dx': [256, 64, 32, 64, 2]} | 94.207941 |
+| qwen38-wlf-ep32-iter37-gemm-wn32 | deepep | {'fc1': [256, 64, 64, 32, 2], 'fc2': [256, 64, 64, 32, 2], 'dhidden': [256, 64, 64, 32, 2], 'dx': [256, 64, 64, 32, 2]} | 118.128162 |
+| qwen38-wlf-ep32-iter37-gemm-wn32 | peer | {'fc1': [256, 64, 64, 32, 2], 'fc2': [256, 64, 64, 32, 2], 'dhidden': [256, 64, 64, 32, 2], 'dx': [256, 64, 64, 32, 2]} | 93.508429 |
+
+Fastest peer: ('peer', 84.25892944335938, 'qwen38-wlf-ep32-iter37-gemm-stage3').
+
+Fastest deepep: ('deepep', 110.15780029296874, 'qwen38-wlf-ep32-iter37-gemm-stage3').
+
+Preflight configurations: [('control', [256, 64, 64, 64, 2], True), ('wn32', [256, 64, 64, 32, 2], True), ('stage3', [256, 64, 64, 64, 3], True), ('bn128', [128, 64, 64, 64, 2], True), ('bk128', [256, 128, 64, 64, 2], False), ('bn128-bk128', [128, 128, 64, 64, 2], True), ('wm32', [256, 64, 32, 64, 2], True), ('stage4', [256, 64, 64, 64, 4], False)]
