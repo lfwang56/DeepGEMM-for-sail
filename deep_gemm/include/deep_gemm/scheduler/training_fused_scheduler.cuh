@@ -5,6 +5,29 @@
 
 namespace deep_gemm::training {
 
+// A CTA owns the complete N sweep of one M tile. The caller can run two
+// dependent GEMMs on that tile without waiting for unrelated tiles or CTAs.
+template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E>
+struct SelectedMTileScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
+    using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
+    uint32_t selected;
+    __device__ __forceinline__ SelectedMTileScheduler(
+            const int32_t* blocks, const int32_t* records, uint32_t tile)
+        : Base(blocks, records), selected(tile) {}
+    __device__ __forceinline__ bool fetch_next_work(uint32_t& m, uint32_t& n) {
+        n = this->current_iter++;
+        if (selected >= this->num_aligned_m_blocks_ || n >= (N + BN - 1) / BN) return false;
+        const uint4 record = __ldg(this->expert_ids_and_cumsum_ + selected);
+        m = selected - record.z;
+        this->curr_group_idx = record.x;
+        this->curr_group_m = record.y;
+        this->cumsum_m_block_idx = selected;
+        this->curr_block_m_offset = record.w + m * BM;
+        this->valid_m_in_block = min(BM, record.y - m * BM);
+        return true;
+    }
+};
+
 // The phase barrier supplies release/acquire ordering. Volatile global loads
 // keep metadata rewritten in this launch out of the immutable read-only path.
 __device__ __forceinline__ int32_t load_pipeline_metadata(const int32_t* address) {

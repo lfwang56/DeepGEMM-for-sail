@@ -1940,3 +1940,72 @@ metadata/full-rematerialization contract is different. These differences must
 be reported; they do not justify weakening the current baseline. Next pursue
 whole-FFN depth-first tile fusion and local compute/layout work rather than
 more per-GEMM communication-CTA partition sweeps.
+
+
+## Iteration16: depth-first whole-FFN tiles in forward and backward
+
+Hypothesis: replace the full FC1/activation/FC2 kernel boundaries with one
+persistent M-tile loop. Each CTA gathers one M128 tile, computes its complete
+FC1 N sweep, applies BF16 SwiGLU, completes FC2 and writes directly to source
+peers, while other CTAs process their own tiles. Backward similarly joins
+local dHidden, activation gradient and direct-return DX; DW2 precedes this
+pair, and DW1 follows it. Existing global rank phase barriers remain. This
+is a paired-GEMM FFN pipeline, not a single kernel for the entire training
+step or optimizer. No cross-CTA readiness dependency is introduced.
+
+Changes: new opt-in PeerMoEPlan.ffn_fusion, separate PeerFfnParams/API/JIT
+entry points, SelectedMTileScheduler and a compile-time selected-tile mode
+on the existing GEMM. Existing launch ABIs/defaults remain intact. Fused
+input packing uses the same release fence/CTA barrier as the previously
+validated producer; same-launch gate/up reads are volatile and phase
+boundaries fence stores before AIU consumption. All four compute roles use
+identical BN256/BK64/WM64/WN64/S2, also used by the real DeepEP control.
+
+ZW-M890P/ppu0015, wlf_sgl_2.2 Torch2.11, extension SHA256
+c33ffe92a544462caf82b3b00c4228ac9e12abd7f82fb4fb2068293ae39c1fb9.
+Actual EP32=512 routed experts, H8192/I2048/top10/T4096/C768, same-supernode
+225/226/227/223. EP8 on80 is a128-total-expert proxy only. Five repeats of20
+graph iterations with5warmups; max-rank event median, full forward and
+backward rematerialization plus FP32 DW zero/accumulation, no optimizer or
+shared expert. Forward/backward scopes are separately labeled.
+
+Independent every-element FP32 reference passed masked and duplicate-skew
+Qwen shapes at E16/T80. The graph mutation equivalence test compared old
+producer+AIU against the new FFN for balanced/ragged/skewed/fully masked
+routes: Y/DX/dScore were bitwise identical, maximum DW relative RMS4.33e-6
+(threshold1e-5). Actual EP32 C768 all-to-expert-zero skew passed all32 ranks
+and four clean host audits; maximum relative RMS0.003497055. No unused expert
+gradients or valid zero-score derivative regressions.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|ffn-backward|104.923914|128.291321|
+|ep8|ffn-forward|33.030093|46.532629|
+|ep8|ffn-step|137.967114|174.988550|
+|ep8|producer-control|138.042004|147.589978|
+|ep8|unfused-control|137.928650|143.401831|
+|ep32|ffn-backward|118.122412|127.212085|
+|ep32|ffn-forward|46.337613|48.096307|
+|ep32|ffn-step|164.618262|175.279150|
+|ep32|producer-control-attempt0|164.605286|144.857605|
+|ep32|unfused-control|164.673962|142.193433|
+
+All10 benchmark phases completed every rank and idle-node audit cleanly.
+The single-CTA whole-FFN schedule is slower than the old producer and
+explicit-copy controls. Retain it as opt-in experimental functionality;
+it is not a performance winner and does not meet the2–3x target. Evidence:
+outputs/qwen38/iter16-ffn-pair-controls.json and
+ep32-ffn-pair-skew-reference.json in the campaign workspace.
+
+Reassessment: profile actual FFN launch resources and local memory/compute
+stalls before adding CTA teams or more FFN variants. The prior DW1 profile
+also identified limited compute utilization and TSM group contention; local
+compute and redundant intermediate transfers remain candidates.
+
+Independent timing diagnostic (not a candidate benchmark): four exclusive
+39-resident-CTA probes on87 found the named PPU globaltimer has a stable
+~539600-tick inter-CU-group offset at a common atomic barrier. After subtracting
+each CU's initial-barrier timestamp, a second barrier had only312–456ticks
+spread. Raw globaltimer values must not be treated as synchronized nanoseconds.
+Any internal overlap timeline requires per-device/CU offset and rate calibration;
+CTA cycle sums alone do not establish device-wide hidden communication.

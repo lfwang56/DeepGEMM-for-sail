@@ -48,6 +48,7 @@ def main():
     parser.add_argument("--pipeline-serialize", action="store_true")
     parser.add_argument("--inline-dispatch", action="store_true")
     parser.add_argument("--cache-return-addresses", action="store_true")
+    parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -95,6 +96,9 @@ def main():
         extra["pipeline_serialize"] = options.pipeline_serialize
         extra["inline_dispatch"] = options.inline_dispatch
         extra["cache_return_addresses"] = options.cache_return_addresses
+        extra["ffn_fusion"] = options.ffn_fusion
+        if options.ffn_fusion:
+            extra["reuse_packed_dy"] = True
         extra["dispatch_producer_tiles"] = options.dispatch_producer_tiles
         if options.peer_fc1_config:
             extra["gemm_configs"]["fc1"] = options.peer_fc1_config
@@ -154,6 +158,7 @@ def main():
                               gemm_config=options.gemm_config,
                               inline_dispatch=options.inline_dispatch,
                               cache_return_addresses=options.cache_return_addresses,
+                              ffn_fusion=options.ffn_fusion,
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,

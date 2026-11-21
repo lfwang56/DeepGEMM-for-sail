@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--pipeline-serialize", action="store_true")
     parser.add_argument("--inline-dispatch", action="store_true")
     parser.add_argument("--cache-return-addresses", action="store_true")
+    parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -91,7 +92,7 @@ def main():
     for backend in args.backends:
         options = dict(gemm_configs=configs)
         if backend == "peer":
-            use_producer = not (args.dispatch_pipeline or args.inline_dispatch)
+            use_producer = not (args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion)
             options.update(dispatch_producer=use_producer, dispatch_producer_tiles=1,
                            reuse_packed_dy=True,
                            producer_input_aiu=args.producer_input_aiu and use_producer,
@@ -99,7 +100,8 @@ def main():
                            fuse_activation_backward=args.fuse_activation_backward,
                            dispatch_pipeline=args.dispatch_pipeline, return_pipeline=args.return_pipeline,
                            pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize,
-                           inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses)
+                           inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses,
+                           ffn_fusion=args.ffn_fusion)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
@@ -150,6 +152,7 @@ def main():
             pipeline_serialized=args.pipeline_serialize if backend == "peer" else None,
             inline_dispatch=args.inline_dispatch if backend == "peer" else None,
             cache_return_addresses=args.cache_return_addresses if backend == "peer" else None,
+            ffn_fusion=args.ffn_fusion if backend == "peer" else None,
             gemm_config=args.gemm_config,
             capacity_rows=plan.rows, alignment=plan.alignment, active_rows=active_rows,
             largest_active_element_offset=max(0, active_rows * h - 1),

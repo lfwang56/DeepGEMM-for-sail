@@ -1,10 +1,14 @@
 """Exact output checks catch address-cache races below BF16 oracle tolerance."""
 
+import argparse
 import json
 import torch
 from deep_gemm.training import PeerMoEPlan
 
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--ffn-fusion-ablation', action='store_true')
+args = parser.parse_args()
 torch.cuda.set_device(0)
 torch.set_num_threads(2)
 torch.manual_seed(19291)
@@ -23,10 +27,12 @@ stream.wait_stream(torch.cuda.current_stream())
 graphs, outputs, plans = [], [], []
 with torch.cuda.stream(stream):
     for cache in (False, True):
-        plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, inline_dispatch=True,
-                          cache_return_addresses=cache, reuse_packed_dy=True,
+        options = (dict(ffn_fusion=cache, dispatch_producer=not cache,
+                        producer_input_aiu=not cache, producer_local_aiu=not cache)
+                   if args.ffn_fusion_ablation else dict(inline_dispatch=True, cache_return_addresses=cache))
+        plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
-                          gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')})
+                          gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
         plans.append(plan)
         accumulators = (torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
 
@@ -69,8 +75,9 @@ with torch.cuda.stream(stream):
         for name,index in (('dw1',2),('dw2',3)):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        print(json.dumps({'case':'return_cache_graph_equivalence','pattern':pattern,
+        print(json.dumps({'case':'ffn_graph_equivalence' if args.ffn_fusion_ablation else 'return_cache_graph_equivalence','pattern':pattern,
                           'exact':exact,'wgrad_relative_rms':errors,
-                          'source':'identical tensors and inline-dispatch GEMMs, return-address cache only'}),flush=True)
+                          'source':('identical tensors; old producer+AIU versus depth-first fused FFN' if args.ffn_fusion_ablation
+                                    else 'identical tensors and inline-dispatch GEMMs, return-address cache only')}),flush=True)
         assert all(exact.values()) and all(value < 1e-5 for value in errors.values()),(pattern,exact,errors)
 torch.cuda.current_stream().wait_stream(stream)

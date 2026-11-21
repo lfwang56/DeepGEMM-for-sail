@@ -373,10 +373,11 @@ template <class _SrcT, GemmType kGemmType,
           bool DispatchCacheAiu = false, bool StagedReturn = false,
           uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false,
           bool ProducerInputAiu = false, bool DispatchPipeline = false,
-          bool InlineDispatch = false, bool CacheReturn = false>
+          bool InlineDispatch = false, bool CacheReturn = false, bool FixedMTile = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
-                           const training::PeerDispatchPipeline pipeline = {}) {
+                           const training::PeerDispatchPipeline pipeline = {},
+                           const uint32_t selected_m_tile = 0) {
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
     static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
@@ -416,7 +417,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
 
     static_assert(DispatchCacheN == 0 || (PeerRead && !Coherent));
     static_assert(!DispatchCacheAiu || DispatchCacheN != 0);
-    static_assert(!LocalInputAiu || (!PeerRead && !PeerWrite && FirstNTile > 0));
+    static_assert(!LocalInputAiu || (!PeerRead && (FixedMTile || (!PeerWrite && FirstNTile > 0))));
     static_assert(!ProducerInputAiu || (PeerRead && !PeerWrite && FirstNTile == 0
                   && NumNTiles == 1 && DispatchCacheN == 0));
     static_assert((FirstNTile == 0 && NumNTiles == 0) || (!Coherent && DispatchCacheN == 0));
@@ -429,10 +430,14 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     using SlicedScheduler = std::conditional_t<FirstNTile != 0 || NumNTiles != 0,
         training::SlicedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
                                      FirstNTile, NumNTiles>, UnslicedScheduler>;
-    using TileScheduler = std::conditional_t<DispatchPipeline,
+    using PipelineScheduler = std::conditional_t<DispatchPipeline,
         training::DispatchPipelineScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
                                              !PeerWrite, InlineDispatch>,
         SlicedScheduler>;
+    using TileScheduler = std::conditional_t<FixedMTile,
+        training::SelectedMTileScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
+        PipelineScheduler>;
+    static_assert(!FixedMTile || (!DispatchPipeline && !PeerRead && DispatchCacheN == 0));
 
     // Shared memory
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);
@@ -531,7 +536,9 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     // Block scheduler
     uint32_t m_block_idx, n_block_idx;
     TileScheduler deep_scheduler = [&]() {
-        if constexpr (DispatchPipeline)
+        if constexpr (FixedMTile)
+            return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum, selected_m_tile);
+        else if constexpr (DispatchPipeline)
             return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum, pipeline);
         else
             return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum);

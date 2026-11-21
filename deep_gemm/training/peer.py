@@ -30,12 +30,20 @@ class PeerMoEPlan(NativeMoEPlan):
                  dispatch_producer=False, dispatch_producer_tiles=1, producer_local_aiu=False,
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
                  pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
-                 inline_dispatch=False, cache_return_addresses=False, **kwargs):
+                 inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
             raise TypeError("peer fusion switches must be bool")
         self.fuse_dispatch, self.fuse_return = fuse_dispatch, fuse_return
+        if not isinstance(ffn_fusion, bool):
+            raise TypeError("ffn_fusion must be bool")
+        if ffn_fusion and (not fuse_dispatch or not fuse_return or not fuse_activation_backward
+                           or not reuse_packed_dy or dispatch_producer or dispatch_cache_n
+                           or dispatch_pipeline or return_pipeline or inline_dispatch
+                           or staged_return or cache_return_addresses):
+            raise ValueError("FFN fusion requires direct bilateral fusion, packed DY reuse and fused activation backward")
+        self.ffn_fusion = ffn_fusion
         if not isinstance(dispatch_producer, bool):
             raise TypeError("dispatch_producer must be bool")
         if dispatch_producer and (not fuse_dispatch or self.transport != "peer" or dispatch_cache_n):
@@ -116,6 +124,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
             raise ValueError("unknown peer GEMM configuration role")
+        if ffn_fusion and len({self.gemm_configs.get(role, (256, 64, 64, 64, 2))
+                               for role in ("fc1", "fc2", "dhidden", "dx")}) != 1:
+            raise ValueError("FFN fusion currently requires matching four GEMM configurations")
         if self.size > 64:
             raise ValueError("peer training supports at most 64 ranks per domain")
         c, h, k = self.chunk_tokens, self.h, self.k
@@ -290,6 +301,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self._prepare_pointwise()
         w1, w2 = w1.to(torch.bfloat16), w2.to(torch.bfloat16)
         self._prepare_weights(w1, w2, backward=True)
+        if self.ffn_fusion:
+            self._ffn(w1, w2, compile_only=True)
+            self._ffn(self.w2_t, self.w1_t, backward=True, compile_only=True)
         self._barrier(0, compile_only=True)
         _peer(0, [self.pointer_tables["local_ids"], self.counts, self.route_experts, self.route_rows, self.status],
               [self.routes, self.e, self.rank, self.size, self.chunk_tokens * self.k], True)
@@ -343,6 +357,10 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
 
     def _chunk_forward(self, w1, w2, pack_input=False):
+        if self.ffn_fusion:
+            self._ffn(w1, w2)
+            self._barrier(1)
+            return
         if not self.fuse_dispatch:
             self._stage_input()
         self._fc1(w1, pack_input=pack_input)
@@ -351,6 +369,16 @@ class PeerMoEPlan(NativeMoEPlan):
         if not self.fuse_return:
             self._scatter_peer("local_values")
         self._barrier(1)
+
+    def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
+        return dg._C._moe_training_peer_ffn(
+            [self.packed_dy if backward else self.packed_x, first_weight,
+             self.gate_up, self.hidden, second_weight, self.packed_output,
+             self.pointer_tables["local_x"],
+             self.pointer_tables["local_dx" if backward else "local_values"],
+             self.source_rows, self.permutation, self.work_info, self.num_blocks],
+            self.chunk_tokens, self.chunk_tokens * self.k, backward,
+            self.gemm_configs.get("fc1", (256, 64, 64, 64, 2)), compile_only)
 
     def _scatter_peer(self, destination, compile_only=False):
         _peer(12 if self.vectorized_copy else 6,
@@ -415,6 +443,12 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._barrier(start * 4 + 2)
                 self._pack_dy()
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+                if self.ffn_fusion:
+                    self._ffn(self.w2_t, self.w1_t, backward=True)
+                    dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+                    self._barrier(start * 4 + 3)
+                    _launch(6, [self.local_dx, scores, dx], dims + [0])
+                    continue
                 # DW2 requires packed_dy above. Reuse that mandatory staging
                 # result instead of fetching the same peer gradients again.
                 read_dy = self.fuse_dispatch and not self.reuse_packed_dy
