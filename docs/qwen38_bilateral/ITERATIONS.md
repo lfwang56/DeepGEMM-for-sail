@@ -97,3 +97,11 @@ The SN1 retry (.219/.220/.213/.215) also completed all32 ranks, but .213
 reported foreign GPU work (gate75). `qwen38-wlf-ep32-cache0-control-sn1-attempt0/`
 is excluded. Next selection prioritizes .215/.216 ahead of the contested .213.
 
+
+### Iteration 1 controls: wlf SN1 stable-node matrix (2026-11-21 04:05 UTC)
+
+- Direction: controlled dispatch-cache grouping sweep; unchanged iteration-1 kernels.
+- Runtime: wlf_sgl_2.2, EP32 within SN1 (.219/.220/.215/.216), Qwen H8192/I2048/E512/K10, T1024/rank, C512.
+- Results: cache0 phase completed with all gates passing; cache8 completed all rank parents, but .220 returned gate75; cache16 was not started.
+- Status: cache8 quarantined pending PID-ownership audit. A monitor exit race was discovered: an exiting process can lose its /proc/environ before disappearing from the driver process table. Do not label this real foreign interference without matching the recorded PID against rank receipts. Raw logs are preserved. Timings will be appended after audit.
+- Next: resolve gate classification, then continue cache grouping and backward packed-DY reuse. No source change is accepted on these unclassified measurements.
