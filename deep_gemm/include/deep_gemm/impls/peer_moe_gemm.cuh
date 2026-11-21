@@ -228,7 +228,7 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite,
           bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
           bool DispatchCacheAiu = false, bool StagedReturn = false,
-          uint32_t FirstNTile = 0, uint32_t NumNTiles = 0>
+          uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -254,6 +254,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
 
     static_assert(DispatchCacheN == 0 || (PeerRead && !Coherent));
     static_assert(!DispatchCacheAiu || DispatchCacheN != 0);
+    static_assert(!LocalInputAiu || (!PeerRead && !PeerWrite && FirstNTile > 0));
     static_assert((FirstNTile == 0 && NumNTiles == 0) || (!Coherent && DispatchCacheN == 0));
     using OriginalScheduler = std::conditional_t<Coherent,
         training::CoherentFusedScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
@@ -283,7 +284,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     using GatherOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<
             ArchTag, SrcT, false, Alignment, cute::Int<BLOCK_K>, BLOCK_SIZE,
             ACopyInst, cute::Int<BLOCK_M>>;
-    using GemmOperandA = std::conditional_t<DispatchCacheAiu,
+    constexpr bool UseAiuA = DispatchCacheAiu || LocalInputAiu;
+    using GemmOperandA = std::conditional_t<UseAiuA,
         cutlass::gemm::config::DefaultGemm_AIU_Operand<
             ArchTag, SrcT, false, cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, false>, GatherOperandA>;
 
@@ -292,7 +294,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
             Shape<cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, cute::Int<kNumStages>>{}));
 
     typename GemmOperandA::GmemTiledCopy gmem_tiled_copy_A;
-    if constexpr (DispatchCacheAiu) {
+    if constexpr (UseAiuA) {
         auto stride_A = cute::make_stride(cute::Int<SHAPE_K>{}, cute::_1{});
         gmem_tiled_copy_A.desc_.template init<SrcT, false, get<0>(TilerA{}), get<1>(TilerA{})>(
             nullptr, BLOCK_M, SHAPE_K, stride_A);
@@ -400,12 +402,15 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       Tensor tBgB = gmem_thr_copy_B.partition_S(gB);
 
       auto copy_input_stage = [&](int tile, int stage) {
-          if constexpr (DispatchCacheAiu) {
+          if constexpr (UseAiuA) {
               // Arbitrary peer rows have already been gathered into this
               // CTA's contiguous cache. AIU is legal for this local operand;
               // its swizzled TSM layout uses the matching A load atom above.
-              const auto* cache = reinterpret_cast<const SrcT*>(params.dispatch_scratch)
-                  + uint64_t(blockIdx.x) * BLOCK_M * SHAPE_K;
+              const auto* cache = LocalInputAiu
+                  ? reinterpret_cast<const SrcT*>(args.a_ptr)
+                      + uint64_t(deep_scheduler.curr_block_m_offset) * SHAPE_K
+                  : reinterpret_cast<const SrcT*>(params.dispatch_scratch)
+                      + uint64_t(blockIdx.x) * BLOCK_M * SHAPE_K;
               auto shape_A = cute::make_shape(cute::Int<BLOCK_M>{}, cute::Int<SHAPE_K>{});
               auto stride_A = cute::make_stride(cute::Int<SHAPE_K>{}, cute::_1{});
               Tensor mA = cute::make_tensor(cute::make_gmem_ptr(cache), shape_A, stride_A);

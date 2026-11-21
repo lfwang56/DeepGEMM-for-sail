@@ -128,6 +128,7 @@ def main():
             topk=k, tokens=t, chunk_tokens=args.chunk_tokens, pattern=pattern,
             graph=args.graph, relative_rms=errors, every_element_compared=True,
             payload_transport=plan.deep_ep_backend, rdma_ranks=plan.deep_ep_rdma_ranks,
+            rdma_qps=plan.deep_ep_qps, communication_cus=plan.comm_sms,
             metadata_backend="gloo", reference="independent FP32 Torch local experts + CPU sum",
             passed=passed)), flush=True)
         passed_tensor = torch.tensor(int(passed))

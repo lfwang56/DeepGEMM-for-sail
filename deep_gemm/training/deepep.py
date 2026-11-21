@@ -15,7 +15,7 @@ from .native import NativeMoEPlan, _launch
 class DeepEPMoEPlan(NativeMoEPlan):
     transport = "deepep"
 
-    def __init__(self, *args, comm_sms=8, gemm_configs=None, **kwargs):
+    def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("the DeepEP comparison currently implements BF16")
         if kwargs.get("group") is None:
@@ -25,14 +25,19 @@ class DeepEPMoEPlan(NativeMoEPlan):
         super().__init__(*args, **kwargs)
         self.active_pointwise = self.vectorized_routes = True
         self.gemm_configs = gemm_configs or {}
+        if type(comm_sms) is not int or comm_sms < 2 or comm_sms % 2:
+            raise ValueError("DeepEP communication CU count must be an even integer >=2")
         self.comm_sms = comm_sms
+        self.deep_ep_qps = max(12, (comm_sms + 1) // 2) if rdma_qps is None else rdma_qps
+        if type(self.deep_ep_qps) is not int or self.deep_ep_qps < (comm_sms + 1) // 2:
+            raise ValueError("DeepEP RDMA QPs must cover at least one pair of communication CUs")
         deep_ep.Buffer.set_num_sms(comm_sms)
         configs = (deep_ep.Buffer.get_dispatch_config(self.size),
                    deep_ep.Buffer.get_combine_config(self.size))
         nvl = max(c.get_nvl_buffer_size_hint(self.h * 2, self.size) for c in configs)
         rdma = max(c.get_rdma_buffer_size_hint(self.h * 2, self.size) for c in configs)
         self.deep_ep_buffer = deep_ep.Buffer(self.group, nvl, rdma,
-            allow_mnnvl=True, explicitly_destroy=True)
+            allow_mnnvl=True, explicitly_destroy=True, num_qps_per_rank=self.deep_ep_qps)
         self.deep_ep_backend = self.deep_ep_buffer.backend
         self.deep_ep_rdma_ranks = self.deep_ep_buffer.runtime.get_num_rdma_ranks()
         self.deep_ep_version = deep_ep.__version__

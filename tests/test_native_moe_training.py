@@ -214,7 +214,8 @@ class NativeTests(unittest.TestCase):
             self.skipTest("peer producer GEMM slices")
         # Six N tiles cover a local consumer and a partial final producer group.
         # BN256 additionally covers a producer that consumes the whole FC1.
-        for bn, produced in ((128, 1), (128, 2), (128, 4), (256, 4)):
+        for bn, produced, aiu in ((128, 1, False), (128, 2, False), (128, 4, False),
+                                  (256, 4, False), (128, 1, True), (128, 4, True)):
             torch.manual_seed(1907)
             x = (torch.randn(7, 512, device="cuda") * .1).bfloat16().requires_grad_()
             w1 = (torch.randn(3, 768, 512, device="cuda") * .03).bfloat16().requires_grad_()
@@ -226,6 +227,7 @@ class NativeTests(unittest.TestCase):
             plan = PeerMoEPlan(512, 384, 3, 2, 7, chunk_tokens=3,
                                gemm_configs={"fc1": (bn, 64, 64, 64, 2)},
                                dispatch_producer=True, dispatch_producer_tiles=produced,
+                               producer_local_aiu=aiu,
                                reuse_packed_dy=True)
             y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
             y.backward(dy)
@@ -372,7 +374,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
               collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0, reuse_packed_dy=False,
               deepep=False, dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
-              group_backend="nccl", dispatch_producer=False, dispatch_producer_tiles=1):
+              group_backend="nccl", dispatch_producer=False, dispatch_producer_tiles=1,
+              producer_local_aiu=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -418,6 +421,7 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
         plan_options["staged_return"] = True
     if dispatch_producer:
         plan_options.update(dispatch_producer=True, dispatch_producer_tiles=dispatch_producer_tiles)
+        plan_options["producer_local_aiu"] = producer_local_aiu
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     if peer and not persistent:
@@ -522,6 +526,7 @@ if __name__ == "__main__":
     parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
     parser.add_argument("--dispatch-producer", action="store_true")
+    parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     options, remaining = parser.parse_known_args()
@@ -529,6 +534,8 @@ if __name__ == "__main__":
         parser.error("CPU metadata group is currently supported for --ep --deepep")
     if options.dispatch_producer and (not options.ep or not options.peer or options.persistent or options.no_fuse_dispatch or options.dispatch_cache_n):
         parser.error("--dispatch-producer requires --ep --peer with fused dispatch and no private cache")
+    if options.producer_local_aiu and not options.dispatch_producer:
+        parser.error("--producer-local-aiu requires --dispatch-producer")
     if options.deepep and (not options.ep or options.peer or options.persistent or options.collective_fused or options.fp8):
         parser.error("--deepep requires BF16 --ep and is a separate backend")
     if options.dispatch_cache_aiu and (not options.peer or not options.ep or not options.dispatch_cache_n):
@@ -553,7 +560,7 @@ if __name__ == "__main__":
                   options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose,
                   options.dispatch_cache_n, options.reuse_packed_dy, options.deepep, options.dispatch_cache_aiu,
                   options.staged_return, options.dispatch_cache_ctas, options.process_group_backend,
-                  options.dispatch_producer, options.dispatch_producer_tiles)
+                  options.dispatch_producer, options.dispatch_producer_tiles, options.producer_local_aiu)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer

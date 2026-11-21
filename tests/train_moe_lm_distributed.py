@@ -162,6 +162,7 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(dispatch_cache_n=options.dispatch_cache_n,
                                     dispatch_producer=options.dispatch_producer,
+                                    producer_local_aiu=options.producer_local_aiu,
                                     dispatch_producer_tiles=options.dispatch_producer_tiles,
                                     dispatch_cache_ctas=options.dispatch_cache_ctas,
                                     dispatch_cache_aiu=options.dispatch_cache_aiu,
@@ -214,6 +215,7 @@ def main():
     parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
     parser.add_argument("--dispatch-producer", action="store_true")
+    parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--peer-fc1-config", type=int, nargs=5)
     parser.add_argument("--reuse-packed-dy", action="store_true")
@@ -245,6 +247,7 @@ def main():
     if options.backend == "peer":
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
                             dispatch_producer=options.dispatch_producer,
+                            producer_local_aiu=options.producer_local_aiu,
                             dispatch_producer_tiles=options.dispatch_producer_tiles,
                             dispatch_cache_ctas=options.dispatch_cache_ctas,
                             dispatch_cache_aiu=options.dispatch_cache_aiu,

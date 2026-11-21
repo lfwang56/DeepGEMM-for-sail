@@ -87,6 +87,7 @@ def main():
     parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
     parser.add_argument("--dispatch-producer", action="store_true")
+    parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -182,6 +183,7 @@ def main():
                 options["staged_return"] = args.staged_return
                 options["dispatch_cache_ctas"] = args.dispatch_cache_ctas
                 options["dispatch_producer"] = args.dispatch_producer
+                options["producer_local_aiu"] = args.producer_local_aiu
                 options["dispatch_producer_tiles"] = args.dispatch_producer_tiles
                 for role in ("fc1", "fc2", "dhidden", "dx"):
                     config = getattr(args, "peer_" + role + "_config")
@@ -294,6 +296,7 @@ def main():
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
                     "peer_dispatch_cache_ctas": getattr(plan, "dispatch_cache_ctas", None) if backend == "peer" else None,
                     "peer_dispatch_producer": getattr(plan, "dispatch_producer", None) if backend == "peer" else None,
+                    "peer_producer_local_aiu": getattr(plan, "producer_local_aiu", None) if backend == "peer" else None,
                     "peer_dispatch_producer_tiles": getattr(plan, "dispatch_producer_tiles", None) if backend == "peer" else None,
                     "peer_dispatch_cache_aiu": getattr(plan, "dispatch_cache_aiu", None) if backend == "peer" else None,
                     "peer_staged_return": getattr(plan, "staged_return", None) if backend == "peer" else None,
@@ -303,6 +306,7 @@ def main():
                     "deepep_backend": getattr(plan, "deep_ep_backend", None),
                     "deepep_rdma_ranks": getattr(plan, "deep_ep_rdma_ranks", None),
                     "deepep_comm_sms": args.deepep_comm_sms if backend == "deepep" else None,
+                    "deepep_rdma_qps": getattr(plan, "deep_ep_qps", None) if backend == "deepep" else None,
                     "deepep_scaleup": args.deepep_scaleup if backend == "deepep" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),

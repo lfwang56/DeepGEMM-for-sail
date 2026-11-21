@@ -39,6 +39,7 @@ def main():
     parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
     parser.add_argument("--peer-fc1-config", type=int, nargs=5)
     parser.add_argument("--dispatch-producer", action="store_true")
+    parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -71,6 +72,7 @@ def main():
                      fuse_activation_backward=options.fuse_activation_backward)
         extra["dispatch_cache_ctas"] = options.dispatch_cache_ctas
         extra["dispatch_producer"] = options.dispatch_producer
+        extra["producer_local_aiu"] = options.producer_local_aiu
         extra["dispatch_producer_tiles"] = options.dispatch_producer_tiles
         if options.peer_fc1_config:
             extra["gemm_configs"]["fc1"] = options.peer_fc1_config
@@ -121,6 +123,7 @@ def main():
                               staged_return=options.staged_return,
                               dispatch_cache_ctas=options.dispatch_cache_ctas,
                               dispatch_producer=options.dispatch_producer,
+                              producer_local_aiu=options.producer_local_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,
                               tokens=t, valid_tokens=max(0, t - 3), pattern=pattern,
                               relative_rms=errors, every_element_compared=True,

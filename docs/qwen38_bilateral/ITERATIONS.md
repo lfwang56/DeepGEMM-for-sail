@@ -617,3 +617,19 @@ The future staged-return source is present but disabled in these controls. Its i
 - Best paired reduction4.6882%, peer44.829205322ms vsDeepEP47.034252930ms, producer_tiles=1. This is a two-GEMM producer/consumer FC1 path, not the original single peer-read GEMM.
 - Separate baseline integration: new every-element distributed local-expert FP32 oracle passed2ranks onQwen H8192/I2048,E8,K10 with masks/zero-score/empty-source/duplicates and changing-route graph replay. Initial oracle attempt failed a deliberate one-stream plan check; fixed the test to keep preparation/execution/capture on one stream, then reran clean. Cross-domain64 smallshape graph128 passed with8RDMA ranks; actualQwen64 oracle still pending.
 - Isolated ElasticBuffer probe now passes forward,DX,dScore and4dynamic-route graph replays in nonexpanded mode after native header/thread-scope compatibility fixes. Expanded cached backward and expanded score combine are explicitly unsupported in this installed version. An initial nonexpanded run passed math but failed teardown JIT include order; isolated comm header order fixed and clean rerun passed. Installed package untouched; no Elastic timing claims yet.
+
+## Iteration8 — contiguous local FC1 AIU loading
+
+- Addedopt-inproducer_local_aiu. The consumer GEMM loads mandatory producer-packed X directly with the native AIU atom; only local N remainder kernels can use it. Padded rows were already explicitly written by the producer. Original gather path remains default.
+- Asys EP16proxy (H8192/I2048/E16,K10,256totalexperts,not512) showed localconsumer19.2%,producer11.1%,wgrad23.2%; thisdiagnosticmotivated the change and is not a QwenEP32performance result.
+- Six producer unit cases (1/2/4tiles,wholeFC1,AIU1/4) passed110.237s,clean63. QwenH8192/I2048/E16/K10,T512 independent FP32 every-element reference passed masks and duplicate-skew; adding existing fusedactivationbackward also passed. WorstRMS0.004083,precisionboundaries unchanged.
+- NativeextensionSHA2566cf1dd828f0eca0491ea5749aca88bb8a791e69ec452d4919435b98aa08f095f.
+- EP8single-host diagnostic matrix was attempted while EP32/domain4 and cross64/domain8 idle windows were unavailable. It exited75 before timing. No performance result or winner claim. Raw controller receipts:
+
+```json
+{
+  "qwen38-wlf-ep8-proxy-iter8-control": "{\"case\": \"distributed_campaign_preflight\", \"name\": \"qwen38-wlf-ep8-proxy-iter8-control\", \"hosts\": [{\"node\": \"172.17.0.87\", \"returncode\": 75, \"output\": \"{\\\"case\\\": \\\"idle_node_gate\\\", \\\"host\\\": \\\"e01-cn-9yq4xwro401-a0004\\\", \\\"selected_gpus\\\": [0, 1, 2, 3, 4, 5, 6, 7], \\\"allowed\\\": false, \\\"processes\\\": [{\\\"gpu\\\": 0, \\\"pid\\\": 1539796, \\\"owned\\\": false}, {\\\"gpu\\\": 1, \\\"pid\\\": 1539797, \\\"owned\\\": false}, {\\\"gpu\\\": 2, \\\"pid\\\": 1539798, \\\"owned\\\": false}, {\\\"gpu\\\": 3, \\\"pid\\\": 1539799, \\\"owned\\\": false}, {\\\"gpu\\\": 4, \\\"pid\\\": 1539800, \\\"owned\\\": false}, {\\\"gpu\\\": 5, \\\"pid\\\": 1539801, \\\"owned\\\": false}, {\\\"gpu\\\": 6, \\\"pid\\\": 1539802, \\\"owned\\\": false}, {\\\"gpu\\\": 7, \\\"pid\\\": 1539803, \\\"owned\\\": false}]}\\n\", \"error\": \"\"}]}\n"
+}
+```
+- Separate DeepEP cross64Qwen test reached Bufferdispatch but rejected38CUs with default12RDMAQPs (internode_config_check requires2*QPs>=CUs). Allrankparents exited; no numerical success claim. Added explicit/automaticQP selection max(12,ceil(CUs/2)),38CUuses19QPs; true cross64retry pending. This changes RDMA queue setup, not the expert arithmetic or timing work.
+- Producer1three-seed public-text LM ran2000steps each with clean training/evaluation gates. Fullheldoutmeans:producer1.592712080623,priorNative1.585762516074 (+0.438%). Record exact difference; three seeds do not prove statistical equivalence or Qwen2.4T convergence. Fullrecords in outputs/qwen38/public-text-lm-producer-wlf.json.
