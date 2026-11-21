@@ -17,6 +17,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--legacy', action='store_true')
     parser.add_argument('--unexpanded', action='store_true')
+    parser.add_argument('--allow-hybrid-mode', action='store_true')
+    parser.add_argument('--nondeterministic', action='store_true')
     args = parser.parse_args()
     unexpanded = args.legacy or args.unexpanded
     rank, size = int(os.environ['RANK']), int(os.environ['WORLD_SIZE'])
@@ -38,7 +40,7 @@ def main():
         buffer = deep_ep.Buffer(dist.group.WORLD, nvl_bytes, rdma_bytes, explicitly_destroy=True)
     else:
         buffer = deep_ep.ElasticBuffer(dist.group.WORLD, num_max_tokens_per_rank=t,
-            hidden=h, num_topk=k, deterministic=True, allow_hybrid_mode=False,
+            hidden=h, num_topk=k, deterministic=not args.nondeterministic, allow_hybrid_mode=args.allow_hybrid_mode,
             explicitly_destroy=True)
 
     def combine(payload, handle, weights=None):
@@ -136,6 +138,9 @@ def main():
     if rank == 0:
         print(json.dumps(dict(case='deepep_expanded_training_probe', ranks=size,
                              backend='legacy' if args.legacy else 'elastic_nonexpanded' if unexpanded else 'elastic_expanded',
+                             deterministic=not args.nondeterministic, allow_hybrid_mode=args.allow_hybrid_mode,
+                             scaleup=getattr(buffer, 'num_scaleup_ranks', None),
+                             scaleout=getattr(buffer, 'num_scaleout_ranks', None),
                              forward=True, backward=True, dynamic_graph_replays=4,
                              passed=True)), flush=True)
     del graph, gy, rx, rw, handle, backward_handle, mask, rdy, dx, ds, dx_rows, ds_rows

@@ -134,7 +134,7 @@ class Experts(nn.Module):
         if self.plan is not None and self.plan.size > 1:
             # Each rank differentiates its local probability contribution;
             # the detached load target describes the complete EP batch.
-            dist.all_reduce(load, group=self.plan.group)
+            dist.all_reduce(load, group=getattr(self.plan, "gradient_group", self.plan.group))
             load.div_(self.plan.size)
         auxiliary = self.config.experts * (probabilities.mean(0) * load).sum()
         return combined.reshape(shape), auxiliary

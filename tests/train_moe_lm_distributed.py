@@ -20,6 +20,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
+from deep_gemm.training.hierarchical import HierarchicalPeerMoEPlan, make_hierarchical_groups
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan
 from train_moe_lm import Configuration, LanguageModel, batch, read_data
 from moe_distributed_utils import destroy_training_process_group
@@ -163,6 +164,8 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
     path.parent.mkdir(parents=True, exist_ok=True)
     common = dict(configuration=asdict(config), manifest=manifest, compute=options.compute,
                   backend="native" if options.backend == "collective" else options.backend,
+                  evaluation_backend="peer" if options.backend == "hybrid" else "native" if options.backend == "collective" else options.backend,
+                  hybrid_domain_size=options.hybrid_domain_size if options.backend == "hybrid" else None,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
                                     fuse_fc1_activation=options.fuse_fc1_activation,
@@ -206,7 +209,8 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("collective", "peer", "persistent"), default="collective")
+    parser.add_argument("--backend", choices=("collective", "peer", "persistent", "hybrid"), default="collective")
+    parser.add_argument("--hybrid-domain-size", type=int, default=1)
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--reference-check", action="store_true")
@@ -246,11 +250,11 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
-    if options.input_copy_ilp != 1 and options.backend != "peer":
+    if options.input_copy_ilp != 1 and options.backend not in ("peer", "hybrid"):
         parser.error("input copy ILP requires --backend peer")
-    if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend != "peer":
+    if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend not in ("peer", "hybrid"):
         parser.error("DAG options require --backend peer")
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.expert_local_grad or options.ring_rows is not None) and options.backend != "peer":
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.expert_local_grad or options.ring_rows is not None) and options.backend not in ("peer", "hybrid"):
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
@@ -273,7 +277,7 @@ def main():
     local_experts, local_batch = config.experts // size, config.batch // size
     classes = {"collective": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan}
     plan_options = dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout)
-    if options.backend == "peer":
+    if options.backend in ("peer", "hybrid"):
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
                             dispatch_producer=options.dispatch_producer,
                             producer_local_aiu=options.producer_local_aiu,
@@ -295,9 +299,15 @@ def main():
             plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer_fc1_config:
             plan_options.setdefault("gemm_configs", {})["fc1"] = options.peer_fc1_config
+    hybrid_groups = None
+    if options.backend == "hybrid":
+        metadata = dist.new_group(backend="gloo", timeout=timedelta(seconds=300))
+        hybrid_groups = make_hierarchical_groups(options.hybrid_domain_size, metadata)
+        classes["hybrid"] = HierarchicalPeerMoEPlan
     plan = classes[options.backend](config.hidden, config.intermediate, local_experts, config.topk,
                                     local_batch * config.sequence, chunk_tokens=config.chunk_tokens,
-                                    compute=options.compute, group=dist.group.WORLD, device=device,
+                                    compute=options.compute,
+                                    **({"group":dist.group.WORLD} if hybrid_groups is None else {"groups":hybrid_groups}), device=device,
                                     check_errors=False, **plan_options)
     for block in model.blocks:
         experts = block.experts
@@ -406,6 +416,8 @@ def main():
         gc.collect()
     del model, optimizer, reduction, plan, static_x, static_y, stream
     gc.collect()
+    if hybrid_groups is not None:
+        hybrid_groups.close()
     destroy_training_process_group()
 
 

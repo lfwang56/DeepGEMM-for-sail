@@ -26,7 +26,8 @@ def evaluate_checkpoint(path, data_path):
     if manifest != saved["manifest"]:
         raise ValueError("checkpoint and validation text differ")
     device = torch.device("cuda", 0)
-    backend, compute = saved["backend"], saved["compute"]
+    training_backend, compute = saved["backend"], saved["compute"]
+    backend = saved.get("evaluation_backend", training_backend)
     classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan,
                "collective_fused": CollectiveFusedMoEPlan}
     backend_options = dict(saved.get("backend_options", {}))
@@ -81,7 +82,7 @@ def evaluate_checkpoint(path, data_path):
         checkpoint_hash = hashlib.file_digest(checkpoint_file, "sha256").hexdigest()
     print(json.dumps({
         "case": "lm_full_validation", "checkpoint": str(path), "checkpoint_sha256": checkpoint_hash,
-        "backend": backend, "compute": compute, "seed": saved.get("seed"), "step": saved["step"],
+        "backend": backend, "training_backend": training_backend, "evaluation_backend": backend, "compute": compute, "seed": saved.get("seed"), "step": saved["step"],
         "backend_options": backend_options,
         "seed_recorded_in_checkpoint": "seed" in saved,
         "configuration": saved["configuration"], "manifest": manifest,

@@ -21,6 +21,7 @@ import torch
 import torch.distributed as dist
 
 import deep_gemm as dg
+from deep_gemm.training.hierarchical import HierarchicalPeerMoEPlan, make_hierarchical_groups
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan, DeepEPMoEPlan
 from moe_distributed_utils import destroy_training_process_group
 from deep_gemm.training.layout import to_g8_weight
@@ -73,7 +74,9 @@ def main():
     parser.add_argument("--topk", type=int, default=2)
     parser.add_argument("--chunk-tokens", type=int, default=256)
     parser.add_argument("--backend", choices=("collective", "collective_fused", "collective_both",
-                                             "peer", "persistent", "both", "all", "deepep", "deepep_peer"), default="both")
+                                             "peer", "persistent", "both", "all", "deepep", "deepep_peer", "hybrid", "deepep_hybrid", "elastic", "elastic_vs_hybrid"), default="both")
+    parser.add_argument("--hybrid-domain-size", type=int)
+    parser.add_argument("--elastic-hybrid-mode", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--routing", choices=("balanced", "skewed", "masked"), default="balanced")
     parser.add_argument("--warmup", type=int, default=5)
@@ -201,10 +204,16 @@ def main():
     stream.wait_stream(torch.cuda.current_stream())
     if args.deepep_scaleup:
         os.environ["DEEPEP_NUM_MAX_ICN_PEERS"] = str(size)
-    backends = (("deepep", "peer") if args.backend == "deepep_peer" else
+    backends = (("elastic", "hybrid") if args.backend == "elastic_vs_hybrid" else
+                ("deepep", "hybrid") if args.backend == "deepep_hybrid" else
+                ("deepep", "peer") if args.backend == "deepep_peer" else
                 ("collective", "peer", "persistent") if args.backend == "all" else
                 ("collective", "peer") if args.backend == "both" else
                 ("collective", "collective_fused") if args.backend == "collective_both" else (args.backend,))
+    hybrid_groups = None
+    if "hybrid" in backends:
+        hybrid_metadata = dist.new_group(backend="gloo", timeout=timedelta(seconds=600))
+        hybrid_groups = make_hierarchical_groups(args.hybrid_domain_size, hybrid_metadata)
     experiments = []
     for backend in backends:
         if args.weight_transpose_ablation:
@@ -228,14 +237,14 @@ def main():
             torch.cuda.synchronize(device)
             initial_memory = torch.cuda.memory_allocated(device)
             torch.cuda.reset_peak_memory_stats(device)
-            plan_class = (DeepEPMoEPlan if backend == "deepep" else
+            plan_class = (HierarchicalPeerMoEPlan if backend == "hybrid" else DeepEPMoEPlan if backend in ("deepep", "elastic") else
                           PersistentMoEPlan if backend == "persistent" else PeerMoEPlan if backend == "peer"
                           else CollectiveFusedMoEPlan if backend == "collective_fused" else NativeMoEPlan)
             if backend == "collective" and args.collective_gemm_config:
                 plan_class = ConfiguredCollectivePlan
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
-            options = options if backend == "peer" and args.gemm_config else {}
-            if backend == "peer":
+            options = options if backend in ("peer", "hybrid") and args.gemm_config else {}
+            if backend in ("peer", "hybrid"):
                 options.update(fuse_dispatch=not args.no_fuse_dispatch, fuse_return=not args.no_fuse_return,
                                active_rows=not args.capacity_pointwise,
                                fuse_local_grad=not args.separate_local_grad,
@@ -273,8 +282,10 @@ def main():
                     if config is not None:
                         options.setdefault("gemm_configs", {})[role] = config
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
-            if backend == "deepep":
+            if backend in ("deepep", "elastic"):
                 options = {"comm_sms": args.deepep_comm_sms}
+                if backend == "elastic":
+                    options["elastic_hybrid"] = args.elastic_hybrid_mode
                 if args.gemm_config:
                     options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
             if backend == "collective":
@@ -300,7 +311,10 @@ def main():
             if backend == "peer" and options.get("fuse_dispatch", True):
                 options["dispatch_cache_n"] = args.dispatch_cache_n
                 options["dispatch_cache_aiu"] = args.dispatch_cache_aiu
-            plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
+            if backend == "hybrid":
+                options["groups"] = hybrid_groups
+            plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
+                              **({"group":group} if backend != "hybrid" else {}),
                               device=device, compute=args.compute, check_errors=False, **options)
             if isinstance(plan, ConfiguredCollectivePlan):
                 plan.benchmark_gemm_config = args.collective_gemm_config
@@ -384,6 +398,12 @@ def main():
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
+                    "elastic_hybrid_mode": args.elastic_hybrid_mode if backend == "elastic" else None,
+                    "elastic_routing_deterministic": False if backend == "elastic" else None,
+                    "hybrid_domains": getattr(plan, "hybrid_domains", None),
+                    "hybrid_domain_size": getattr(plan, "hybrid_domain_size", None),
+                    "hybrid_pair_backend": getattr(plan, "hybrid_pair_backend", None),
+                    "hybrid_transport": "pairwise domain AG/RS + domain-local bilateral fusion" if backend == "hybrid" else None,
                     "collective_m_schedule": plan.m_schedule if backend.startswith("collective") else None,
                     "collective_active_pointwise": plan.active_pointwise if backend.startswith("collective") else None,
                     "collective_vectorized_routes": plan.vectorized_routes if backend.startswith("collective") else None,
@@ -462,10 +482,10 @@ def main():
                     "deepep_version": getattr(plan, "deep_ep_version", None),
                     "deepep_backend": getattr(plan, "deep_ep_backend", None),
                     "deepep_rdma_ranks": getattr(plan, "deep_ep_rdma_ranks", None),
-                    "deepep_comm_sms": args.deepep_comm_sms if backend == "deepep" else None,
-                    "deepep_rdma_qps": getattr(plan, "deep_ep_qps", None) if backend == "deepep" else None,
-                    "deepep_mnnvl_disabled": os.environ.get("SAILSHMEM_DISABLE_MNNVL") if backend == "deepep" else None,
-                    "deepep_scaleup": args.deepep_scaleup if backend == "deepep" else None,
+                    "deepep_comm_sms": args.deepep_comm_sms if backend in ("deepep", "elastic") else None,
+                    "deepep_rdma_qps": getattr(plan, "deep_ep_qps", None) if backend in ("deepep", "elastic") else None,
+                    "deepep_mnnvl_disabled": os.environ.get("SAILSHMEM_DISABLE_MNNVL") if backend in ("deepep", "elastic") else None,
+                    "deepep_scaleup": args.deepep_scaleup if backend in ("deepep", "elastic") else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "fast_weight_transpose": plan.fast_weight_transpose,
@@ -493,6 +513,8 @@ def main():
             if hasattr(plan, "close"):
                 plan.close()
             del plan
+    if hybrid_groups is not None:
+        hybrid_groups.close()
     if group is not None:
         destroy_training_process_group()
 

@@ -3234,3 +3234,20 @@ Fastest peer: ('peer', 84.25892944335938, 'qwen38-wlf-ep32-iter37-gemm-stage3').
 Fastest deepep: ('deepep', 110.15780029296874, 'qwen38-wlf-ep32-iter37-gemm-stage3').
 
 Preflight configurations: [('control', [256, 64, 64, 64, 2], True), ('wn32', [256, 64, 64, 32, 2], True), ('stage3', [256, 64, 64, 64, 3], True), ('bn128', [128, 64, 64, 64, 2], True), ('bk128', [256, 128, 64, 64, 2], False), ('bn128-bk128', [128, 128, 64, 64, 2], True), ('wm32', [256, 64, 32, 64, 2], True), ('stage4', [256, 64, 64, 64, 4], False)]
+
+
+## Iteration 38 — two-domain bilateral composition and ElasticBuffer baseline
+
+**Change.** Two contiguous physical domains of32 ranks each. Matching two-rank PCCL groups all-gather X/IDs/scores across domains. Each domain runs the existing bilateral PeerMoEPlan on its own expert subspace; pair reduce-scatter returns source outputs. Backward regathers inputs, all-gathers raw DY, rematerializes the complete inner operator, then reduce-scatters DX/dScore while retaining each expert owner's FP32 DW. GPU payload only; Gloo is metadata/oracle control. Fixed maximum input shapes preserve graph capture; global-ID validation precedes domain masking. Fresh outputs prevent later plan calls from overwriting autograd storage. Group lifetime is caller-owned.
+
+**Strong baseline.** Installed DeepEP ElasticBuffer nonexpanded hybrid dispatch/combine shares the exact DeepEPMoEPlan GEMM/rematerialization/FP32 DW implementation. Native PPU header/thread-scope compatibility uses an isolated package copy; installed package is untouched. Elastic hybrid rejects deterministic routing, so record nondeterministic mode explicitly. Its top-k expert IDs must be distinct; compare balanced/masked/reversed and uniquely skewed routes. Peer additionally retains duplicate-route tests. Legacy flat-RDMA Buffer controls are separate and disable MNNVL; the fastest accepted baseline, including Elastic, is the denominator.
+
+**Preflight evidence.** Two physical hosts/16 ranks proxy checks passed48 every-element FP32 records and mutable graphs. Qwen H8192/I2048/E512/top10 two-domain EP64 passed192 records, max relative RMS0.006988, all eight whole-host gates clean. Additional stage3 hybrid/Elastic oracles gate performance. The initial Elastic probes rejected deterministic mode and then a missing PCCL include path; the native compatibility environment resolves both and passes forward/DX/dScore plus4 changed-route graph replays at scaleup8/scaleout2. Preserve failed attempts.
+
+**Precision and model validation.** Domain BF16 partial rounding differs from flat dispatch/combine. In a full57.8M LM, the unfrozen BF16-vs-FP32 preflight changes selected expert sets in later layers (0/0/6/5) and fails the original4% per-parameter limit; do not relax it. On identical selected IDs the largest parameter-gradient difference is0.6851%, global L2~0.23%. Training remains dynamically routed. The training harness uses the global GPU group for auxiliary load gradients, separate from Gloo plan metadata, and serializes no process-group handles. Checkpoints explicitly retain training backend and consolidated single-device evaluation backend. Public-text seed runs and heldout evaluation are reported separately; performance is not convergence proof.
+
+**Timing scope.** Full BF16 routed layer plus rematerialized backward and FP32 DW zero/accumulation; stage3, G8, ring65536, T4096, E512/top10. Pure matched C2048 controls first; separately tuned Hybrid C4096 and Elastic C3840 are labeled. The legacy/Elastic global receive matrix forbids C4096 at EP64 due to int32 indexing. Pair AG/RS composition changes cross-domain traffic and is not a measurement of domain-only fusion.
+
+| Configuration | Backend | Source chunk | Complete routed-layer ms |
+| --- | --- | ---: | ---: |
+| qwen38-wlf-cross-ep64-iter38-hybrid-c2048-attempt0 | excluded/incomplete | — | — |
