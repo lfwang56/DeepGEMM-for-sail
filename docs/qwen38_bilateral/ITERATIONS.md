@@ -86,3 +86,10 @@ Logs: qwen38-wlf-ep32-cache4-attempt0/. Routed experts only; shared expert exclu
 These are accepted same-runtime measurements. The noncached bilateral
 control and installed DeepEP baseline still need measurement in this environment.
 
+### Noncached control excluded
+
+The first same-runtime noncached control on .225/.226/.227/.223 completed
+all32 ranks, but .227 reported foreign GPU work during the phase (gate75).
+`qwen38-wlf-ep32-cache0-control-attempt0/` is excluded. The queued cache8/16
+controls were not launched. Retry on a different supernode after fresh checks.
+
