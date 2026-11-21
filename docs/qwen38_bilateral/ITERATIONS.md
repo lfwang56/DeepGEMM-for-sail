@@ -798,3 +798,18 @@ The future staged-return source is present but disabled in these controls. Its i
   }
 ]
 ```
+
+- Audit correction for the preceding incomplete communication sweep: all64GPU rank parents actually returned0 and rank0 produced a125.393432617ms timing. The phase failed its ownership audit on213, which observed8PIDs2083691–2083698 distinct from the verified own rank PIDs2083363/65/67/71/72/73/74/75. Exclude the timing because of interference; this was not a mathematical/kernel failure. Other7hostgates were clean. Nextattempt excludes213and the concurrently validating220.
+
+## Iteration9 — bulk producer packing followed by same-CTA AIU
+
+- The first1Ntile producer now optionally packs peer X once in a coalesced uint4 pass, writes every padded row, executes a device fence and CTA barrier, then loads its own packed tile with AIU for real FC1 computation. No additional scratch, no cross-CTA wait, no standalone dispatch kernel. Later consumer remains stream ordered. Requires exactly one producer N tile. DefaultFalse preserves prior paths.
+- Unit covers BN128/256, local gather/AIU consumers, duplicates,masks,zero-score,raggedchunks,allgradients and whole-FC1-with-no-consumer. Passed173.682s. Both QwenH8192/I2048/E16/K10,T512 all-element FP32 references passed, with/without activation-backward fusion. EP2 independentreference+128dynamicroutegraphs passed. All4validation stages and the220 ownershipgate clean.
+- NativeextensionSHA256be4414a11d87e88fab554ff03e151d4a1b978ad4c0eb166f25d869c75f229c8b.
+- Attempted EP8 diagnostic timing on220 exited75 at preflight before GPU launch. No iteration9timing or performance winner yet. Receipt:
+
+```text
+{"case": "distributed_campaign_preflight", "name": "qwen38-wlf-ep8-proxy-iter9-control", "hosts": [{"node": "172.17.0.220", "returncode": 0, "output": "{\"case\": \"idle_node_gate\", \"host\": \"e01-cn-2n550vu1t01-a0008\", \"selected_gpus\": [0, 1, 2, 3, 4, 5, 6, 7], \"allowed\": true, \"processes\": []}\n{\"case\": \"idle_node_postflight\", \"host\": \"e01-cn-2n550vu1t01-a0008\", \"allowed\": true, \"processes\": [], \"observed_foreign_during_command\": [], \"verified_owned_processes\": [], \"monitoring_errors\": [], \"monitor_interval_seconds\": 2, \"command_returncode\": 0}\n", "error": ""}]}
+{"case": "distributed_master_port_unavailable", "node": "172.17.0.220", "port": 30621, "error": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nOSError: [Errno 98] Address already in use\n"}
+
+```

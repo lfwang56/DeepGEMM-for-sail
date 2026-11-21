@@ -27,7 +27,8 @@ class PeerMoEPlan(NativeMoEPlan):
                  active_rows=True, fuse_local_grad=True, fuse_activation_backward=False,
                  vectorized_copy=True, dispatch_cache_n=0, reuse_packed_dy=False,
                  dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
-                 dispatch_producer=False, dispatch_producer_tiles=1, producer_local_aiu=False, **kwargs):
+                 dispatch_producer=False, dispatch_producer_tiles=1, producer_local_aiu=False,
+                 producer_input_aiu=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -45,6 +46,11 @@ class PeerMoEPlan(NativeMoEPlan):
         if producer_local_aiu and not dispatch_producer:
             raise ValueError("local AIU input requires producer dispatch")
         self.producer_local_aiu = producer_local_aiu
+        if not isinstance(producer_input_aiu, bool):
+            raise TypeError("producer_input_aiu must be bool")
+        if producer_input_aiu and (not dispatch_producer or dispatch_producer_tiles != 1):
+            raise ValueError("producer input AIU requires exactly one producer N tile")
+        self.producer_input_aiu = producer_input_aiu
         if not isinstance(active_rows, bool) or not isinstance(fuse_local_grad, bool):
             raise TypeError("peer pointwise switches must be bool")
         self.active_rows, self.fuse_local_grad = active_rows, fuse_local_grad
@@ -155,7 +161,7 @@ class PeerMoEPlan(NativeMoEPlan):
 
     def _peer_gemm(self, a, weight, output, source_rows, *, read=False, write=False,
                    source="local_x", destination="local_values", compile_only=False, pack_input=False, role=None,
-                   first_n_tile=0, num_n_tiles=0, local_input_aiu=False):
+                   first_n_tile=0, num_n_tiles=0, local_input_aiu=False, producer_input_aiu=False):
         source_stride = self.chunk_tokens if source == "local_x" else self.chunk_tokens * self.k
         if role is None:
             role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
@@ -169,7 +175,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.dispatch_cache_aiu if read else False,
             self.staged_return if write else False,
             self.dispatch_cache_ctas,
-            first_n_tile, num_n_tiles, local_input_aiu,
+            first_n_tile, num_n_tiles, local_input_aiu, producer_input_aiu,
         )
 
     def _fc1(self, w1, *, pack_input=False, compile_only=False):
@@ -182,7 +188,8 @@ class PeerMoEPlan(NativeMoEPlan):
             # the remaining columns. No cross-CTA wait or dispatch-only kernel.
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
                             read=True, pack_input=True, role="fc1", compile_only=compile_only,
-                            first_n_tile=0, num_n_tiles=produced)
+                            first_n_tile=0, num_n_tiles=produced,
+                            producer_input_aiu=self.producer_input_aiu)
             if produced < ntiles:
                 self._peer_gemm(self.packed_x, w1, self.gate_up, self.identity_rows,
                                 role="fc1", compile_only=compile_only, first_n_tile=produced,

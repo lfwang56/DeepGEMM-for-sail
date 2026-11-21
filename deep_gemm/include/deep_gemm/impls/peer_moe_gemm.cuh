@@ -28,6 +28,23 @@ namespace deep_gemm {
 
 namespace training {
 
+// A one-N-tile producer owns every row of its M tile. Materialize the required
+// packed input in one coalesced pass, then feed this same CTA's GEMM through
+// AIU. No other CTA is waited on, and the next kernel is stream ordered.
+template <uint32_t BM, uint32_t K, uint32_t Threads>
+__device__ __forceinline__ void pack_producer_input_rows(
+        const uint64_t* addresses, const PeerGemmParams& params, uint32_t packed_row_base) {
+    auto* packed = reinterpret_cast<uint4*>(const_cast<void*>(params.gemm.a_ptr))
+        + uint64_t(packed_row_base) * (K / 8);
+    for (uint32_t position = threadIdx.x; position < BM * (K / 8); position += Threads) {
+        const uint32_t row = position / (K / 8), column = position % (K / 8);
+        const uint64_t address = addresses[row];
+        packed[position] = address ? reinterpret_cast<const uint4*>(address)[column] : uint4{};
+    }
+    __threadfence();
+    __syncthreads();
+}
+
 template <uint32_t BM, uint32_t K, uint32_t Threads>
 __device__ __forceinline__ void cache_peer_input_rows(
         uint64_t* addresses, const PeerGemmParams& params,
@@ -228,7 +245,8 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite,
           bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
           bool DispatchCacheAiu = false, bool StagedReturn = false,
-          uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false>
+          uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false,
+          bool ProducerInputAiu = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -255,6 +273,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     static_assert(DispatchCacheN == 0 || (PeerRead && !Coherent));
     static_assert(!DispatchCacheAiu || DispatchCacheN != 0);
     static_assert(!LocalInputAiu || (!PeerRead && !PeerWrite && FirstNTile > 0));
+    static_assert(!ProducerInputAiu || (PeerRead && !PeerWrite && FirstNTile == 0
+                  && NumNTiles == 1 && DispatchCacheN == 0));
     static_assert((FirstNTile == 0 && NumNTiles == 0) || (!Coherent && DispatchCacheN == 0));
     using OriginalScheduler = std::conditional_t<Coherent,
         training::CoherentFusedScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
@@ -284,7 +304,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     using GatherOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<
             ArchTag, SrcT, false, Alignment, cute::Int<BLOCK_K>, BLOCK_SIZE,
             ACopyInst, cute::Int<BLOCK_M>>;
-    constexpr bool UseAiuA = DispatchCacheAiu || LocalInputAiu;
+    constexpr bool UseAiuA = DispatchCacheAiu || LocalInputAiu || ProducerInputAiu;
     using GemmOperandA = std::conditional_t<UseAiuA,
         cutlass::gemm::config::DefaultGemm_AIU_Operand<
             ArchTag, SrcT, false, cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, false>, GatherOperandA>;
@@ -391,6 +411,9 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
             if constexpr (DispatchCacheN != 0)
                 training::cache_peer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(cached_source_addresses,
                     params, deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
+            if constexpr (ProducerInputAiu)
+                training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(
+                    cached_source_addresses, params, deep_scheduler.curr_block_m_offset);
           }
           __syncthreads();
           source_addresses = cached_source_addresses;
@@ -406,7 +429,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
               // Arbitrary peer rows have already been gathered into this
               // CTA's contiguous cache. AIU is legal for this local operand;
               // its swizzled TSM layout uses the matching A load atom above.
-              const auto* cache = LocalInputAiu
+              const auto* cache = (LocalInputAiu || ProducerInputAiu)
                   ? reinterpret_cast<const SrcT*>(args.a_ptr)
                       + uint64_t(deep_scheduler.curr_block_m_offset) * SHAPE_K
                   : reinterpret_cast<const SrcT*>(params.dispatch_scratch)
