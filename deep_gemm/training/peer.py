@@ -32,7 +32,20 @@ class PeerMoEPlan(NativeMoEPlan):
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
                  pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
-                 expert_local_grad=False, ring_rows=None, return_vector_bytes=4, **kwargs):
+                 expert_local_grad=False, ring_rows=None, return_vector_bytes=4,
+                 dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
+                 dag_serialize=False, dag_trace=False, **kwargs):
+        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace)):
+            raise TypeError("DAG switches must be bool")
+        if any(type(value) is not int or value < 1 for value in (dag_input_ctas, dag_return_ctas)):
+            raise ValueError("DAG communication CTA counts must be positive integers")
+        if dag_fusion and (not expert_local_grad or not fuse_dispatch or not fuse_return
+                           or ffn_fusion or dispatch_producer or dispatch_pipeline or return_pipeline
+                           or inline_dispatch or dispatch_cache_n or staged_return or return_vector_bytes != 4):
+            raise ValueError("DAG fusion requires direct bilateral fusion and expert-local gradients without other pipelines")
+        self.dag_fusion = dag_fusion
+        self.dag_input_ctas, self.dag_return_ctas = dag_input_ctas, dag_return_ctas
+        self.dag_serialize, self.dag_trace = dag_serialize, dag_trace
         if type(return_vector_bytes) is not int or return_vector_bytes not in (4, 8):
             raise ValueError("return_vector_bytes must be 4 or 8")
         if return_vector_bytes != 4 and (not fuse_return or return_pipeline or staged_return or ffn_fusion):
@@ -220,6 +233,34 @@ class PeerMoEPlan(NativeMoEPlan):
         self.route_window_count = 1
         if self.ring_rows is not None:
             allocate_route_windows(self)
+        self.dag_controls = None
+        self._dag_slot = 0
+        if dag_fusion:
+            config = self.gemm_configs.get("fc1", (256, 64, 64, 64, 2))
+            if self.gemm_configs.get("fc2", config) != config:
+                raise ValueError("DAG FC1 and FC2 currently require matching GEMM tiles")
+            bn, bk, wm, wn, stages = config
+            if bn not in (128, 256) or bk != 64 or wm != 64 or wn != 64 or stages not in (2, 3, 4):
+                raise ValueError("unsupported DAG GEMM tile")
+            if self.i % bn or self.h % bn:
+                raise ValueError("DAG hidden and intermediate dimensions must be divisible by BN")
+            self.dag_config = config
+            tiles, pairs, n2 = self.rows // self.block_m, self.i // bn, self.h // bn
+            self.dag_slots = 2 * math.ceil(self.max_tokens / self.chunk_tokens) * self.route_window_count
+            sample_capacity = 8192 if dag_trace else 1
+            descriptions = (("state", (13,), torch.int32), ("input_ready", (tiles,), torch.int32),
+                            ("pair_done", (tiles * pairs,), torch.int32),
+                            ("activated_pairs", (tiles,), torch.int32),
+                            ("queue", (tiles * n2,), torch.int32),
+                            ("output_ready", (tiles * n2,), torch.int32),
+                            ("monitor", (self.dag_slots, 12), torch.int64),
+                            ("samples", (self.dag_slots, sample_capacity, 6), torch.int64))
+            self.dag_controls = []
+            for name, shape, dtype in descriptions:
+                value = torch.zeros(shape, device=self.device, dtype=dtype)
+                setattr(self, "dag_" + name, value)
+                self.buffers["dag_" + name] = value
+                self.dag_controls.append(value)
         self.dispatch_scratch = None
         self.pipeline_ready = self.return_pipeline_ready = self.pipeline_statistics = None
         self.return_pipeline_statistics = None
@@ -343,6 +384,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.ffn_fusion:
             self._ffn(w1, w2, compile_only=True)
             self._ffn(self.w2_t, self.w1_t, backward=True, compile_only=True)
+        if self.dag_fusion:
+            self._dag(w1, w2, return_output=True, compile_only=True)
+            self._dag(w1, w2, return_output=False, compile_only=True)
         if self.expert_local_grad:
             self._expert_gradients(compile_only=True)
         if self.ring_rows is not None:
@@ -423,6 +467,11 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m])
 
     def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True):
+        if self.dag_fusion:
+            self._dag(w1, w2, return_output=return_output)
+            if return_output and synchronize_output:
+                self._barrier(1)
+            return
         if self.ffn_fusion:
             self._ffn(w1, w2)
             self._barrier(1)
@@ -439,6 +488,25 @@ class PeerMoEPlan(NativeMoEPlan):
             self._scatter_peer("local_values")
         if synchronize_output:
             self._barrier(1)
+
+    def _dag(self, w1, w2, return_output=True, compile_only=False):
+        slot = 0 if compile_only else self._dag_slot
+        if not compile_only:
+            if slot >= self.dag_slots:
+                raise RuntimeError("DAG trace slot schedule exceeds the fixed plan")
+            self._dag_slot += 1
+            for value in self.dag_controls[:6]:
+                value.zero_()
+            if self.dag_trace:
+                self.dag_monitor[slot].zero_()
+        controls = [*self.dag_controls[:6], self.dag_monitor[slot], self.dag_samples[slot], self.status]
+        self.dag_grid = dg._C._moe_training_peer_dag(
+            [self.packed_x, w1, self.gate_up, self.hidden, w2, self.packed_output,
+             self.pointer_tables["local_x"], self.pointer_tables["local_values"],
+             self.source_rows, self.permutation, self.work_info, self.num_blocks],
+            controls, self.chunk_tokens, self.chunk_tokens * self.k, self.block_m,
+            self.dag_config, self.dag_input_ctas, self.dag_return_ctas, return_output,
+            self.dag_serialize, self.dag_trace, compile_only)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(
@@ -518,6 +586,7 @@ class PeerMoEPlan(NativeMoEPlan):
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
         with self._execution():
+            self._dag_slot = 0
             self._validate(x, ids, scores, w1, w2, valid_tokens)
             self.prepare(w1, w2)
             return super().forward(x, ids, scores, w1, w2, valid_tokens)
@@ -529,6 +598,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
+            if self.dag_fusion:
+                self._dag_slot = self.dag_slots // 2
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()

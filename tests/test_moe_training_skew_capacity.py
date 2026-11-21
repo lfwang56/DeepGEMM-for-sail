@@ -39,6 +39,11 @@ def main():
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--return-vector-bytes", type=int, choices=(4, 8), default=4)
+    parser.add_argument("--dag-fusion", action="store_true")
+    parser.add_argument("--dag-input-ctas", type=int, default=4)
+    parser.add_argument("--dag-return-ctas", type=int, default=4)
+    parser.add_argument("--dag-serialize", action="store_true")
+    parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -98,7 +103,7 @@ def main():
         if args.ring_rows is not None:
             options["ring_rows"] = args.ring_rows
         if backend == "peer":
-            use_producer = not (args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion)
+            use_producer = not (args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion or args.dag_fusion)
             options.update(dispatch_producer=use_producer, dispatch_producer_tiles=1,
                            reuse_packed_dy=True,
                            producer_input_aiu=args.producer_input_aiu and use_producer,
@@ -108,7 +113,10 @@ def main():
                            pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize,
                            inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses,
                            ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad,
-                           return_vector_bytes=args.return_vector_bytes)
+                           return_vector_bytes=args.return_vector_bytes,
+                           dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
+                           dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
+                           dag_trace=args.dag_trace)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":

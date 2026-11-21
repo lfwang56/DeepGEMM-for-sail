@@ -2252,3 +2252,83 @@ compute overlap; next implement a GPU task DAG spanning dispatch, FC1,
 activation, FC2 and return, with a same-kernel forced-serial control and
 measured internal communication/computation activity. Preserve the best
 verified producer path as a comparison until the DAG proves faster.
+
+
+## Iteration21: GPU task DAG with measured internal activity
+
+Implement a persistent GPU queue spanning input dispatch, FC1 tiles, paired
+gate/up activation, ready FC2 tiles and return copies. Separate communication
+CTAs and dynamically shared FC1/FC2 compute tasks use release/acquire readiness
+with a fully resident occupancy-checked grid. Apply the same DAG to backward
+forward-replay without returning Y. The remaining backward WG/DG kernels stay
+separate. A forced-serial switch adds stage dependencies without changing
+precision, task math or CTA resources. Default production recipe stays the
+iteration19 producer path; DAG is opt-in.
+
+Optional diagnostic monitor: one resident CTA samples active task counters
+using only its own clock64, avoiding unsynchronized cross-CU timestamps.
+Counters cover task spans including memory waits, not exact physical wire or
+Tensor Cell utilization. Production compilation removes monitor atomics.
+Global timeout status persists across route windows. Graph slots preserve
+per-window forward/replay samples.
+
+Native extension SHA2561edc46ba0f37dc4d47fba71dcb664a6433d07951c94bdca153dd7a940935a058.
+ZW-M890P/ppu0015, wlf_sgl_2.2 Torch2.11 runtime/nativeTorch2.10 build.
+Full Qwen FP32 masked/skewed Y/DX/DW/dScore comparisons passed. Both
+producer-versus-DAG and parallel-versus-serial graph tests have exact Y/DX/
+dScore across four changing-route patterns, DW RMS~4e-7. Actual EP32 C4096/
+S65536 all-to-one-expert verifies all outputs/gradients on32 ranks; all four
+node audits clean. No dropped routes or altered rounding contract.
+
+Benchmarks: BF16 H8192/I2048/K10/T4096/C4096/S65536,512 experts at EP32 and128
+at EP8 proxy. Warmup5,20 graph iterations,5 repeats, max-rank event medians.
+Full backward replay and FP32 DW zero/accumulation retained, no optimizer.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|dag-bm128-parallel|109.896338|289.764844|
+|ep8|dag-bm256-bn128-parallel|109.615576|297.560449|
+|ep8|dag-bm256-parallel|100.331409|159.766895|
+|ep8|dag-bm256-serial|100.251447|251.619897|
+|ep8|producer-bm256|100.459967|103.486548|
+|ep32|dag-bm128-parallel-r1|129.444434|279.169141|
+|ep32|dag-bm256-bn128-parallel-r1|129.644556|286.202808|
+|ep32|dag-bm256-parallel-forward-r1|35.712970|54.512189|
+|ep32|dag-bm256-parallel-r1|120.030811|154.280042|
+|ep32|dag-bm256-serial-forward-r1|35.700586|120.554846|
+|ep32|dag-bm256-serial-r1|119.881824|244.623071|
+|ep32|producer-bm256-forward-r1|35.667123|29.822406|
+|ep32|producer-bm256-r1-attempt0|119.989209|104.573645|
+
+All accepted phases passed all rank and node audits. One initial EP32
+producer-control phase is excluded in full because foreign work appeared on
+223 during/postflight. The complete retry uses225/226/227/222. The launcher
+now propagates gate return75 and prefers replacement hosts on retry.
+
+The DAG demonstrably overlaps work but is slower than the best production
+path: EP32 step154.280ms versus244.623ms forced-serial and104.574ms producer.
+The1.59x serialized-control ratio is not a gain versus DeepEP. Monitor
+recapture on32 real PPUs has no dropped samples: rank0 FWD54,595,714cycles
+with both task classes active96.0% of the window, versus130,819,434cycles
+and0% in forced serial. Replay has53,104,804 versus86,518,808cycles. These
+are instrumented per-rank task activity diagnostics, not max-rank latency
+measurements or proof of instruction/wire overlap. The first smaller trace
+capacity truncated timeline samples; its online integrals remained complete,
+and full-capacity r1 captures supersede those timelines.
+
+Single-device Asight Compute, local peer pointers:38CTAs x512threads,
+224registers/thread,2176B static +131072B dynamic TSM,1CTA/CU/25% theoretical
+warp occupancy; CU throughput37.59%, DRAM24.29%, LLC45.73%, TSM load group
+conflict ratio41%, no stack allocation. This is resource evidence, not an
+ICN bandwidth measurement or physical floor.
+
+Artifacts: outputs/qwen38/iter21-task-dag-controls.json (accepted/excluded
+phases),ep32-dag-c4096-reference.json,ep32-dag-activity-audits.json,
+ep32-dag-activity-{parallel,serial}-r1.json.gz and
+ep32-dag-forward-activity.png/svg. Resource report qwen38-dag-profile.acurep
+and work/qwen38-dag-acu-details.txt in the campaign.
+
+Next: test a shared pool of ready communication and compute tasks, allowing
+available CTAs to borrow copy work instead of reserving a small fixed copy
+pool. Preserve the strong tuned DeepEP/producer controls. The2–3x target
+remains unmet; this measured overlap is not yet an acceptable production win.

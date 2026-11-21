@@ -103,6 +103,11 @@ def main():
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--return-vector-bytes", type=int, choices=(4, 8), default=4)
+    parser.add_argument("--dag-fusion", action="store_true")
+    parser.add_argument("--dag-input-ctas", type=int, default=4)
+    parser.add_argument("--dag-return-ctas", type=int, default=4)
+    parser.add_argument("--dag-serialize", action="store_true")
+    parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -205,6 +210,9 @@ def main():
                 options["dispatch_cache_ctas"] = args.dispatch_cache_ctas
                 options["dispatch_producer"] = args.dispatch_producer
                 options["return_vector_bytes"] = args.return_vector_bytes
+                options.update(dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
+                               dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
+                               dag_trace=args.dag_trace)
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -325,7 +333,7 @@ def main():
                     "torch": torch.__version__,
                     "process_group_backend": args.process_group_backend,
                     "ep_size": size, "topology": args.topology, "graph": not args.eager,
-                    "instrumented": args.profile,
+                    "instrumented": args.profile or args.dag_trace,
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
@@ -355,6 +363,13 @@ def main():
                     "peer_inline_dispatch": getattr(plan, "inline_dispatch", None) if backend == "peer" else None,
                     "peer_cached_return_addresses": getattr(plan, "cache_return_addresses", None) if backend == "peer" else None,
                     "peer_return_vector_bytes": getattr(plan, "return_vector_bytes", None) if backend == "peer" else None,
+                    "dag_fusion": getattr(plan, "dag_fusion", None) if backend == "peer" else None,
+                    "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" else None,
+                    "dag_return_ctas": getattr(plan, "dag_return_ctas", None) if backend == "peer" else None,
+                    "dag_serialized_control": getattr(plan, "dag_serialize", None) if backend == "peer" else None,
+                    "dag_grid": getattr(plan, "dag_grid", None) if backend == "peer" else None,
+                    "dag_activity_statistics": plan.dag_monitor.cpu().tolist() if backend == "peer" and args.dag_fusion and args.dag_trace else None,
+                    "dag_activity_columns": ["total_cycles", "input_active", "compute_active", "both_active", "neither_active", "fc1_active", "activation_active", "fc2_active", "return_active", "sample_count", "dropped_samples", "error"],
                     "peer_ffn_fusion": getattr(plan, "ffn_fusion", None) if backend == "peer" else None,
                     "peer_expert_local_grad": getattr(plan, "expert_local_grad", None) if backend == "peer" else None,
                     "ring_rows_requested": args.ring_rows,

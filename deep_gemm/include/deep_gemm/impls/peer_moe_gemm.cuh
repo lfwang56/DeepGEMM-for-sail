@@ -428,7 +428,8 @@ template <class _SrcT, GemmType kGemmType,
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
-                           const uint32_t selected_m_tile = 0) {
+                           const uint32_t selected_m_tile = 0,
+                           const uint32_t selected_n_tile = ~0u) {
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
     static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
@@ -590,7 +591,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     uint32_t m_block_idx, n_block_idx;
     TileScheduler deep_scheduler = [&]() {
         if constexpr (FixedMTile)
-            return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum, selected_m_tile);
+            return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum, selected_m_tile, selected_n_tile);
         else if constexpr (DispatchPipeline)
             return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum, pipeline);
         else

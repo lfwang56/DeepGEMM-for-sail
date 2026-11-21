@@ -10,12 +10,14 @@ namespace deep_gemm::training {
 template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E>
 struct SelectedMTileScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
-    uint32_t selected;
+    uint32_t selected, selected_n;
     __device__ __forceinline__ SelectedMTileScheduler(
-            const int32_t* blocks, const int32_t* records, uint32_t tile)
-        : Base(blocks, records), selected(tile) {}
+            const int32_t* blocks, const int32_t* records, uint32_t tile, uint32_t column = ~0u)
+        : Base(blocks, records), selected(tile), selected_n(column) {}
     __device__ __forceinline__ bool fetch_next_work(uint32_t& m, uint32_t& n) {
-        n = this->current_iter++;
+        const uint32_t iteration = this->current_iter++;
+        if (selected_n != ~0u && iteration != 0) return false;
+        n = selected_n == ~0u ? iteration : selected_n;
         if (selected >= this->num_aligned_m_blocks_ || n >= (N + BN - 1) / BN) return false;
         const uint4 record = __ldg(this->expert_ids_and_cumsum_ + selected);
         m = selected - record.z;
