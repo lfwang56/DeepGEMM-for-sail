@@ -30,6 +30,7 @@ def main():
     parser.add_argument("--tokens", type=int, default=128)
     parser.add_argument("--no-fuse-dispatch", action="store_true")
     parser.add_argument("--no-fuse-return", action="store_true")
+    parser.add_argument("--fuse-activation-backward", action="store_true")
     options = parser.parse_args()
     if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend != "peer":
         parser.error("peer switches require --backend peer")
@@ -53,7 +54,8 @@ def main():
                                for role in ("fc1", "fc2", "dhidden", "dx")}}
              if options.backend == "peer" else {"maximize_ctas": True} if options.backend == "persistent" else {})
     if options.backend == "peer":
-        extra.update(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return)
+        extra.update(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return,
+                     fuse_activation_backward=options.fuse_activation_backward)
     plan = classes[options.backend](h, i, e, k, t, chunk_tokens=t, compute=options.compute, **extra)
     for pattern in ("balanced_masked", "duplicate_skewed"):
         if pattern == "duplicate_skewed":

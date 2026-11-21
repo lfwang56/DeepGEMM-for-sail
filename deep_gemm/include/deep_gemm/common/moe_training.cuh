@@ -28,6 +28,9 @@ enum class Operation : int {
     ReadChunk,
     ActivationQuantize,
     ActivationBackwardQuantize,
+    ActivationDeviceRows,
+    TransformDeviceRows,
+    ZeroDeviceRows,
 };
 
 }  // namespace deep_gemm::training

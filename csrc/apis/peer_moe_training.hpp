@@ -146,14 +146,16 @@ public:
     struct Args {
         int n, k, groups;
         bool read_peer, write_peer;
+        bool activation_backward;
         int block_n, block_k, warp_m, warp_n, stages, threads;
         LaunchArgs launch_args;
         PeerGemmParams params;
     };
     static std::string name(const Args& args) {
-        return fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
+        auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
                            args.read_peer, args.write_peer, args.n, args.k, args.block_n,
                            args.block_k, args.warp_m, args.warp_n, args.stages);
+        return args.activation_backward ? name + "_activation_backward" : name;
     }
     static std::string generate_impl(const Args& args) {
         return fmt::format(R"(
@@ -162,12 +164,13 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}
+        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}
     >(params);
 }}
 )", args.threads, name(args), args.n, args.k, args.groups, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
-       args.read_peer ? "true" : "false", args.write_peer ? "true" : "false");
+       args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
+       args.activation_backward ? "true" : "false");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -180,7 +183,8 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       const torch::Tensor& work_info, const torch::Tensor& num_blocks,
                       int source_rows_per_rank, int destination_rows_per_rank,
                       bool read_peer, bool write_peer, bool compile_only,
-                      bool pack_input, const std::vector<int>& config) {
+                      bool pack_input, const std::vector<int>& config,
+                      const c10::optional<torch::Tensor>& activation_gate_up) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -220,6 +224,14 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     params.destination_rows_per_rank = destination_rows_per_rank;
     params.num_ranks = ranks;
     params.pack_input = pack_input;
+    if (activation_gate_up.has_value()) {
+        const auto& activation = activation_gate_up.value();
+        DG_HOST_ASSERT(!write_peer && activation.device() == a.device() && activation.is_contiguous());
+        DG_HOST_ASSERT(activation.scalar_type() == torch::kBFloat16 && activation.dim() == 2);
+        DG_HOST_ASSERT(activation.size(0) == m && activation.size(1) == 2 * n);
+        DG_HOST_ASSERT(activation.numel() <= INT32_MAX);
+        params.activation_gate_up = activation.data_ptr();
+    }
     DG_HOST_ASSERT(config.empty() || config.size() == 5);
     const int bn = config.empty() ? 128 : config[0];
     const int bk = config.empty() ? 64 : config[1];
@@ -235,7 +247,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     DG_HOST_ASSERT(threads >= 32 && threads <= 256);
     const int smem = gemm_smem_total_size(2, stages, 128, bn, bk);
     DG_HOST_ASSERT(smem <= 256 * 1024);
-    PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer,
+    PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(),
                               bn, bk, wm, wn, stages, threads,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     const auto code = PeerGemmRuntime::generate(args);
@@ -263,7 +275,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("input_rows"), py::arg("permutation"), py::arg("work_info"), py::arg("num_blocks"),
           py::arg("source_rows_per_rank"), py::arg("destination_rows_per_rank"),
           py::arg("read_peer"), py::arg("write_peer"), py::arg("compile_only") = false,
-          py::arg("pack_input") = false, py::arg("config") = std::vector<int>{});
+          py::arg("pack_input") = false, py::arg("config") = std::vector<int>{},
+          py::arg("activation_gate_up") = py::none());
 }
 
 }  // namespace deep_gemm::training

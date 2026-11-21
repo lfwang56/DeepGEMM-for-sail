@@ -32,7 +32,7 @@ class NativeMoEPlan:
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  chunk_tokens=128, compute="bf16", group=None, device=None,
-                 check_errors=True, m_schedule="nopad", fuse_activation_quant=True):
+                 check_errors=True, m_schedule="nopad", fuse_activation_quant=True, active_pointwise=True):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
@@ -58,6 +58,9 @@ class NativeMoEPlan:
         self.compute, self.check_errors = compute, check_errors
         self.m_schedule = m_schedule
         self.fuse_activation_quant = fuse_activation_quant
+        if not isinstance(active_pointwise, bool):
+            raise TypeError("active_pointwise must be bool")
+        self.active_pointwise = active_pointwise and compute == "bf16" and m_schedule == "nopad" and self.transport == "collective"
         self.alignment = math.lcm(128, dg.get_m_alignment_for_contiguous_layout())
         self.routes = self.size * chunk_tokens * topk
         # Sum ceil(count_e/alignment)*alignment <= routes + E*(alignment-1).
@@ -73,6 +76,8 @@ class NativeMoEPlan:
             raise ValueError("nopad training supports at most 1024 local experts")
         if group is not None:
             recipe = compute if fuse_activation_quant else compute + ":separate_activation_quant"
+            if self.active_pointwise:
+                recipe += ":active_pointwise"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule)
             descriptions = [None] * self.size
@@ -96,6 +101,7 @@ class NativeMoEPlan:
         self.gathered_ids = allocate("gathered_ids", (self.size * c, k), torch.int64)
         self.counts = allocate("counts", (e,), torch.int32)
         self.offsets = allocate("offsets", (e + 1,), torch.int32)
+        self.current_rows = self.offsets[e:e+1]
         self.lengths = allocate("lengths", (e,), torch.int32)
         self.group_ids = allocate("group_ids", (m,), torch.int32)
         self.permutation = allocate("permutation", (m,), torch.int32)
@@ -259,6 +265,8 @@ class NativeMoEPlan:
             operations.update((9, 10, 14, 15) if self.fuse_activation_quant else (7, 8, 9, 10))
         else:
             operations.update((7, 8))
+        if self.active_pointwise:
+            operations.update((16, 17, 18))
         dg._C._moe_training_precompile(self.device.index, sorted(operations))
 
     def _gemm(self, a, weight, output, name, prequantized=False):
@@ -294,7 +302,10 @@ class NativeMoEPlan:
                 [self.routes, self.e, self.rank, self.size])
         _launch(1, [self.counts, self.offsets, self.lengths], [self.e, self.alignment])
         _launch(2, [self.offsets, self.group_ids, self.permutation], [self.rows, self.e])
-        self.packed_x.zero_()
+        if self.active_pointwise:
+            _launch(18, [self.packed_x, self.current_rows, self.status], [self.rows, self.h])
+        else:
+            self.packed_x.zero_()
         _launch(3, [self.gathered_x, self.route_experts, self.route_rows, self.offsets,
                     self.packed_x, self.permutation, self.status], [self.routes, h, k, self.rows])
 
@@ -303,6 +314,8 @@ class NativeMoEPlan:
         fused = self.compute == "fp8" and self.fuse_activation_quant
         if fused:
             _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
+        elif self.active_pointwise:
+            _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status], [self.rows, self.i, 0])
         else:
             _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
         self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
@@ -310,7 +323,11 @@ class NativeMoEPlan:
 
     def _scatter_output(self):
         self.route_values.zero_()
-        _launch(4, [self.packed_output, self.permutation, self.route_values], [self.rows, self.h, self.routes])
+        if self.active_pointwise:
+            _launch(17, [self.packed_output, self.permutation, self.route_values, self.current_rows, self.status],
+                    [self.rows, self.h, self.routes, 0])
+        else:
+            _launch(4, [self.packed_output, self.permutation, self.route_values], [self.rows, self.h, self.routes])
         self._return_routes()
 
     @torch.no_grad()
@@ -355,13 +372,19 @@ class NativeMoEPlan:
                 _launch(12, [self.local_values, dy, dscores], dims)
                 _launch(11, [dy, scores, self.local_dy], dims)
                 self._gather(self.route_values, self.local_dy)
-                _launch(5, [self.route_values, self.permutation, self.packed_dy], [self.rows, self.h, self.routes])
+                if self.active_pointwise:
+                    _launch(17, [self.route_values, self.permutation, self.packed_dy, self.current_rows, self.status],
+                            [self.rows, self.h, self.routes, 1])
+                else:
+                    _launch(5, [self.route_values, self.permutation, self.packed_dy], [self.rows, self.h, self.routes])
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
                 # Reuse activation buffers only after their wgrad readers.
                 self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
                 fused = self.compute == "fp8" and self.fuse_activation_quant
                 if fused:
                     _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
+                elif self.active_pointwise:
+                    _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status], [self.rows, self.i, 1])
                 else:
                     _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)

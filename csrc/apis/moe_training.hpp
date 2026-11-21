@@ -8,6 +8,7 @@
 #include "../jit/kernel_runtime.hpp"
 #include "../utils/exception.hpp"
 #include "../utils/format.hpp"
+#include "../utils/utils.hpp"
 
 namespace deep_gemm::training {
 
@@ -39,7 +40,7 @@ __global__ void moe_training_{}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantize));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ZeroDeviceRows));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -170,6 +171,30 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(4, 1, i32); expect(5, 1, i32);
             work = dims[1] * std::max(dims[2], dims[3]);
             break;
+        case Operation::ActivationDeviceRows:
+            schema(4, 3);
+            DG_HOST_ASSERT(dims[1] > 0 && dims[2] <= 1);
+            expect(0, dims[0] * 2 * dims[1], bf); expect(1, dims[0] * dims[1], bf);
+            expect(2, 1, i32); expect(3, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        case Operation::TransformDeviceRows: {
+            schema(5, 4);
+            DG_HOST_ASSERT(dims[1] > 0 && dims[3] <= 1);
+            const bool backward = dims[3];
+            expect(0, (backward ? dims[2] : dims[0]) * dims[1], bf);
+            expect(1, dims[0], i32);
+            expect(2, (backward ? dims[0] : dims[2]) * dims[1], bf);
+            expect(3, 1, i32); expect(4, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        }
+        case Operation::ZeroDeviceRows:
+            schema(3, 2);
+            DG_HOST_ASSERT(dims[1] > 0);
+            expect(0, dims[0] * dims[1], bf); expect(1, 1, i32); expect(2, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
     }
     if (blocks < 0) blocks = (work + 255) / 256;
     if (!blocks) return;
@@ -188,7 +213,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantize));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ZeroDeviceRows));
         Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
         compiler->build(fmt::format("moe_training_{}", operation), Runtime::generate(args));
     }

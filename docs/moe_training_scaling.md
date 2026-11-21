@@ -36,3 +36,38 @@ passed for balanced/masked and duplicate/skewed routing; maximum relative RMS
 0.004075. Logs: `scale-active-pointwise-unit.log`,
 `scale-active-pointwise-full-reference.log`,
 `scale-peer-ablation-large-ep32-c1024-active/`.
+
+## Stronger collective baseline and dHidden epilogue fusion
+
+BF16 collective NoPad now also uses GPU row counts for activations, route
+transforms and packed-input clearing. `active_pointwise=False` retains the
+capacity-scanning control; FP8 and the contiguous schedule are unchanged.
+Its 16-method suite passed (three unrelated skips), together with the full
+large-shape independent reference checks (`scale-native-active-*.log`).
+
+EP16 C1024 on .225/.226, identical large shape and timing protocol:
+
+| Path | Step / ms |
+| --- | ---: |
+| Stronger collective, active pointwise | 53.769 |
+| Peer hybrid, separate activation backward | 49.252 |
+| Peer hybrid, dHidden/activation-backward epilogue fusion | 49.143 |
+
+All16 ranks exited0 without detected interference. The epilogue preserves
+BF16 rounding of dHidden before differentiating SwiGLU. Its full independent
+large reference and 16-method suite passed (`scale-fused-activation-*.log`).
+The measured 0.2% difference is not a material speedup claim; this fusion is
+an opt-in control (`fuse_activation_backward=True`), not the default.
+The old 101.58ms collective denominator must not be used as the strongest
+current EP16 baseline. Profiler evidence directs the next experiment toward
+scalar peer packing rather than asserting that every additional fusion wins.
+
+## EP64 cross-supernode measurement
+
+Eight hosts .63/.213/.219/.220/.223/.225/.226/.227 completed the large C512
+collective benchmark with all64 rank parents exiting0 and clean postflights:
+`scale-collective-large-ep64-c512-clean/`. This predates collective active
+pointwise optimization. A prior attempt involving .222 was rejected for
+postflight foreign-job interference despite all64 rank processes exiting0.
+Direct-peer EP64 still requires eight simultaneously idle hosts in one domain;
+cross-supernode collective capability is not a direct-peer fusion claim.

@@ -24,7 +24,7 @@ class PeerMoEPlan(NativeMoEPlan):
     transport = "peer"
 
     def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
-                 active_rows=True, fuse_local_grad=True, **kwargs):
+                 active_rows=True, fuse_local_grad=True, fuse_activation_backward=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -33,6 +33,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if not isinstance(active_rows, bool) or not isinstance(fuse_local_grad, bool):
             raise TypeError("peer pointwise switches must be bool")
         self.active_rows, self.fuse_local_grad = active_rows, fuse_local_grad
+        if not isinstance(fuse_activation_backward, bool):
+            raise TypeError("fuse_activation_backward must be bool")
+        self.fuse_activation_backward = fuse_activation_backward
         super().__init__(*args, **kwargs)
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
@@ -114,6 +117,7 @@ class PeerMoEPlan(NativeMoEPlan):
             source_rows, self.permutation, self.work_info, self.num_blocks,
             source_stride, self.chunk_tokens * self.k, read, write, compile_only,
             pack_input, self.gemm_configs.get(role, ()),
+            self.gate_up if role == "dhidden" and self.fuse_activation_backward else None,
         )
 
     @torch.no_grad()
@@ -262,7 +266,8 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
                                 self.permutation if self.fuse_dispatch else self.identity_rows,
                                 read=self.fuse_dispatch, source="local_dy", role="dhidden")
-                self._activation(backward=True)
+                if not self.fuse_activation_backward:
+                    self._activation(backward=True)
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
                                 write=self.fuse_return, destination="local_dx")

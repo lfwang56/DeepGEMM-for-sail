@@ -274,6 +274,42 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
             value = warp_sum(lane < blockDim.x / 32 ? sums[lane] : 0.f);
             if (lane == 0) pointer<float>(p, 2)[token * p.dim[2] + route % p.dim[2]] = value;
         }
+    } else if constexpr (Op == Operation::ActivationDeviceRows) {
+        const int64_t rows = pointer<int32_t>(p, 2)[0];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 3), 2);
+        } else for (int64_t position = index; position < rows * p.dim[1];
+                    position += int64_t(gridDim.x) * blockDim.x) {
+            const int64_t offset = position / p.dim[1] * 2 * p.dim[1] + position % p.dim[1];
+            const float gate = __bfloat162float(pointer<Bf16>(p, 0)[offset]);
+            const float up = __bfloat162float(pointer<Bf16>(p, 0)[offset + p.dim[1]]);
+            const float sigmoid = 1.f / (1.f + expf(-gate)), silu = gate * sigmoid;
+            if (!p.dim[2]) pointer<Bf16>(p, 1)[position] = __float2bfloat16(silu * up);
+            else {
+                const float dh = __bfloat162float(pointer<Bf16>(p, 1)[position]);
+                pointer<Bf16>(p, 0)[offset] = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
+                pointer<Bf16>(p, 0)[offset + p.dim[1]] = __float2bfloat16(dh * silu);
+            }
+        }
+    } else if constexpr (Op == Operation::TransformDeviceRows) {
+        const int64_t rows = pointer<int32_t>(p, 3)[0];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 4), 2);
+        } else for (int64_t position = index; position < rows * p.dim[1];
+                    position += int64_t(gridDim.x) * blockDim.x) {
+            const int route = pointer<int32_t>(p, 1)[position / p.dim[1]];
+            const bool valid = route >= 0 && route < p.dim[2];
+            const int64_t offset = int64_t(route) * p.dim[1] + position % p.dim[1];
+            if (p.dim[3]) pointer<Bf16>(p, 2)[position] = valid ? pointer<Bf16>(p, 0)[offset] : __float2bfloat16(0.f);
+            else if (valid) pointer<Bf16>(p, 2)[offset] = pointer<Bf16>(p, 0)[position];
+        }
+    } else if constexpr (Op == Operation::ZeroDeviceRows) {
+        const int64_t rows = pointer<int32_t>(p, 1)[0];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 2), 2);
+        } else for (int64_t position = index; position < rows * p.dim[1];
+                    position += int64_t(gridDim.x) * blockDim.x)
+            pointer<Bf16>(p, 0)[position] = __float2bfloat16(0.f);
     } else if constexpr (Op == Operation::ReadChunk) {
         // full x, full IDs, chunk x, chunk IDs, valid token count, status.
         // dims: input capacity, chunk tokens,H,top-k,chunk start.

@@ -73,6 +73,8 @@ def main():
     parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--capacity-pointwise", action="store_true")
     parser.add_argument("--separate-local-grad", action="store_true")
+    parser.add_argument("--fuse-activation-backward", action="store_true")
+    parser.add_argument("--activation-backward-ablation", action="store_true")
     args = parser.parse_args()
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
@@ -80,6 +82,8 @@ def main():
         parser.error("FP8 ablation requires --backend collective --compute fp8")
     if args.peer_ablation and (args.backend not in ("peer", "both", "all") or args.compute != "bf16"):
         parser.error("peer ablation requires a BF16 peer backend")
+    if args.activation_backward_ablation and (args.peer_ablation or args.backend not in ("peer", "both") or args.compute != "bf16"):
+        parser.error("activation backward ablation requires BF16 peer/both without peer-ablation")
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
         raise ValueError("dimensions and iteration counts must be positive")
@@ -115,6 +119,8 @@ def main():
         elif backend == "peer" and args.peer_ablation:
             experiments.extend((backend, {"fuse_dispatch": dispatch, "fuse_return": returned})
                                for dispatch, returned in ((False, False), (False, True), (True, False), (True, True)))
+        elif backend == "peer" and args.activation_backward_ablation:
+            experiments.extend((backend, {"fuse_activation_backward": fused}) for fused in (False, True))
         else:
             experiments.append((backend, {}))
     reference_samples = None
@@ -133,11 +139,13 @@ def main():
             if backend == "peer":
                 options.update(fuse_dispatch=not args.no_fuse_dispatch, fuse_return=not args.no_fuse_return,
                                active_rows=not args.capacity_pointwise,
-                               fuse_local_grad=not args.separate_local_grad)
+                               fuse_local_grad=not args.separate_local_grad,
+                               fuse_activation_backward=args.fuse_activation_backward)
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend == "collective":
                 options = {"m_schedule": args.m_schedule,
-                           "fuse_activation_quant": not args.separate_fp8_quantization}
+                           "fuse_activation_quant": not args.separate_fp8_quantization,
+                           "active_pointwise": not args.capacity_pointwise}
             options.update(controls)
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
@@ -200,10 +208,12 @@ def main():
                     "host": socket.gethostname(), "device": torch.cuda.get_device_name(device),
                     "torch": torch.__version__,
                     "ep_size": size, "topology": args.topology, "graph": not args.eager,
+                    "instrumented": args.profile,
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
                     "collective_m_schedule": plan.m_schedule if backend == "collective" else None,
+                    "collective_active_pointwise": plan.active_pointwise if backend == "collective" else None,
                     "collective_gemm_config": args.collective_gemm_config if backend == "collective" else None,
                     "fused_activation_quantization": (plan.fuse_activation_quant
                                                        if backend == "collective" and args.compute == "fp8" else None),
@@ -211,6 +221,7 @@ def main():
                     "peer_fuse_return": getattr(plan, "fuse_return", None),
                     "peer_active_rows": getattr(plan, "active_rows", None) if backend == "peer" else None,
                     "peer_fuse_local_grad": getattr(plan, "fuse_local_grad", None) if backend == "peer" else None,
+                    "peer_fuse_activation_backward": getattr(plan, "fuse_activation_backward", None) if backend == "peer" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,

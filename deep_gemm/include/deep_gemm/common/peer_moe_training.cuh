@@ -28,6 +28,7 @@ struct PeerGemmParams {
     uint32_t destination_rows_per_rank;
     uint32_t num_ranks;
     bool pack_input;
+    void* activation_gate_up = nullptr;
 };
 
 }  // namespace deep_gemm::training

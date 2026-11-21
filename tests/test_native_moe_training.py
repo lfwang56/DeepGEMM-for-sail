@@ -201,6 +201,20 @@ class NativeTests(unittest.TestCase):
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
                   expected(x, ids, scores, w1, w2, dy, 5), self.compute)
 
+    def test_collective_active_pointwise(self):
+        if self.plan_class is not NativeMoEPlan or self.compute != "bf16":
+            self.skipTest("BF16 collective active-row control")
+        for active in (False, True):
+            x, ids, scores, w1, w2, dy = self.inputs()
+            ids.fill_(2)
+            ids[3].fill_(-1)
+            valid = torch.full((), 5, device="cuda", dtype=torch.int32)
+            plan = self.plan(active_pointwise=active)
+            y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
+            y.backward(dy)
+            check((y, x.grad, w1.grad, w2.grad, scores.grad),
+                  expected(x, ids, scores, w1, w2, dy, 5), self.compute)
+
     def test_graph_replay_updated_parameters(self):
         x, ids, scores, w1, w2, dy = self.inputs()
         w1, w2 = w1.detach().float().requires_grad_(), w2.detach().float().requires_grad_()
@@ -292,7 +306,7 @@ class NativeTests(unittest.TestCase):
 
 
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
-              gemm_config=None, fuse_dispatch=True, fuse_return=True):
+              gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -318,6 +332,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
+    if peer and not persistent:
+        plan_options["fuse_activation_backward"] = fuse_activation_backward
     if peer and not persistent:
         plan_options.update(fuse_dispatch=fuse_dispatch, fuse_return=fuse_return)
     plan = plan_class(256, 128, 2, 2, max(value.shape[0] for value in xs),
@@ -399,6 +415,7 @@ if __name__ == "__main__":
     parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
     parser.add_argument("--no-fuse-dispatch", action="store_true")
     parser.add_argument("--no-fuse-return", action="store_true")
+    parser.add_argument("--fuse-activation-backward", action="store_true")
     options, remaining = parser.parse_known_args()
     if options.gemm_config and (not options.peer or options.persistent or options.fp8):
         parser.error("explicit GEMM tiles require --peer with BF16 compute")
@@ -408,7 +425,8 @@ if __name__ == "__main__":
     recipe = "fp8" if options.fp8 else "bf16"
     if options.ep:
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
-                  options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return)
+                  options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
+                  options.fuse_activation_backward)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer else NativeMoEPlan
@@ -417,5 +435,6 @@ if __name__ == "__main__":
             NativeTests.plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer and not options.persistent:
             NativeTests.plan_options.update(fuse_dispatch=not options.no_fuse_dispatch,
-                                            fuse_return=not options.no_fuse_return)
+                                            fuse_return=not options.no_fuse_return,
+                                            fuse_activation_backward=options.fuse_activation_backward)
         unittest.main(argv=[__file__] + remaining, verbosity=2)
