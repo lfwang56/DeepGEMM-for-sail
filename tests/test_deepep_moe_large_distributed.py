@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--tokens", type=int, default=19)
     parser.add_argument("--chunk-tokens", type=int, default=256)
     parser.add_argument("--comm-sms", type=int, default=38)
+    parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--graph", action="store_true")
     args = parser.parse_args()
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
@@ -66,6 +67,7 @@ def main():
     configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
     plan = DeepEPMoEPlan(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
                         group=dist.group.WORLD, device=device, comm_sms=args.comm_sms,
+                        ring_rows=args.ring_rows,
                         gemm_configs=configs, check_errors=False)
     print(json.dumps(dict(case="large_deepep_stage", rank=rank, stage="plan_ready",
                           rdma_ranks=plan.deep_ep_rdma_ranks)), flush=True)
@@ -127,6 +129,8 @@ def main():
             ranks=size, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens=t, chunk_tokens=args.chunk_tokens, pattern=pattern,
             graph=args.graph, relative_rms=errors, every_element_compared=True,
+            ring_rows=args.ring_rows, packed_ring_rows=plan.rows,
+            route_window_count=plan.route_window_count,
             payload_transport=plan.deep_ep_backend, rdma_ranks=plan.deep_ep_rdma_ranks,
             rdma_qps=plan.deep_ep_qps, communication_cus=plan.comm_sms,
             metadata_backend="gloo", reference="independent FP32 Torch local experts + CPU sum",

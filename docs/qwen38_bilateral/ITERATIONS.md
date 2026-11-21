@@ -2080,3 +2080,85 @@ activation ring, avoiding repeated source-chunk dispatch and FP32 DW passes.
 Give DeepEP the same full-source/local-row-window contract and keep dropless
 worst-skew graph correctness. Profile the current recipe before changing its
 kernels; hidden communication must not be inferred from mixed kernel names.
+
+
+## Iteration18: source routing separated from a bounded local routed-row ring
+
+Hypothesis: avoid repeated source-chunk communication/layout and FP32 DW I/O.
+Keep full-source int32 route metadata, window only received expert rows into a
+bounded activation workspace, and process every worst-skew window without
+per-window rank barriers. Both peer and real DeepEP receive the same explicit
+source chunk/window contract. No token is dropped and no int32 guard removed.
+
+Changes: Native packed_rows capacity, global metadata bound, GPU route-window
+operation14, local peer replay/gradient windows, and DeepEP window packing plus
+warp/token-cached FP32 reduction operation25. DeepEP rounds to BF16 once before
+combine, preserving the transport's existing numerical boundary. Inactive K
+groups skip before output I/O (scheduler source inspected). Unused reference
+transport worst-skew matrices are omitted while constructing these workspaces.
+Previous launch ABIs/defaults remain intact.
+
+ZW-M890P/ppu0015,wlf_sgl_2.2 Torch2.11. Extension SHA256
+4463833d91052907076822f4d1dbc313516eb819e177c3846d2b0e73a4fdd652.
+Both paths use BN256/BK64/WM64/WN64/S2; DeepEP38communication CUs/19QPs.
+Actual EP32 is512 experts,H8192,I2048,top10,T4096. New C4096 source chunks
+use S65536/32768/131072 local ring rows; old expert-gradient control usesC768.
+T8192 uses two C4096 chunks; T1024 usesC1024/S16384. EP8 on80 is128 total
+experts and only a local-shape proxy. Five repeats of20 graph iterations after
+5warmups,max-rank event median; full forward/backward rematerialization and
+FP32 DW zero/accumulation, no optimizer/shared expert. Actual host selections
+and clean launchers are included in each phase artifact.
+
+Correctness: independent full-element Qwen FP32 peer masked/skewed oracles
+passed at S128; changing-route/input graph equivalence at S1024 gave exact
+Y/DX/dScore and maximum DW relative RMS8.11e-6. Independent two-rank DeepEP
+S128/48-window graph tests passed all3 route patterns. Both actual EP32
+C768/S65536 and C4096/S65536 skew tests passed64 full-gradient records and
+all host audits each. The C4096 skew processes1,310,720 rows using21 reserved
+windows (last inactive); physical element offset remains <=536,870,911 and
+metadata capacity1,312,768 fits int32. All valid zero-score derivatives and
+exactly-zero unused-expert gradients were checked.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|expert-c768-control|137.911145|143.323206|
+|ep8|window-backward|79.385608|79.321344|
+|ep8|window-forward|30.601791|32.930200|
+|ep8|window-s65536|109.780432|112.208081|
+|ep8|window-unfused|109.977405|112.168335|
+|ep32|expert-c768-control-attempt0|164.588745|140.078113|
+|ep32|window-backward|90.761066|79.782550|
+|ep32|window-forward|38.869794|32.497171|
+|ep32|window-s131072|128.562781|111.359058|
+|ep32|window-s32768|131.091833|114.856482|
+|ep32|window-s65536|129.608374|112.326050|
+|ep32|window-t1024|42.149646|38.886850|
+|ep32|window-t8192|255.016333|220.454199|
+|ep32|window-unfused|129.528064|113.330713|
+
+All14 benchmark phases completed every rank and idle-node audit cleanly.
+The old expert-gradient path decreases from about140ms to111–112ms for
+T4096. Same-contract DeepEP is about129ms, giving roughly1.15x, still far
+below2–3x. Old DeepEP164.6/new peer111.4 includes the source/window scheduling
+change and must not be described as pure fusion/overlap gain. S131072 is the
+fastest observed timing; S65536 has explicit full-capacity skew proof and a
+smaller workspace. The small difference versus the same-window explicit-copy
+control does not establish a large independent overlap benefit.
+
+Artifacts: outputs/qwen38/iter18-routed-row-window-controls.json,
+ep32-route-window-skew-c768-reference.json and
+ ep32-route-window-skew-c4096-reference.json in the campaign workspace.
+
+Quality receipts are recorded in public-text-lm-window18-paired.json. Six
+2000-step public-text MoE training jobs and six111539-target full evaluations
+have been collected, with per-seed frozen libraries. Audit/hash checks are
+reported explicitly below; pending issues must be resolved before a clean
+paired-quality conclusion is made.
+
+Quality status: native: start hash missing 6113; initial parameter hash mismatch 6113
+Observed means: Native1.589084658165, peer1.588399054513.
+
+
+Next: profile large-source compute and weight reuse, then tune matched BM256
+compute/metadata alignment and direct-return vector stores. Keep scopes and
+baseline settings explicit; do not count mixed kernels as pure compute.

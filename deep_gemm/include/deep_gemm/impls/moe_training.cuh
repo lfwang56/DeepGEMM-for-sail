@@ -336,6 +336,53 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
             }
             pointer<uint4>(p, 2)[position] = value;
         }
+    } else if constexpr (Op == Operation::DeepEPReduceWindowRows) {
+        const int64_t active_rows = pointer<int32_t>(p, 6)[0];
+        if (active_rows < 0 || active_rows > p.dim[0]) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 7), 2);
+            return;
+        }
+        if (active_rows == 0) return;
+        const int64_t width = p.dim[1] / 8;
+        for (int64_t token = block_index * 8 + warp; token < p.dim[2];
+             token += int64_t(gridDim.x) * 8) {
+            // Cache route positions/weights across the warp once per token.
+            // The receive accumulator starts at zero, so absent/padded tokens
+            // and inactive windows require no H-wide writes.
+            int packed_row = -1;
+            float weight = 1.f;
+            if (lane < p.dim[3]) {
+                const int64_t route = token * p.dim[3] + lane;
+                const int expert = pointer<int32_t>(p, 1)[route];
+                if (expert >= p.dim[4]) atomicOr(pointer<int32_t>(p, 7), 2);
+                else if (expert >= 0) {
+                    const int64_t global_row = int64_t(pointer<int32_t>(p, 3)[expert])
+                                               + pointer<int32_t>(p, 2)[route];
+                    if (global_row < 0 || global_row >= p.dim[7]) atomicOr(pointer<int32_t>(p, 7), 2);
+                    else if (global_row >= p.dim[5] && global_row < p.dim[5] + active_rows) {
+                        packed_row = global_row - p.dim[5];
+                        if (p.dim[6]) weight = pointer<float>(p, 4)[route];
+                    }
+                }
+            }
+            const uint32_t mask = __ballot_sync(0xffffffffu, packed_row >= 0);
+            if (!mask) continue;
+            for (int64_t column = lane; column < width; column += 32) {
+                float sum[8]{};
+                for (uint32_t pending = mask; pending; pending &= pending - 1) {
+                    const int slot = __ffs(pending) - 1;
+                    const int row = __shfl_sync(0xffffffffu, packed_row, slot);
+                    const float score = __shfl_sync(0xffffffffu, weight, slot);
+                    const uint4 raw = pointer<uint4>(p, 0)[int64_t(row) * width + column];
+                    const auto* values = reinterpret_cast<const Bf16*>(&raw);
+                    #pragma unroll
+                    for (int j = 0; j < 8; ++j) sum[j] += __bfloat162float(values[j]) * score;
+                }
+                #pragma unroll
+                for (int j = 0; j < 8; ++j)
+                    pointer<float>(p, 5)[token * p.dim[1] + column * 8 + j] += sum[j];
+            }
+        }
     } else if constexpr (Op == Operation::DeepEPReduceRows) {
         // Invert the route layout from count/prefix metadata. This reduces
         // top-k in registers and writes BF16 directly, without FP32 atomics,

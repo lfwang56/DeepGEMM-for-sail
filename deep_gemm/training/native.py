@@ -33,7 +33,8 @@ class NativeMoEPlan:
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  chunk_tokens=128, compute="bf16", group=None, device=None,
                  check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
-                 active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True):
+                 active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True,
+                 packed_rows=None):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
@@ -71,8 +72,13 @@ class NativeMoEPlan:
         self.alignment = math.lcm(128, dg.get_m_alignment_for_contiguous_layout())
         self.routes = self.size * chunk_tokens * topk
         # Sum ceil(count_e/alignment)*alignment <= routes + E*(alignment-1).
-        self.rows = math.ceil((self.routes + local_experts * (self.alignment - 1)) / self.alignment) * self.alignment
-        if self.rows > 2**31 - 1 or self.routes > 2**31 - 1:
+        self.full_row_capacity = math.ceil((self.routes + local_experts * (self.alignment - 1)) / self.alignment) * self.alignment
+        if packed_rows is not None:
+            if (type(packed_rows) is not int or packed_rows <= 0 or packed_rows % self.alignment
+                    or self.transport not in ("peer", "deepep") or compute != "bf16"):
+                raise ValueError("packed-row windows require aligned BF16 peer/DeepEP workspaces")
+        self.rows = self.full_row_capacity if packed_rows is None else min(packed_rows, self.full_row_capacity)
+        if self.full_row_capacity > 2**31 - 1 or self.routes > 2**31 - 1:
             raise ValueError("native route capacity exceeds int32 metadata")
         # Reused Tensor Cell mainloops contain 32-bit element offsets. Bound
         # weights and ring matrices before allocation, including skew capacity.
@@ -88,7 +94,7 @@ class NativeMoEPlan:
             if self.vectorized_routes:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                           recipe, self.transport, m_schedule)
+                           recipe, self.transport, m_schedule, self.rows)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -99,6 +105,15 @@ class NativeMoEPlan:
         self.buffers = {}
 
         def allocate(name, shape, dtype=torch.bfloat16):
+            if packed_rows is not None:
+                unused = {"gathered_x", "gathered_ids", "route_values", "local_values", "local_dy"}
+                if self.transport == "peer":
+                    unused.add("group_ids")
+                if name in unused:
+                    # These reference-transport matrices are replaced/deleted
+                    # by both transports before use. Avoid a full worst-skew
+                    # activation allocation while constructing a bounded ring.
+                    shape = (0,)
             tensor = torch.empty(shape, dtype=dtype, device=self.device)
             self.buffers[name] = tensor
             return tensor

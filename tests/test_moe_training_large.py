@@ -50,6 +50,7 @@ def main():
     parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--expert-local-grad", action="store_true")
+    parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -99,6 +100,8 @@ def main():
         extra["cache_return_addresses"] = options.cache_return_addresses
         extra["ffn_fusion"] = options.ffn_fusion
         extra["expert_local_grad"] = options.expert_local_grad
+        if options.ring_rows is not None:
+            extra["ring_rows"] = options.ring_rows
         if options.ffn_fusion or options.expert_local_grad:
             extra["reuse_packed_dy"] = True
         extra["dispatch_producer_tiles"] = options.dispatch_producer_tiles
@@ -162,6 +165,7 @@ def main():
                               cache_return_addresses=options.cache_return_addresses,
                               ffn_fusion=options.ffn_fusion,
                               expert_local_grad=options.expert_local_grad,
+                              ring_rows=options.ring_rows,
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,

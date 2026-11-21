@@ -37,6 +37,7 @@ enum class Operation : int {
     TransposeWeights,
     DeepEPReduceRows,
     DeepEPBackwardRows,
+    DeepEPReduceWindowRows,
 };
 
 }  // namespace deep_gemm::training

@@ -40,7 +40,7 @@ __global__ void moe_training_{}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPBackwardRows));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPReduceWindowRows));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -222,6 +222,17 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             blocks = int64_t(get_num_sms()) * 4;
             break;
         }
+        case Operation::DeepEPReduceWindowRows: {
+            schema(8, 8);
+            const auto m = dims[0], h = dims[1], n = dims[2], k = dims[3];
+            DG_HOST_ASSERT(h > 0 && h % 8 == 0 && k > 0 && k <= 32 && dims[4] > 0
+                           && dims[5] % 128 == 0 && dims[6] <= 1 && dims[7] >= m);
+            expect(0, m * h, bf); expect(1, n * k, i32); expect(2, n * k, i32);
+            expect(3, dims[4] + 1, i32); expect(4, n * k, fp); expect(5, n * h, fp);
+            expect(6, 1, i32); expect(7, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        }
         case Operation::DeepEPBackwardRows: {
             schema(8, 4);
             const auto m = dims[0], h = dims[1], n = dims[2], k = dims[3];
@@ -261,7 +272,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPBackwardRows));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPReduceWindowRows));
         Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
         compiler->build(fmt::format("moe_training_{}", operation), Runtime::generate(args));
     }

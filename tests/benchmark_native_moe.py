@@ -100,6 +100,7 @@ def main():
     parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--expert-local-grad", action="store_true")
+    parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -111,6 +112,8 @@ def main():
     args = parser.parse_args()
     if args.process_group_backend == "gloo" and args.backend != "deepep":
         parser.error("Gloo metadata groups currently support only --backend deepep")
+    if args.ring_rows is not None and args.backend not in ("peer", "deepep", "deepep_peer"):
+        parser.error("routed-row windows require peer or DeepEP transports")
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
     if args.fp8_ablation and (args.backend != "collective" or args.compute != "fp8"):
@@ -229,6 +232,8 @@ def main():
                 if args.gemm_config:
                     options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
             options["fast_weight_transpose"] = args.fast_weight_transpose
+            if args.ring_rows is not None:
+                options["ring_rows"] = args.ring_rows
             options.update(controls)
             if backend == "peer" and options.get("fuse_dispatch", True):
                 options["dispatch_cache_n"] = args.dispatch_cache_n
@@ -343,6 +348,10 @@ def main():
                     "peer_cached_return_addresses": getattr(plan, "cache_return_addresses", None) if backend == "peer" else None,
                     "peer_ffn_fusion": getattr(plan, "ffn_fusion", None) if backend == "peer" else None,
                     "peer_expert_local_grad": getattr(plan, "expert_local_grad", None) if backend == "peer" else None,
+                    "ring_rows_requested": args.ring_rows,
+                    "packed_ring_rows": plan.rows,
+                    "full_routed_row_capacity": plan.full_row_capacity,
+                    "route_window_count": getattr(plan, "route_window_count", 1),
                     "pipeline_statistics_last_fc1": (plan.pipeline_statistics.cpu().tolist()
                         if backend == "peer" and plan.pipeline_statistics is not None else None),
                     "pipeline_statistics_last_dx": (plan.return_pipeline_statistics.cpu().tolist()

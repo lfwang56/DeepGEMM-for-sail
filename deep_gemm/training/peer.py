@@ -8,6 +8,7 @@ import torch.distributed as dist
 import deep_gemm as dg
 from .bf16 import _validate_accumulators
 from .native import NativeMoEPlan, _launch
+from .routed_rows import allocate_route_windows, set_route_window
 
 
 def _peer(operation, tensors, dims, compile_only=False):
@@ -31,7 +32,13 @@ class PeerMoEPlan(NativeMoEPlan):
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
                  pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
-                 expert_local_grad=False, **kwargs):
+                 expert_local_grad=False, ring_rows=None, **kwargs):
+        if "packed_rows" in kwargs:
+            raise ValueError("use ring_rows to enable routed-row scheduling")
+        if ring_rows is not None:
+            if not expert_local_grad or ffn_fusion or dispatch_pipeline or return_pipeline or inline_dispatch:
+                raise ValueError("routed-row windows require expert-local gradients without a resident pipeline")
+        self.ring_rows = ring_rows
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -126,7 +133,7 @@ class PeerMoEPlan(NativeMoEPlan):
         if reuse_packed_dy and self.transport != "peer":
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and fuse_dispatch
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, packed_rows=ring_rows, **kwargs)
         if self.group is not None:
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad)
             recipes = [None] * self.size
@@ -199,6 +206,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.num_blocks = torch.zeros(1, device=self.device, dtype=torch.int32)
         self.buffers.update(source_rows=self.source_rows, identity_rows=self.identity_rows,
                             work_info=self.work_info, num_blocks=self.num_blocks)
+        self.route_window_count = 1
+        if self.ring_rows is not None:
+            allocate_route_windows(self)
         self.dispatch_scratch = None
         self.pipeline_ready = self.return_pipeline_ready = self.pipeline_statistics = None
         self.return_pipeline_statistics = None
@@ -322,6 +332,8 @@ class PeerMoEPlan(NativeMoEPlan):
             self._ffn(self.w2_t, self.w1_t, backward=True, compile_only=True)
         if self.expert_local_grad:
             self._expert_gradients(compile_only=True)
+        if self.ring_rows is not None:
+            set_route_window(self, 0, compile_only=True)
         self._barrier(0, compile_only=True)
         _peer(0, [self.pointer_tables["local_ids"], self.counts, self.route_experts, self.route_rows, self.status],
               [self.routes, self.e, self.rank, self.size, self.chunk_tokens * self.k], True)
@@ -369,13 +381,35 @@ class PeerMoEPlan(NativeMoEPlan):
         self.counts.zero_()
         _peer(0, [self.pointer_tables["local_ids"], self.counts, self.route_experts, self.route_rows, self.status],
               [self.routes, self.e, self.rank, self.size, self.chunk_tokens * self.k])
-        _launch(1, [self.counts, self.offsets, self.lengths], [self.e, self.alignment])
-        _peer(1, [self.permutation, self.source_rows], [self.rows, self.size * self.chunk_tokens])
-        _peer(2, [self.route_experts, self.route_rows, self.offsets, self.permutation, self.source_rows, self.status],
-              [self.routes, self.rows, self.k])
+        offsets = self.offsets if self.ring_rows is None else self.global_offsets
+        lengths = self.lengths if self.ring_rows is None else self.global_lengths
+        permutation = self.permutation if self.ring_rows is None else self.global_permutation
+        source_rows = self.source_rows if self.ring_rows is None else self.global_source_rows
+        capacity = self.rows if self.ring_rows is None else self.full_row_capacity
+        _launch(1, [self.counts, offsets, lengths], [self.e, self.alignment])
+        _peer(1, [permutation, source_rows], [capacity, self.size * self.chunk_tokens])
+        _peer(2, [self.route_experts, self.route_rows, offsets, permutation, source_rows, self.status],
+              [self.routes, capacity, self.k])
+        if self.ring_rows is not None:
+            return
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
 
     def _chunk_forward(self, w1, w2, pack_input=False, return_output=True):
+        if self.ring_rows is not None:
+            if not return_output:
+                raise RuntimeError("backward routed-row windows own their replay schedule")
+            for start in range(0, self.full_row_capacity, self.rows):
+                self._set_window(start)
+                self._chunk_forward_single(w1, w2, pack_input=pack_input, synchronize_output=False)
+            self._barrier(1)
+            return
+        self._chunk_forward_single(w1, w2, pack_input=pack_input, return_output=return_output)
+
+    def _set_window(self, start):
+        set_route_window(self, start)
+        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
+
+    def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True):
         if self.ffn_fusion:
             self._ffn(w1, w2)
             self._barrier(1)
@@ -390,7 +424,8 @@ class PeerMoEPlan(NativeMoEPlan):
             return
         if not self.fuse_return:
             self._scatter_peer("local_values")
-        self._barrier(1)
+        if synchronize_output:
+            self._barrier(1)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(
@@ -446,6 +481,26 @@ class PeerMoEPlan(NativeMoEPlan):
         self.raw_dy[:count].copy_(dy[start:start + count])
         self.raw_scores[:count].copy_(scores[start:start + count])
 
+    def _backward_windows(self, dy, scores, w1, w2, dw1, dw2, dx, dscores, start):
+        for window in range(0, self.full_row_capacity, self.rows):
+            self._set_window(window)
+            self._chunk_forward_single(w1, w2, pack_input=True, return_output=False)
+            self._expert_gradients()
+            dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+            self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.identity_rows, role="dhidden")
+            if not self.fuse_activation_backward:
+                self._activation(backward=True)
+            dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+            self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
+                            write=self.fuse_return, destination="local_dx")
+            if not self.fuse_return:
+                self._scatter_peer("local_dx")
+        self._barrier(start * 4 + 3)
+        _launch(6, [self.local_dx, scores, dx],
+                [self.chunk_tokens, self.h, self.k, dy.shape[0], start, 0])
+        count = max(0, min(self.chunk_tokens, dy.shape[0] - start))
+        dscores[start:start + count].copy_(self.local_dscores[:count])
+
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
         with self._execution():
@@ -471,6 +526,9 @@ class PeerMoEPlan(NativeMoEPlan):
                 if self.expert_local_grad:
                     self._publish_gradient_chunk(dy, scores, start)
                 self._route_chunk(x, ids, valid_tokens, start, zero_values=not self.expert_local_grad)
+                if self.ring_rows is not None:
+                    self._backward_windows(dy, scores, w1, w2, dw1, dw2, dx, dscores, start)
+                    continue
                 self._chunk_forward(w1, w2, pack_input=True, return_output=not self.expert_local_grad)
                 dims = [self.chunk_tokens, self.h, self.k, x.shape[0], start]
                 if self.expert_local_grad:

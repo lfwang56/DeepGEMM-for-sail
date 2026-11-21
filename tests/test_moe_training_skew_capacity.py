@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--expert-local-grad", action="store_true")
+    parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -92,6 +93,8 @@ def main():
     configs = {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     for backend in args.backends:
         options = dict(gemm_configs=configs)
+        if args.ring_rows is not None:
+            options["ring_rows"] = args.ring_rows
         if backend == "peer":
             use_producer = not (args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion)
             options.update(dispatch_producer=use_producer, dispatch_producer_tiles=1,
@@ -138,7 +141,7 @@ def main():
                           dw2=relative_rms(dw2[0], weight_targets[1]))
         else:
             errors.update(dw1=0., dw2=0.)
-        active_rows = int(plan.current_rows)
+        active_rows = int(plan.current_rows if args.ring_rows is None else plan.global_offsets[-1])
         zero_score_derivative_preserved = rank != 0 or float(ds[0, 0]) != 0
         expected_rows = ((size * c * k + plan.alignment - 1) // plan.alignment * plan.alignment
                          if rank == 0 else 0)
@@ -155,9 +158,12 @@ def main():
             cache_return_addresses=args.cache_return_addresses if backend == "peer" else None,
             ffn_fusion=args.ffn_fusion if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,
+            ring_rows=args.ring_rows, last_window_rows=int(plan.current_rows),
+            full_routed_row_capacity=plan.full_row_capacity,
+            route_window_count=getattr(plan, "route_window_count", 1),
             gemm_config=args.gemm_config,
             capacity_rows=plan.rows, alignment=plan.alignment, active_rows=active_rows,
-            largest_active_element_offset=max(0, active_rows * h - 1),
+            largest_active_element_offset=max(0, min(active_rows, plan.rows) * h - 1),
             relative_rms=errors, unused_expert_gradients_exactly_zero=unused_zero,
             zero_score_derivative_preserved=zero_score_derivative_preserved,
             every_element_compared=True, reference="independent FP32 expert with summed duplicate weights",

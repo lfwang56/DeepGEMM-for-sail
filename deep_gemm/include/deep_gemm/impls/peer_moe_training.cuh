@@ -18,7 +18,36 @@ template <PeerOperation Op>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::ExpertLocalGradients) {
+    if constexpr (Op == PeerOperation::SetRouteWindow) {
+        const auto* offsets = peer_pointer<int32_t>(p, 0);
+        const int64_t total = offsets[p.dim[0]];
+        if (total < 0 || total > p.dim[1]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 6), 2);
+            return;
+        }
+        if (index <= p.dim[0]) {
+            const int64_t begin = min(p.dim[2], max(int64_t(0), int64_t(offsets[index]) - p.dim[3]));
+            peer_pointer<int32_t>(p, 2)[index] = begin;
+            if (index < p.dim[0]) {
+                const int64_t end = min(p.dim[2], max(int64_t(0), int64_t(offsets[index + 1]) - p.dim[3]));
+                peer_pointer<int32_t>(p, 3)[index] = end - begin;
+            }
+        }
+        const int64_t active = min(p.dim[2], max(int64_t(0), total - p.dim[3]));
+        for (int64_t row = index; row < active; row += int64_t(gridDim.x) * blockDim.x) {
+            const int64_t global_row = p.dim[3] + row;
+            const int route = peer_pointer<int32_t>(p, 1)[global_row];
+            peer_pointer<int32_t>(p, 4)[row] = route;
+            peer_pointer<int32_t>(p, 5)[row] = route < 0 ? p.dim[5] : route / p.dim[4];
+            int low = 0, high = p.dim[0];
+            while (low < high) {
+                const int middle = (low + high) / 2;
+                if (offsets[middle + 1] <= global_row) low = middle + 1;
+                else high = middle;
+            }
+            peer_pointer<int32_t>(p, 7)[row] = low;
+        }
+    } else if constexpr (Op == PeerOperation::ExpertLocalGradients) {
         // Keep replayed Y at its expert. Pull raw source DY and scores once
         // here, produce the mandatory BF16 packed DY and return one FP32
         // derivative per unique source route. Valid zero scores still have a

@@ -10,19 +10,25 @@ import torch.distributed as dist
 
 import deep_gemm as dg
 from .native import NativeMoEPlan, _launch
+from .routed_rows import allocate_route_windows, set_route_window
 
 
 class DeepEPMoEPlan(NativeMoEPlan):
     transport = "deepep"
 
-    def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, **kwargs):
+    def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("the DeepEP comparison currently implements BF16")
         if kwargs.get("group") is None:
             raise ValueError("DeepEP requires an initialized EP process group")
         import deep_ep
 
-        super().__init__(*args, **kwargs)
+        if "packed_rows" in kwargs:
+            raise ValueError("use ring_rows to enable routed-row scheduling")
+        self.ring_rows = ring_rows
+        super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        if ring_rows is not None and (self.k > 32 or self.size * self.chunk_tokens * self.h > 2**31 - 1):
+            raise ValueError("DeepEP routed-row windows require topk<=32 and an int32-bounded receive matrix")
         self.active_pointwise = self.vectorized_routes = True
         self.gemm_configs = gemm_configs or {}
         if type(comm_sms) is not int or comm_sms < 2 or comm_sms % 2:
@@ -52,6 +58,10 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.local_dy_input = self._allocate("deepep_local_dy", (self.chunk_tokens, self.h), torch.bfloat16)
         self.reduced = self._allocate("deepep_reduced", (n, self.h), torch.bfloat16)
         self.recv_dscores = self._allocate("deepep_dscores", (n, self.k), torch.float32)
+        self.route_window_count = 1
+        if ring_rows is not None:
+            allocate_route_windows(self)
+            self.recv_accumulator = self._allocate("deepep_recv_accumulator", (n, self.h), torch.float32)
 
     def _allocate(self, name, shape, dtype):
         value = torch.empty(shape, device=self.device, dtype=dtype)
@@ -62,6 +72,9 @@ class DeepEPMoEPlan(NativeMoEPlan):
         operations = [0, 1, 2, 7, 8, 13, 16, 19, 20, 23, 24]
         if self.fast_weight_transpose:
             operations.append(22)
+        if self.ring_rows is not None:
+            operations.append(25)
+            set_route_window(self, 0, compile_only=True)
         dg._C._moe_training_precompile(self.device.index, operations)
 
     def _gemm(self, a, weight, output, name, prequantized=False):
@@ -94,10 +107,21 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.counts.zero_()
         _launch(0, [ri, self.counts, self.route_experts, self.route_rows, self.status],
                 [self.routes, self.e, 0, 1])
-        _launch(1, [self.counts, self.offsets, self.lengths], [self.e, self.alignment])
-        _launch(2, [self.offsets, self.group_ids, self.permutation], [self.rows, self.e])
-        _launch(19, [self.route_experts, self.route_rows, self.offsets, self.permutation, self.status],
-                [self.routes, self.rows])
+        offsets = self.offsets if self.ring_rows is None else self.global_offsets
+        lengths = self.lengths if self.ring_rows is None else self.global_lengths
+        permutation = self.permutation if self.ring_rows is None else self.global_permutation
+        capacity = self.rows if self.ring_rows is None else self.full_row_capacity
+        _launch(1, [self.counts, offsets, lengths], [self.e, self.alignment])
+        if self.ring_rows is None:
+            _launch(2, [self.offsets, self.group_ids, self.permutation], [self.rows, self.e])
+        else:
+            dg._C._moe_training_peer_launch(1, [permutation, self.global_source_rows],
+                                            [capacity, self.recv_capacity], False)
+        _launch(19, [self.route_experts, self.route_rows, offsets, permutation, self.status],
+                [self.routes, capacity])
+        if self.ring_rows is not None:
+            self.window_recv_x = rx
+            return rw, handle
         _launch(20, [rx, self.permutation, self.packed_x, self.current_rows, self.status],
                 [self.rows, h, self.recv_capacity, k])
         return rw, handle
@@ -108,13 +132,29 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self._gemm(self.hidden, w2, self.packed_output, "w2")
 
     def _combine(self, rw, handle, weighted, dscores=None):
-        _launch(23, [self.packed_output, self.route_experts, self.route_rows,
-                     self.offsets, rw, self.reduced, self.status],
-                [self.rows, self.h, self.recv_capacity, self.k, self.e, int(weighted)])
+        if self.ring_rows is not None:
+            # Accumulate all local expert/window contributions in FP32 and
+            # round only once at DeepEP's existing BF16 payload boundary.
+            self.reduced.copy_(self.recv_accumulator)
+        else:
+            _launch(23, [self.packed_output, self.route_experts, self.route_rows,
+                         self.offsets, rw, self.reduced, self.status],
+                    [self.rows, self.h, self.recv_capacity, self.k, self.e, int(weighted)])
         output, ds, event = self.deep_ep_buffer.combine(self.reduced, handle,
             topk_weights=dscores, async_finish=True)
         event.current_stream_wait()
         return output, ds
+
+    def _set_window(self, start):
+        set_route_window(self, start)
+        _launch(20, [self.window_recv_x, self.permutation, self.packed_x, self.current_rows, self.status],
+                [self.rows, self.h, self.recv_capacity, self.k])
+
+    def _reduce_window(self, rw, start, weighted):
+        _launch(25, [self.packed_output, self.route_experts, self.route_rows, self.global_offsets,
+                     rw, self.recv_accumulator, self.current_rows, self.status],
+                [self.rows, self.h, self.recv_capacity, self.k, self.e, start,
+                 int(weighted), self.full_row_capacity])
 
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
@@ -126,7 +166,14 @@ class DeepEPMoEPlan(NativeMoEPlan):
             output = torch.empty_like(x)
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 rw, handle = self._dispatch_chunk(x, ids, scores, valid_tokens, start)
-                self._expert_forward(w1, w2)
+                if self.ring_rows is None:
+                    self._expert_forward(w1, w2)
+                else:
+                    self.recv_accumulator.zero_()
+                    for window in range(0, self.full_row_capacity, self.rows):
+                        self._set_window(window)
+                        self._expert_forward(w1, w2)
+                        self._reduce_window(rw, window, weighted=True)
                 local_y, _ = self._combine(rw, handle, weighted=True)
                 count = max(0, min(self.chunk_tokens, x.shape[0] - start))
                 output[start:start + count].copy_(local_y[:count])
@@ -152,7 +199,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
                         if accumulators is None else accumulators)
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 rw, handle = self._dispatch_chunk(x, ids, scores, valid_tokens, start)
-                self._expert_forward(w1, w2)
+                if self.ring_rows is None:
+                    self._expert_forward(w1, w2)
                 count = max(0, min(self.chunk_tokens, x.shape[0] - start))
                 self.local_dy_input.zero_()
                 self.local_dy_input[:count].copy_(dy[start:start + count])
@@ -160,20 +208,31 @@ class DeepEPMoEPlan(NativeMoEPlan):
                     self.local_dy_input, handle=handle, async_finish=True)
                 event.current_stream_wait()
                 self.recv_dscores.zero_()
-                _launch(24, [rdy, rw, self.permutation, self.packed_output,
-                             self.packed_dy, self.recv_dscores, self.current_rows, self.status],
-                        [self.rows, self.h, self.recv_capacity, self.k])
-                dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
-                self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
-                self._activation(backward=True)
-                dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
-                self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
+                if self.ring_rows is None:
+                    self._expert_backward_rows(rdy, rw, dw1, dw2)
+                else:
+                    self.recv_accumulator.zero_()
+                    for window in range(0, self.full_row_capacity, self.rows):
+                        self._set_window(window)
+                        self._expert_forward(w1, w2)
+                        self._expert_backward_rows(rdy, rw, dw1, dw2)
+                        self._reduce_window(rw, window, weighted=False)
                 local_dx, local_ds = self._combine(rw, handle, weighted=False, dscores=self.recv_dscores)
                 dx[start:start + count].copy_(local_dx[:count])
                 dscores[start:start + count].copy_(local_ds[:count])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             return dx, dw1, dw2, dscores
+
+    def _expert_backward_rows(self, rdy, rw, dw1, dw2):
+        _launch(24, [rdy, rw, self.permutation, self.packed_output,
+                     self.packed_dy, self.recv_dscores, self.current_rows, self.status],
+                [self.rows, self.h, self.recv_capacity, self.k])
+        dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+        self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
+        self._activation(backward=True)
+        dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+        self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
 
     def close(self):
         if self.deep_ep_buffer is not None:
