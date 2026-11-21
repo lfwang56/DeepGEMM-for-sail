@@ -13,6 +13,7 @@ import resource
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 
 def main():
@@ -45,6 +46,25 @@ def main():
         children.append(subprocess.Popen(command, env=environment, stdout=output, stderr=subprocess.STDOUT))
     print(json.dumps({"case": "local_ranks_started", "node_rank": options.node_rank,
                       "pids": [child.pid for child in children], "log_directory": str(directory)}), flush=True)
+    while True:
+        codes = [child.poll() for child in children]
+        if all(code is not None for code in codes):
+            break
+        if any(code is not None and code != 0 for code in codes):
+            # A failed rank cannot participate in later collectives. Stop only
+            # siblings owned by this launcher instead of waiting forever on
+            # an earlier rank that is blocked inside such a collective.
+            for child, code in zip(children, codes):
+                if code is None:
+                    child.terminate()
+            deadline = time.monotonic() + 3
+            for child in children:
+                try:
+                    child.wait(timeout=max(.01, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    child.kill()
+            break
+        time.sleep(.05)
     codes = [child.wait() for child in children]
     for output in logs:
         output.close()

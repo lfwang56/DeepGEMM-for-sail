@@ -44,6 +44,16 @@ def wgrad_lut_digest(device):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
+def assert_rank_samples(errors, group, device, detail):
+    failed = not all(value < 0.05 for value in errors)
+    if group is not None:
+        marker = torch.tensor(int(failed), device=device, dtype=torch.int32)
+        dist.all_reduce(marker, op=dist.ReduceOp.MAX, group=group)
+        failed = bool(marker.item())
+    if failed:
+        raise AssertionError((detail, "at least one rank failed the sample check"))
+
+
 class ConfiguredCollectivePlan(NativeMoEPlan):
     """Benchmark control using explicit tiles in the existing nopad GEMMs."""
 
@@ -312,8 +322,8 @@ def main():
                 reference_samples = current_samples
             sample_errors = dict(zip(("y", "dx", "dw1", "dw2", "dscores"),
                                      (relative_rms(a, b) for a, b in zip(current_samples, reference_samples))))
-            if not all(value < 0.05 for value in sample_errors.values()):
-                raise AssertionError((backend, sample_errors))
+            metrics_device = "cpu" if args.process_group_backend == "gloo" else device
+            assert_rank_samples(sample_errors.values(), group, metrics_device, (backend, sample_errors))
             del current_samples
             if not args.eager:
                 graph = torch.cuda.CUDAGraph()
@@ -348,9 +358,8 @@ def main():
             timed_indices = range(5) if args.scope == "step" else (0,) if args.scope == "forward" else range(1, 5)
             timed_errors = [relative_rms(a, reference_samples[index])
                             for a, index in zip(sample_outputs(results), timed_indices)]
-            if not all(value < 0.05 for value in timed_errors):
-                raise AssertionError((backend, args.scope, timed_errors))
             metrics_device = "cpu" if args.process_group_backend == "gloo" else device
+            assert_rank_samples(timed_errors, group, metrics_device, (backend, args.scope, timed_errors))
             peak = torch.tensor(torch.cuda.max_memory_allocated(device), device=metrics_device, dtype=torch.int64)
             if group is not None: dist.all_reduce(peak, op=dist.ReduceOp.MAX, group=group)
             if rank == 0:

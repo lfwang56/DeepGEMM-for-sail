@@ -2817,3 +2817,69 @@ timings to evaluate the outcome; retain the faster serial recipe if necessary.
 
 Artifacts: `outputs/qwen38/iter29-wgrad-stream-ep{16,32}-controls.json`,
 `ep32-wgrad-stream-reference.json`; local preflight logs `work/qwen38-wgrad29-*`.
+
+
+## Iteration 30 — correct the window-reuse dependency and measure wgrad concurrency
+
+**Direction.** The fastest producer schedule still serialized every local GEMM.
+Use one auxiliary native Torch stream: DW2 reads saved forward Hidden while
+the main stream computes dHidden/activation gradients; DW1 then waits for
+those gradients and runs alongside DX/return. An explicit join precedes
+every metadata/activation-window reuse. Peer joins before rank barriers.
+Both FP32 wgrads retain per-window accumulation order. Default `none` retains
+the original schedule; `dw1` is a single-switch control and `both` overlaps
+both gradients. No GPU math, precision boundaries or instructions change.
+
+**Strong baseline.** Installed DeepEP gets the same overlap choices. Its `both`
+mode writes dHidden into an additional bounded BF16 I-wide ring, preserving
+forward Hidden for DW2 without a copy. Final comparisons must use the best
+DeepEP mode, not a slower serial denominator. Base-plan all-rank agreement
+includes the mode. Side-stream tensor lifetime is recorded with the allocator.
+
+**Validation.** Producer serial/parallel graphs pass four changed-input,
+changed-score and changed-routing patterns each for `dw1` and `both`: exact
+Y/DX/dScore, DW relative RMS below5e-7. Full H8192/I2048/E16/top10 FP32 oracle
+passes masked and duplicate/skewed patterns. DeepEP EP2 graph protocol oracle
+passes all six records. The earlier prototype allocation bug was fixed before timing; the added
+36-window protocol check covers actual buffer reuse. Domain EP32 balanced
+peer/DeepEP and full C4096 all-to-expert0 oracles are recorded separately;
+inspect their clean audits and completion before accepting domain timings.
+
+**Measured scope.** Qwen H8192/I2048/E512/top10, T4096/rank, C4096,
+ring65536, BM256, G8, producer input ILP8. EP16 uses32 experts/rank;
+EP32 uses16. Each is inside one supernode. Complete forward and rematerialized
+backward with FP32 gradient zero/accumulation; no optimizer/shared expert.
+Median maximum-rank event milliseconds; native Torch2.11 extension2ec4d537.
+The source and precision remain fixed within the group.
+
+| Domain EP | Wgrad mode | Peer full step ms | DeepEP full step ms | Paired ratio |
+| ---: | --- | ---: | ---: | ---: |
+| 16 | both | 109.910461 | 121.740552 | 1.1076x |
+| 16 | dw1 | 107.813721 | 121.387207 | 1.1259x |
+| 16 | none | 106.360901 | 120.368408 | 1.1317x |
+| 32 | both | 100.497021 | 122.694983 | 1.2209x |
+| 32 | dw1 | 98.918170 | 122.361157 | 1.2370x |
+| 32 | none | 97.575024 | 121.022290 | 1.2403x |
+
+EP16: best peer `none` 106.360901ms; strongest measured DeepEP `none` 120.368408ms; best/strongest ratio1.1317x. Peer change versus its matched serial control106.360901ms: 0.000% reduction.
+
+EP32: best peer `none` 97.575024ms; strongest measured DeepEP `none` 121.022290ms; best/strongest ratio1.2403x. Peer change versus its matched serial control97.575024ms: 0.000% reduction.
+
+**Corrected dependency.** Iteration29 exposed an omitted backward-window
+join. The join now lives inside DeepEP `_set_window`, the exact mutation
+boundary shared by forward and backward. A36-window EP2 dynamic graph oracle
+and the corrected actual32-rank balanced/masked/reversed oracle passed before
+this group. Full C4096 all-to-expert0 validation gates both timing matrices.
+The peer implementation is unchanged from its passing iteration29 oracle.
+The rank launcher now stops only its owned sibling ranks when one fails;
+the benchmark also agrees on numerical failure across ranks outside timed
+ranges, preventing survivors from entering a later unmatched collective.
+A CPU process regression verifies prompt termination of only launcher children.
+
+The intended stream schedule enables concurrency, not a guarantee of faster
+execution or measured network/MMA overlap. Both kernels still compete for CU,
+register, TSM and memory resources. Use separate Asys spans and complete-step
+timings to evaluate the outcome; retain the faster serial recipe if necessary.
+
+Artifacts: `outputs/qwen38/iter30-wgrad-stream-ep{16,32}-controls.json`,
+`ep32-wgrad-stream-reference.json`; local preflight logs `work/qwen38-wgrad30-*`.

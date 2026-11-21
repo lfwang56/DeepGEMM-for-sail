@@ -23,9 +23,10 @@ class NativeMoEPlan:
     """Fixed-capacity native training workspace; construct outside graph capture.
 
     All ranks agree on dimensions, chunk size and compute recipe. Input token
-    counts may differ up to max_tokens. A plan is serialized on one CUDA/PPU
-    stream; create separate plans for concurrent streams. The activation ring
-    holds one chunk, independent of max_tokens and the number of pending layers.
+    counts may differ up to max_tokens. Call a plan from one CUDA/PPU stream;
+    create separate plans for concurrent callers. Optional internal weight
+    gradients use a joined auxiliary stream. The activation ring holds one
+    chunk, independent of max_tokens and the number of pending layers.
     """
 
     transport = "collective"

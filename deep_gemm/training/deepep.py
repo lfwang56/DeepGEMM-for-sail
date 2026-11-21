@@ -152,6 +152,9 @@ class DeepEPMoEPlan(NativeMoEPlan):
         return output, ds
 
     def _set_window(self, start):
+        # This is the mutation boundary for packed X and device lengths in
+        # both forward and backward. Auxiliary wgrads must finish reading them.
+        self._join_wgrad()
         set_route_window(self, start)
         _launch(20, [self.window_recv_x, self.permutation, self.packed_x, self.current_rows, self.status],
                 [self.rows, self.h, self.recv_capacity, self.k])
@@ -177,7 +180,6 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 else:
                     self.recv_accumulator.zero_()
                     for window in range(0, self.full_row_capacity, self.rows):
-                        self._join_wgrad()
                         self._set_window(window)
                         self._expert_forward(w1, w2)
                         self._reduce_window(rw, window, weighted=True)
