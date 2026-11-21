@@ -82,7 +82,8 @@ def evaluate(model, validation, config, rank, size, device, batches):
     return value
 
 
-def reference_check(model, global_state, config, vocabulary, x, y, reduction, rank, size, device, compute):
+def reference_check(model, global_state, config, vocabulary, x, y, reduction, rank, size, device, compute,
+                    fixed_routes=False):
     """Compare every complete-model gradient with an unsharded dense MoE."""
     model.zero_grad(set_to_none=True)
     for block in model.blocks:
@@ -107,7 +108,7 @@ def reference_check(model, global_state, config, vocabulary, x, y, reduction, ra
     dense = LanguageModel(config, vocabulary, "torch", None).to(device)
     dense.load_state_dict(global_state)
     bf16_route_differences = None
-    if compute == "fp8":
+    if compute == "fp8" or fixed_routes:
         for block in dense.blocks:
             block.experts.capture_reference_ids = True
         with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, cache_enabled=False):
@@ -117,7 +118,7 @@ def reference_check(model, global_state, config, vocabulary, x, y, reduction, ra
     for block, ids in zip(dense.blocks, selected_ids):
         block.experts.backend = reference_backend
         block.experts.capture_reference_ids = True
-        if compute == "fp8":
+        if compute == "fp8" or fixed_routes:
             # Compare the continuous gradient on the branch selected by the
             # actual forward. Real training always recomputes its own routes.
             block.experts.reference_ids = ids
@@ -140,7 +141,7 @@ def reference_check(model, global_state, config, vocabulary, x, y, reduction, ra
         magnitude += target
     limit = 0.13 if compute == "fp8" else 0.04
     result = {"case": "distributed_lm_reference", "rank": rank, "ep_size": size, "compute": compute,
-              "reference_backend": reference_backend, "fixed_selected_ids": compute == "fp8",
+              "reference_backend": reference_backend, "fixed_selected_ids": compute == "fp8" or fixed_routes,
               "selected_set_differences_per_layer": route_differences,
               "unfrozen_bf16_selected_set_differences_per_layer": bf16_route_differences,
               "relative_l2_all_gradients": math.sqrt(difference / max(magnitude, 1e-30)),
@@ -161,6 +162,7 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(dispatch_cache_n=options.dispatch_cache_n,
                                     dispatch_cache_aiu=options.dispatch_cache_aiu,
+                                    staged_return=options.staged_return,
                                     reuse_packed_dy=options.reuse_packed_dy,
                                     gemm_config=options.gemm_config),
                   initial_validation_loss=initial_loss, validation_loss=validation, ep_size=size)
@@ -190,6 +192,8 @@ def main():
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--reference-check", action="store_true")
+    parser.add_argument("--reference-fixed-routes", action="store_true",
+                        help="Compare continuous gradients on the actual branch; training keeps dynamic routing")
     parser.add_argument("--steps", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=4827)
     parser.add_argument("--eval-interval", type=int, default=100)
@@ -204,10 +208,11 @@ def main():
     parser.add_argument("--chunk-tokens", type=int, default=128)
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
+    parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.reuse_packed_dy or options.gemm_config) and options.backend != "peer":
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config) and options.backend != "peer":
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
@@ -233,6 +238,7 @@ def main():
     if options.backend == "peer":
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
                             dispatch_cache_aiu=options.dispatch_cache_aiu,
+                            staged_return=options.staged_return,
                             reuse_packed_dy=options.reuse_packed_dy)
         if options.gemm_config:
             plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
@@ -258,7 +264,7 @@ def main():
     if options.reference_check:
         with torch.cuda.stream(stream):
             reference_check(model, global_state, config, vocabulary, warm_x, warm_y,
-                            reduction, rank, size, device, options.compute)
+                            reduction, rank, size, device, options.compute, options.reference_fixed_routes)
     del global_state
     before_warmup = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
     static_x = torch.empty((local_batch, config.sequence), device=device, dtype=torch.long)

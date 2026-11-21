@@ -184,3 +184,11 @@ The future staged-return source is present but disabled in these controls. Its i
 - Seeds4827/6113 completed and fully evaluated111539held-out successors: Native1.5816298120/1.5929814162;Peer1.5815587536/1.5918998886. No quality-win claim.
 - Original seed4891 BOTH paths failed identical unfrozen-dense preflight router gradient .042700646>unchanged.04, overallgradRMS.00333; branch choices differ by[0,0,2,1]tokens across layers. Preserve failures.
 - Explicit fixed-route preflight records those unfrozen differences, then compares continuous gradients on actualselected expert IDs. Both paths passed: selected differences[0,0,0,0], overallRMS.00226,maxparameter.00449, unchangedtolerance. This option only affects the independent oracle, and real2000-steptrainingremainsdynamic. Both retried seed4891trainingjobs nowcompleted2000steps and clean gates; fullheldoutevaluationstillpending.
+
+### Complete three-seed public-text LM held-out evaluation
+
+- native: mean CE 1.5857625161, sample SD 0.0062736101.
+- peer: mean CE 1.5857200174, sample SD 0.0054580995.
+- Seeds4827/4891/6113 each trained2000steps, EP2, same parameter initialization and public text. Every checkpoint evaluated on all111539held-out successors. Seed4891 nativeCE1.5826763200, peerCE1.5837014101. All training retries/evaluation gates normal.
+- The means differ by about0.00004nats, far below seed variation; no quality improvement claim. Frozen-route preflight did not freeze real training. Keep the original seed4891unfrozen oracle failures and exact branch discrepancy alongside the successful branch-matched checks.
+- Trainer/evaluator now retain and reconstruct actual plan options. Standalone JSON evidence: outputs/qwen38/public-text-lm-wlf.json in the local delivery workspace. This validates iteration3small-model behavior; it does not substitute for final kernel correctness and performance gates.

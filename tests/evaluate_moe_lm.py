@@ -29,10 +29,19 @@ def evaluate_checkpoint(path, data_path):
     backend, compute = saved["backend"], saved["compute"]
     classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan,
                "collective_fused": CollectiveFusedMoEPlan}
+    backend_options = dict(saved.get("backend_options", {}))
+    if backend == "peer" and "backend_options" not in saved:
+        training_options = saved.get("plan_options", {})
+        for key in ("dispatch_cache_n", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return"):
+            if key in training_options:
+                backend_options[key] = training_options[key]
+        if training_options.get("gemm_config"):
+            backend_options["gemm_configs"] = {
+                role: training_options["gemm_config"] for role in ("fc1", "fc2", "dhidden", "dx")}
     plan = None if backend == "torch" else classes[backend](
         config.hidden, config.intermediate, config.experts, config.topk,
         config.batch * config.sequence, chunk_tokens=config.chunk_tokens,
-        compute=compute, device=device, check_errors=False, **saved.get("backend_options", {}),
+        compute=compute, device=device, check_errors=False, **backend_options,
     )
     model = LanguageModel(config, vocabulary, backend, plan).to(device)
     model.load_state_dict(saved["model"])
@@ -64,7 +73,7 @@ def evaluate_checkpoint(path, data_path):
     print(json.dumps({
         "case": "lm_full_validation", "checkpoint": str(path), "checkpoint_sha256": checkpoint_hash,
         "backend": backend, "compute": compute, "seed": saved.get("seed"), "step": saved["step"],
-        "backend_options": saved.get("backend_options", {}),
+        "backend_options": backend_options,
         "seed_recorded_in_checkpoint": "seed" in saved,
         "configuration": saved["configuration"], "manifest": manifest,
         "targets_evaluated": evaluated, "validation_cross_entropy_nats": loss,
