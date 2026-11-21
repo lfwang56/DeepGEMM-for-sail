@@ -2647,3 +2647,73 @@ Qwen2.4T model convergence or statistical noninferiority.
 Artifacts: outputs/qwen38/iter26-backward-dag-{proxy,controls}.json,
 ep32-backward-dag-{balanced,c4096}-reference.json. Source-level scope and
 mixed-kernel timing caveats must accompany future overlap figures.
+
+
+## Iteration27: independent vector reads in input staging
+
+Increase memory-level parallelism inside producer input copies: load2/4/8
+independent uint4 vectors per thread into compile-time-indexed register
+arrays, then store them. Keep the original single-vector loop as default1.
+BF16 bits, row addresses, invalid-row zeros and the final per-thread fence
+plus block join are unchanged. No cache mode, opaque alias, inline asm or
+GPU communication instruction is substituted. The forward shared-pool copy
+uses the same helper; backward DY/dScore reduction keeps its original order.
+Only producer-copy kernels receive the nondefault template; local remainder
+and gradient GEMMs keep1. Host APIs add optional integers, GPU structs stay.
+
+Native SHA256f89f6c4caa2344cb4a0e38427b31b74b5165dd5d2bd898384a03608e664db560.
+ZW-M890P/ppu0015,wlf_sgl_2.2 Torch2.11 runtime/Torch2.10 native build.
+Full H8192/I2048/E16/K10 FP32 masked/skewed checks pass with ILP8.
+Producer ILP1 versus2/4/8 and shared-pool four-credit ILP1 versus8 changing-
+route graphs give exact Y/DX/dScore and DW RMS below5e-7, including changed
+X,DY,scores and masked/duplicate routes. Actual EP32 E512 balanced/masked/
+duplicate/reversed FP32 checks pass96 records. Full C4096/S65536 all-to-
+expert0 with shared-pool four-credit ILP8 passes32 records. All accepted
+host audits are clean. Cold JIT publication races used successfully compiled
+fallback modules; compilation time is excluded from device measurements.
+
+Asight Compute on one PPU, local peer pointers, producer FC1 first slice:
+ILP1 uses224 registers/thread, ILP8 uses232; both have zero stack bytes and
+25% theoretical occupancy. Instrumented CU utilization22.94% versus32.72%
+is diagnostic, not an ICN bandwidth measurement or full-step speedup.
+Both profile host gates are clean and amperf was restored. No spill-based
+performance gain is assumed; the measured full step is decisive.
+
+H8192/I2048/K10,T4096/C4096/S65536/BM256/BN256/BK64/WM64/WN64/S2.
+EP32 E512 or explicitly labeled EP8 E128 proxy. Complete BF16 FWD + replayed
+BWD + FP32 DW zero/accumulation, no optimizer. Warmup5,20 graph iterations,
+5 repeats, median of max-rank event times. Equally tuned DeepEP uses the
+same G8 parameter storage and GEMM tiles; input-copy ILP affects peer only.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|EP8 proxy E128|dag-credit16-ilp8|101.453912|100.979785|
+|EP8 proxy E128|dag-credit4-ilp1|101.364880|156.758118|
+|EP8 proxy E128|dag-credit4-ilp8|101.537628|100.358197|
+|EP8 proxy E128|dag-credit8-ilp8|101.451965|100.785461|
+|EP8 proxy E128|dag-unbounded-ilp8|101.416364|100.705396|
+|EP8 proxy E128|producer-ilp1|101.492419|102.635400|
+|EP8 proxy E128|producer-ilp2|101.356232|96.733484|
+|EP8 proxy E128|producer-ilp4|101.411432|95.514984|
+|EP8 proxy E128|producer-ilp8|101.410077|95.648566|
+|EP32 E512|dag-credit16-ilp8|121.191248|102.133545|
+|EP32 E512|dag-credit4-ilp1|121.271191|153.495300|
+|EP32 E512|dag-credit4-ilp8|121.129224|101.191620|
+|EP32 E512|dag-credit8-ilp8|121.037585|101.588196|
+|EP32 E512|dag-unbounded-ilp8|121.225317|101.781970|
+|EP32 E512|producer-ilp1-attempt0|121.210168|103.923975|
+|EP32 E512|producer-ilp2|121.259875|99.519922|
+|EP32 E512|producer-ilp4|121.242456|98.428741|
+|EP32 E512|producer-ilp8|121.093665|98.358118|
+
+The matched EP32 producer control falls from about103.9ms to98.4ms (~5.3%).
+The best observed ILP4/8 times are close; choose the production recipe after
+matched repeats and resource checks. The ratio to this tuned G8 DeepEP
+baseline is about1.23x, not2–3x. Prior iteration26 producer100.88ms used a
+different four-host mapping, so that absolute difference is not attributed
+to the new code. Preserve matched controls for every claimed improvement.
+
+Artifacts: outputs/qwen38/iter27-input-ilp-{proxy,controls}.json,
+ep32-input-ilp8-{balanced,c4096}-reference.json; resource details in campaign
+work/qwen38-{producer-fc1-26,producer-ilp8-27}-acu-details.txt. Updated
+full-model quality for the chosen recipe is a separate follow-up.

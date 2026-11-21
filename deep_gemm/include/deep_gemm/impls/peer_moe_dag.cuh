@@ -332,7 +332,7 @@ __device__ __forceinline__ bool dag_claim_queue(
 template <uint32_t H, uint32_t I, uint32_t E, uint32_t BM, uint32_t BN,
           uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
           bool Return, bool Trace, bool Fc1Activation = false, bool InputPrefetch = false,
-          bool Backward = false, bool DirectReturn = false>
+          bool Backward = false, bool DirectReturn = false, uint32_t InputCopyILP = 1>
 __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams p) {
     static_assert(H % BN == 0 && I % BN == 0);
     static_assert(!Backward || (Return && !Fc1Activation));
@@ -417,7 +417,7 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
                 addresses[row] = address;
             }
             __syncthreads();
-            pack_producer_input_rows<BM, H, Threads>(addresses, p.ffn.first, base);
+            pack_producer_input_rows<BM, H, Threads, InputCopyILP>(addresses, p.ffn.first, base);
             }
             dag_activity<Trace>(p.state, ActiveInput, false);
             if (threadIdx.x == 0) {

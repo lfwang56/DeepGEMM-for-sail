@@ -63,6 +63,7 @@ def main():
     parser.add_argument("--dag-input-prefetch", action="store_true")
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
+    parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
@@ -125,6 +126,7 @@ def main():
                      dag_trace=options.dag_trace, dag_shared_pool=options.dag_shared_pool,
                      dag_input_prefetch=options.dag_input_prefetch,
                      dag_backward=options.dag_backward, dag_direct_return=options.dag_direct_return)
+        extra["input_copy_ilp"] = options.input_copy_ilp
         extra["ffn_fusion"] = options.ffn_fusion
         extra["expert_local_grad"] = options.expert_local_grad
         if options.ring_rows is not None:
@@ -207,6 +209,7 @@ def main():
                               dag_input_prefetch=getattr(plan, "dag_input_prefetch", None),
                               dag_backward=getattr(plan, "dag_backward", None),
                               dag_direct_return=getattr(plan, "dag_direct_return", None),
+                              input_copy_ilp=getattr(plan, "input_copy_ilp", None),
                               dag_serialized_control=getattr(plan, "dag_serialize", None),
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,

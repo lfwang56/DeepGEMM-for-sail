@@ -149,15 +149,41 @@ __device__ __forceinline__ void dispatch_pipeline_producer(
 // A one-N-tile producer owns every row of its M tile. Materialize the required
 // packed input in one coalesced pass, then feed this same CTA's GEMM through
 // AIU. No other CTA is waited on, and the next kernel is stream ordered.
-template <uint32_t BM, uint32_t K, uint32_t Threads>
+template <uint32_t BM, uint32_t K, uint32_t Threads, uint32_t CopyILP = 1>
 __device__ __forceinline__ void pack_producer_input_rows(
         const uint64_t* addresses, const PeerGemmParams& params, uint32_t packed_row_base) {
     auto* packed = reinterpret_cast<uint4*>(const_cast<void*>(params.gemm.a_ptr))
         + uint64_t(packed_row_base) * (K / 8);
+    static_assert(CopyILP == 1 || CopyILP == 2 || CopyILP == 4 || CopyILP == 8);
+    if constexpr (CopyILP == 1) {
     for (uint32_t position = threadIdx.x; position < BM * (K / 8); position += Threads) {
         const uint32_t row = position / (K / 8), column = position % (K / 8);
         const uint64_t address = addresses[row];
         packed[position] = address ? reinterpret_cast<const uint4*>(address)[column] : uint4{};
+    }
+    } else {
+        // Issue independent vector loads before their dependent stores. Keep
+        // raw BF16 bits, padding and publication ordering unchanged. The
+        // register arrays have compile-time indices and no dynamic indexing.
+        for (uint32_t base = threadIdx.x; base < BM * (K / 8); base += Threads * CopyILP) {
+            uint4 values[CopyILP];
+            #pragma unroll
+            for (uint32_t j = 0; j < CopyILP; ++j) {
+                const uint32_t position = base + j * Threads;
+                uint4 value{};
+                if (position < BM * (K / 8)) {
+                    const uint32_t row = position / (K / 8), column = position % (K / 8);
+                    const uint64_t address = addresses[row];
+                    if (address) value = reinterpret_cast<const uint4*>(address)[column];
+                }
+                values[j] = value;
+            }
+            #pragma unroll
+            for (uint32_t j = 0; j < CopyILP; ++j) {
+                const uint32_t position = base + j * Threads;
+                if (position < BM * (K / 8)) packed[position] = values[j];
+            }
+        }
     }
     __threadfence();
     __syncthreads();
@@ -478,7 +504,7 @@ template <class _SrcT, GemmType kGemmType,
           bool ProducerInputAiu = false, bool DispatchPipeline = false,
           bool InlineDispatch = false, bool CacheReturn = false, bool FixedMTile = false,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
-          bool Fc1Activation = false, bool KeepGateUp = true>
+          bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -673,7 +699,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                   inline_source_addresses[row] = address;
               }
               __syncthreads();
-              training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(
+              training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
                   inline_source_addresses, params, deep_scheduler.curr_block_m_offset);
               if (thread_idx == 0) {
                   tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx, 1u);
@@ -705,7 +731,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                 training::cache_peer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(cached_source_addresses,
                     params, deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
             if constexpr (ProducerInputAiu)
-                training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(
+                training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
                     cached_source_addresses, params, deep_scheduler.curr_block_m_offset);
           }
           __syncthreads();

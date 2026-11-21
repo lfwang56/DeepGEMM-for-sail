@@ -113,6 +113,7 @@ def main():
     parser.add_argument("--dag-input-prefetch", action="store_true")
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
+    parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
@@ -225,6 +226,7 @@ def main():
                                dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool,
                                dag_input_prefetch=args.dag_input_prefetch,
                                dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return)
+                options["input_copy_ilp"] = args.input_copy_ilp
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -384,6 +386,7 @@ def main():
                     "dag_input_prefetch": getattr(plan, "dag_input_prefetch", None) if backend == "peer" else None,
                     "dag_backward": getattr(plan, "dag_backward", None) if backend == "peer" else None,
                     "dag_direct_return": getattr(plan, "dag_direct_return", None) if backend == "peer" else None,
+                    "input_copy_ilp": getattr(plan, "input_copy_ilp", None) if backend == "peer" else None,
                     "dag_direct_return_activity_scope": "return embedded in FC2/DX; task spans do not resolve internal overlap" if backend == "peer" and args.dag_direct_return else None,
                     "dag_input_prefetch_max_inflight_ctas": args.dag_input_ctas if backend == "peer" and args.dag_input_prefetch else None,
                     "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" and not args.dag_shared_pool else None,

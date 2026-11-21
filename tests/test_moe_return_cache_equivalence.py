@@ -23,6 +23,7 @@ parser.add_argument('--dag-backward', action='store_true')
 parser.add_argument('--dag-backward-only', action='store_true')
 parser.add_argument('--dag-direct-return', action='store_true')
 parser.add_argument('--dag-direct-return-ablation', action='store_true')
+parser.add_argument('--input-copy-ilp-ablation', type=int, choices=(2, 4, 8))
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
 if args.dag_backward_only:
@@ -31,7 +32,7 @@ if args.dag_direct_return_ablation:
     args.dag_ablation = True
 if args.dag_backward and not args.dag_g8:
     parser.error('backward DAG checks require --dag-g8')
-if args.dag_g8 and not (args.dag_shared_pool and (args.dag_ablation or args.dag_serialization_ablation)):
+if args.dag_g8 and not (args.dag_shared_pool and (args.dag_ablation or args.dag_serialization_ablation or args.input_copy_ilp_ablation)):
     parser.error('G8 DAG comparison requires shared-pool DAG ablation')
 if args.ffn_fusion_ablation and args.expert_local_grad_ablation:
     parser.error('choose one ablation')
@@ -43,7 +44,7 @@ x = (torch.randn(t, h, device='cuda') * .1).bfloat16()
 dy = (torch.randn_like(x) * .1).bfloat16()
 w1 = (torch.randn(e, 2*i, h, device='cuda') * .02).bfloat16()
 w2 = (torch.randn(e, h, i, device='cuda') * .02).bfloat16()
-if args.fc1_activation_ablation or args.dag_g8:
+if args.fc1_activation_ablation or args.dag_g8 or args.input_copy_ilp_ablation:
     w1 = to_g8_weight(w1)
 ids = torch.randn(t, e, device='cuda').topk(k, -1).indices.contiguous()
 original_ids = ids.clone()
@@ -92,6 +93,15 @@ with torch.cuda.stream(stream):
                            fuse_fc1_activation=cache)
         if args.dag_g8:
             options.update(gate_up_layout='g8', fuse_fc1_activation=True)
+        if args.input_copy_ilp_ablation:
+            options = dict(expert_local_grad=True, ring_rows=1024, block_m=256,
+                           gate_up_layout='g8', fuse_fc1_activation=True,
+                           dag_fusion=args.dag_shared_pool, dag_shared_pool=args.dag_shared_pool,
+                           dag_direct_return=args.dag_direct_return and args.dag_shared_pool,
+                           dispatch_producer=not args.dag_shared_pool,
+                           producer_input_aiu=not args.dag_shared_pool,
+                           producer_local_aiu=not args.dag_shared_pool,
+                           input_copy_ilp=args.input_copy_ilp_ablation if cache else 1)
         if args.dag_input_prefetch:
             options.update(dag_input_prefetch=bool(options.get('dag_fusion') or options.get('dag_backward')),
                            dag_input_ctas=args.dag_input_ctas)
@@ -145,7 +155,8 @@ with torch.cuda.stream(stream):
                            else (('dw1',2),('dw2',3))):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        case = ('fc1_activation_graph_equivalence' if args.fc1_activation_ablation else
+        case = ('input_copy_ilp_graph_equivalence' if args.input_copy_ilp_ablation else
+                'fc1_activation_graph_equivalence' if args.fc1_activation_ablation else
                 'dag_graph_equivalence' if args.dag_ablation or args.dag_serialization_ablation else
                 'return_vector_graph_equivalence' if args.return_vector_ablation else
                 'block_m_graph_equivalence' if args.block_m_ablation else
@@ -155,9 +166,10 @@ with torch.cuda.stream(stream):
         print(json.dumps({'case':case,'pattern':pattern,
                           'dag_shared_pool':args.dag_shared_pool,
                           'modes':[dict(forward_dag=p.dag_fusion,backward_dag=p.dag_backward,
-                                        direct_return=p.dag_direct_return) for p in plans],
+                                        direct_return=p.dag_direct_return,input_copy_ilp=p.input_copy_ilp) for p in plans],
                           'exact':exact,'wgrad_relative_rms':errors,
-                          'source':('identical G8 parameters and GEMM tiles; separate versus register-fused BF16-rounded FC1/SwiGLU' if args.fc1_activation_ablation else
+                          'source':('identical tensors and GEMM tiles; only independent input vector loads per thread change' if args.input_copy_ilp_ablation else
+                                    'identical G8 parameters and GEMM tiles; separate versus register-fused BF16-rounded FC1/SwiGLU' if args.fc1_activation_ablation else
                                     'identical tensors and GEMM tiles; DAG enabled versus producer control, or DAG serial versus parallel' if args.dag_ablation or args.dag_serialization_ablation else
                                     'identical tensors and BM256; four-byte versus eight-byte direct peer stores' if args.return_vector_ablation else
                                     'identical tensors; BM128 versus BM256, with matching metadata alignment' if args.block_m_ablation else

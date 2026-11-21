@@ -33,6 +33,7 @@ def main():
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
+    parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--intermediate", type=int, default=2048)
     parser.add_argument("--local-experts", type=int, default=8)
@@ -84,6 +85,7 @@ def main():
                          dag_shared_pool=args.dag_fusion or args.dag_backward,
                          expert_local_grad=True, reuse_packed_dy=True, fuse_activation_backward=True,
                          fuse_fc1_activation=args.fuse_fc1_activation,
+                         input_copy_ilp=args.input_copy_ilp,
                          dispatch_producer=not args.dag_fusion,
                          producer_input_aiu=not args.dag_fusion, producer_local_aiu=not args.dag_fusion))
     plan = (DeepEPMoEPlan if args.backend == "deepep" else PeerMoEPlan)(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
@@ -158,6 +160,7 @@ def main():
             route_window_count=plan.route_window_count,
             backend=args.backend, gate_up_layout=args.gate_up_layout,
             dag_fusion=args.dag_fusion, dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return,
+            input_copy_ilp=args.input_copy_ilp if args.backend == "peer" else None,
             payload_transport=getattr(plan, "deep_ep_backend", "verified direct peer domain"),
             rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None),
             rdma_qps=getattr(plan, "deep_ep_qps", None), communication_cus=getattr(plan, "comm_sms", None),

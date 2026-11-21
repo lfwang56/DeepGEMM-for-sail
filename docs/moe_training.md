@@ -105,10 +105,22 @@ A local GEMM kernel reads local tensors; that name does not imply that the
 network is idle. Independent tile communication can overlap it. The current
 best producer path retains some serial boundaries. The experimental shared
 task pool pipelines ready dispatch/FC1/activation/FC2/return tasks; it uses
-the same pipeline for forward replay in backward. Subsequent dHidden, DX
-and weight-gradient work remains outside that pool. Report full-step times
+the same pipeline for forward replay in backward. Optional `dag_backward=True`
+adds DY/score fetch, score-gradient publication, dHidden/activation backward,
+DX and gradient return to a shared pool. It requires G8 routed-row windows
+and can accompany producer forward independently. Full FP32 weight gradients
+remain separate. `dag_direct_return=True` optionally embeds the return in
+FC2/DX; those task spans include traffic and are not pure compute. Report full-step times
 alongside activity overlap, since communication and computation contend for
 CU, register and memory resources.
+
+`input_copy_ilp=2`, `4` or `8` issues several independent BF16 vector reads
+before storing a producer's packed input. It applies to producer input
+staging and shared-pool forward input tasks; its default is1. It preserves
+raw BF16 values, padding and publication fences. The backward DY/dScore dot
+product retains its original floating-point order. Tune this with the actual
+topology and payload: restricting input workers without enough independent
+reads reduced throughput in the controlled Qwen3.8 measurements.
 
 ## Calling contract
 

@@ -11,13 +11,15 @@ public:
         bool return_output, trace, shared_pool, fc1_activation, input_prefetch, backward, direct_return;
         LaunchArgs launch_args;
         PeerFfnDagParams params;
+        int input_copy_ilp = 1;
     };
     static std::string name(const Args& a) {
-        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}{}{}{}{}",
+        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}{}{}{}{}{}",
             a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn, a.stages, a.return_output, a.trace,
             a.shared_pool ? "_shared_pool" : "", a.fc1_activation ? "_g8_swiglu" : "",
             a.input_prefetch ? "_input_prefetch" : "", a.backward ? "_backward_g8" : "",
-            a.direct_return ? "_direct_return" : "");
+            a.direct_return ? "_direct_return" : "",
+            a.input_copy_ilp == 1 ? "" : fmt::format("_copy_ilp{}", a.input_copy_ilp));
     }
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
@@ -29,9 +31,9 @@ __global__ void {}(const deep_gemm::training::PeerFfnDagParams params) {{
 )", a.threads, name(a), a.shared_pool ? "peer_ffn_shared_pool_impl" : "peer_ffn_dag_impl",
        a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn,
        a.threads, a.stages, a.return_output ? "true" : "false", a.trace ? "true" : "false",
-       a.shared_pool ? fmt::format(", {}, {}, {}, {}", a.fc1_activation ? "true" : "false",
+       a.shared_pool ? fmt::format(", {}, {}, {}, {}, {}", a.fc1_activation ? "true" : "false",
                                   a.input_prefetch ? "true" : "false", a.backward ? "true" : "false",
-                                  a.direct_return ? "true" : "false") : "");
+                                  a.direct_return ? "true" : "false", a.input_copy_ilp) : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -45,7 +47,9 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
                         int input_ctas, int return_ctas, bool return_output,
                         bool serialize, bool trace, bool compile_only, bool shared_pool = false,
                         bool fc1_activation = false, bool input_prefetch = false,
-                        bool backward = false, bool direct_return = false) {
+                        bool backward = false, bool direct_return = false, int input_copy_ilp = 1) {
+    DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
+    DG_HOST_ASSERT(input_copy_ilp == 1 || (shared_pool && !backward));
     DG_HOST_ASSERT((!fc1_activation && !input_prefetch && !backward && !direct_return) || shared_pool);
     DG_HOST_ASSERT(!backward || (return_output && !fc1_activation));
     DG_HOST_ASSERT(tensors.size() == (backward ? 14 : 12) && controls.size() == 9 && tensors[0].is_cuda());
@@ -145,6 +149,7 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     p.serialize = serialize;
     PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,shared_pool,fc1_activation,input_prefetch,backward,direct_return,
         {get_grid_shape(get_num_sms()),dim3(threads),smem},p};
+    a.input_copy_ilp = input_copy_ilp;
     const auto runtime = compiler->build(PeerDagRuntime::name(a), PeerDagRuntime::generate(a));
     int occupancy = 0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
@@ -166,7 +171,8 @@ static void register_peer_dag_apis(pybind11::module_& m) {
         py::arg("return_output"), py::arg("serialize") = false, py::arg("trace") = false,
         py::arg("compile_only") = false, py::arg("shared_pool") = false,
         py::arg("fc1_activation") = false, py::arg("input_prefetch") = false,
-        py::arg("backward") = false, py::arg("direct_return") = false);
+        py::arg("backward") = false, py::arg("direct_return") = false,
+        py::arg("input_copy_ilp") = 1);
 }
 
 }  // namespace deep_gemm::training

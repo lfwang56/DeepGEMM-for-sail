@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--dag-input-prefetch", action="store_true")
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
+    parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
@@ -129,6 +130,7 @@ def main():
                            dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool,
                            dag_input_prefetch=args.dag_input_prefetch,
                            dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return)
+            options["input_copy_ilp"] = args.input_copy_ilp
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
@@ -185,6 +187,7 @@ def main():
             dag_input_prefetch=args.dag_input_prefetch if backend == "peer" else None,
             dag_backward=args.dag_backward if backend == "peer" else None,
             dag_direct_return=args.dag_direct_return if backend == "peer" else None,
+            input_copy_ilp=args.input_copy_ilp if backend == "peer" else None,
             gate_up_layout=plan.gate_up_layout,
             fuse_fc1_activation=args.fuse_fc1_activation if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,

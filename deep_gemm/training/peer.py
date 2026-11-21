@@ -36,7 +36,13 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
+                 input_copy_ilp=1,
                  fuse_fc1_activation=False, **kwargs):
+        if type(input_copy_ilp) is not int or input_copy_ilp not in (1, 2, 4, 8):
+            raise ValueError("input_copy_ilp must be1,2,4or8")
+        if input_copy_ilp != 1 and not (dag_fusion or (dispatch_producer and producer_input_aiu)):
+            raise ValueError("input copy ILP requires the forward DAG or producer input staging")
+        self.input_copy_ilp = input_copy_ilp
         if not isinstance(fuse_fc1_activation, bool):
             raise TypeError("fuse_fc1_activation must be bool")
         g8 = kwargs.get("gate_up_layout", "split") == "g8"
@@ -186,7 +192,7 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.group is not None:
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
-                      self.dag_input_prefetch, self.dag_serialize)
+                      self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -360,6 +366,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.block_m,
             self.return_vector_bytes if write else 4,
             interleaved, fc1_activation, keep_gate_up if fc1_activation else True,
+            self.input_copy_ilp if producer_input_aiu else 1,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
@@ -554,7 +561,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.dag_config, self.dag_input_ctas, self.dag_return_ctas, return_output,
             self.dag_serialize, self.dag_trace, compile_only, self.dag_shared_pool,
             self.fuse_fc1_activation and not backward, self.dag_input_prefetch,
-            backward, self.dag_direct_return)
+            backward, self.dag_direct_return, 1 if backward else self.input_copy_ilp)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(
