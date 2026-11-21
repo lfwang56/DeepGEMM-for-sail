@@ -234,6 +234,7 @@ public:
         int input_copy_ilp = 1;
         bool external_input = false;
         int poll_yield_every = 0;
+        int poll_pause_cycles = 0;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -252,6 +253,7 @@ public:
         if (args.pipeline.ready) name += args.write_peer ? "_return_pipeline" : "_dispatch_pipeline";
         if (args.pipeline.ready && args.pipeline.serialize) name += "_serialized";
         if (args.poll_yield_every) name += fmt::format("_yield{}", args.poll_yield_every);
+        if (args.poll_pause_cycles) name += fmt::format("_pause{}", args.poll_pause_cycles);
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
         if (args.cache_return_addresses) name += "_cached_return";
@@ -269,7 +271,7 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}
     >(params{});
 }}
 )", args.threads, name(args),
@@ -287,7 +289,7 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.return_vector_bytes,
        args.interleaved_gate_up ? "true" : "false",
        args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
-       args.input_copy_ilp, args.external_input ? "true" : "false", args.poll_yield_every,
+       args.input_copy_ilp, args.external_input ? "true" : "false", args.poll_yield_every, args.poll_pause_cycles,
        args.pipeline.ready ? ", pipeline" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -435,6 +437,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.input_copy_ilp = input_copy_ilp;
     args.external_input = external_input;
     if (pipeline_ready.has_value()) {
+        args.poll_pause_cycles = get_env<int>("DG_INPUT_READY_PAUSE_CYCLES", 0);
+        DG_HOST_ASSERT(args.poll_pause_cycles >= 0 && args.poll_pause_cycles <= 16384);
         args.poll_yield_every = get_env<int>("DG_INPUT_READY_YIELD_EVERY", 0);
         DG_HOST_ASSERT(args.poll_yield_every >= 0 && args.poll_yield_every <= 1024
                        && (args.poll_yield_every == 0 || (args.poll_yield_every & (args.poll_yield_every - 1)) == 0));
@@ -476,7 +480,15 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
         // A CTA is not a CU: the actual kernel can have multiple resident
         // CTAs per CU. Fill that resident pool while reserving one CU's worth
         // of slots for framework progress. No grid-level oversubscription.
-        args.launch_args.grid_dim.x = (get_num_sms() - (pipeline_comm_ctas == 0 && !external_input ? 0 : 1)) * occupancy;
+        int compute_cus = get_num_sms() - (pipeline_comm_ctas == 0 && !external_input ? 0 : 1);
+        if (external_input) {
+            // This caps the persistent compute grid; it does not pin CTAs to
+            // particular CUs or promise hardware partitioning across streams.
+            const int requested = get_env<int>("DG_EXTERNAL_INPUT_COMPUTE_CUS", 0);
+            DG_HOST_ASSERT(requested >= 0 && requested < get_num_sms());
+            if (requested) compute_cus = requested;
+        }
+        args.launch_args.grid_dim.x = compute_cus * occupancy;
         DG_HOST_ASSERT(pipeline_comm_ctas < args.launch_args.grid_dim.x);
         if (pipeline_statistics.has_value())
             DG_HOST_ASSERT(pipeline_statistics.value().numel() >= args.launch_args.grid_dim.x * 4);

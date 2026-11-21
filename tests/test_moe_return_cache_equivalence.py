@@ -31,6 +31,7 @@ parser.add_argument('--input-external', action='store_true')
 parser.add_argument('--input-external-serial', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 parser.add_argument('--gemm-geometry-ablation', type=int, nargs=5)
+parser.add_argument('--gemm-stages', type=int, choices=(2,3), default=2)
 args = parser.parse_args()
 if args.dag_backward_only:
     args.dag_ablation = args.dag_backward = True
@@ -135,7 +136,7 @@ with torch.cuda.stream(stream):
             options = dict(expert_local_grad=True, ring_rows=1024, block_m=256,
                            gate_up_layout='g8', fuse_fc1_activation=True, input_copy_ilp=8,
                            dispatch_producer=True, producer_input_aiu=True, producer_local_aiu=True)
-        config = tuple(args.gemm_geometry_ablation) if cache and args.gemm_geometry_ablation else (256,64,64,64,2)
+        config = tuple(args.gemm_geometry_ablation) if cache and args.gemm_geometry_ablation else (256,64,64,64,args.gemm_stages)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:config for role in ('fc1','fc2','dhidden','dx')}, **options)
@@ -198,7 +199,7 @@ with torch.cuda.stream(stream):
                 'routed_row_window_graph_equivalence' if args.ring_rows_ablation is not None else
                 'expert_grad_graph_equivalence' if args.expert_local_grad_ablation else
                 'ffn_graph_equivalence' if args.ffn_fusion_ablation else 'return_cache_graph_equivalence')
-        print(json.dumps({'case':case,'pattern':pattern,'gemm_geometry':args.gemm_geometry_ablation,
+        print(json.dumps({'case':case,'pattern':pattern,'gemm_geometry':args.gemm_geometry_ablation,'gemm_stages':args.gemm_stages,
                           'dag_shared_pool':args.dag_shared_pool,
                           'modes':[dict(forward_dag=p.dag_fusion,backward_dag=p.dag_backward,
                                         direct_return=p.dag_direct_return,input_copy_ilp=p.input_copy_ilp,

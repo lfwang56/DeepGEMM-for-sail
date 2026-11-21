@@ -3283,3 +3283,44 @@ Fastest accepted hybrid: ('hybrid', 103.74205322265625, 'qwen38-wlf-cross-ep64-i
 Fastest accepted elastic: ('elastic', 158.1000244140625, 'qwen38-wlf-cross-ep64-iter39-elastic38-early-c2048', 2048).
 
 Fastest accepted deepep: ('deepep', 255.4879638671875, 'qwen38-wlf-cross-ep64-iter39-legacy38-early-c2048', 2048).
+
+
+## Iteration 40 — persistent compute-grid budget and paced ready polling
+
+**Evidence.** Identical serial versus concurrent copy/consumer kernels in35 cost99.99 versus181.07ms. Native yield hints36 did not improve that concurrency. The faster stage3 recipe37 still shows zero cross-kernel intersection: local44.16ms (including WG16.92), mixed23.92ms in a85.54ms instrumented rank0 union. No physical resource floor was established.
+
+**Change.** DG_EXTERNAL_INPUT_COMPUTE_CUS0 retains the old external grid of(numCUs-1)*measured occupancy; positive budgets cap its persistent CTA grid. This does not pin CTAs to CUs or guarantee hardware partitioning. DG_INPUT_READY_PAUSE_CYCLES0..16384 adds a local clock64 pause after unsuccessful acquire/status/timeout checks in the scheduler and inline-owner loser wait. Defaults0 compile away. The existing DAG hardware sampler already uses the same native clock64 pacing pattern. All tix acquire/release operations, fences, ready/status semantics, BF16 arithmetic and timeout remain intact. Kernel names and metrics expose pause and grid settings. Public GPU Params and native API arguments remain compatible.
+
+**Validation.** Stage3 producer/consumer exact mutable graph comparisons, independent full-width FP32, actual32 all-element balanced/masked/skewed/reversed references, and fullC4096 skew gate the matrix. The installed ElasticBuffer domain-EP32 path is additionally validated and timed at8/16/38 communication CUs; the strongest accepted Elastic or legacy dispatch/combine is the denominator. Stage3, G8, producerILP8, H8192/I2048/E512/top10,T4096/C4096,ring65536,BM256,full rematerialized backward and FP32 DW zero/accumulation.
+
+| Configuration | Backend | Compute budget | Copy CTAs | Pause cycles | Complete layer ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| qwen38-wlf-ep32-iter40-grid-c16-a16-p0 | peer | 16 | 16 | 0 | 104.976965 |
+| qwen38-wlf-ep32-iter40-grid-c24-a16-p0 | peer | 24 | 16 | 0 | 99.635968 |
+| qwen38-wlf-ep32-iter40-grid-c24-a16-p0-serial | peer | 24 | 16 | 0 | 104.205542 |
+| qwen38-wlf-ep32-iter40-grid-c24-a16-p1024 | peer | 24 | 16 | 1024 | 99.427966 |
+| qwen38-wlf-ep32-iter40-grid-c31-a8-p0 | peer | 31 | 8 | 0 | 88.781000 |
+| qwen38-wlf-ep32-iter40-grid-c31-a8-p256 | peer | 31 | 8 | 256 | 88.757782 |
+| qwen38-wlf-ep32-iter40-grid-c35-a4-p0 | peer | 35 | 4 | 0 | 114.677051 |
+| qwen38-wlf-ep32-iter40-grid-c38-a32-p0 | peer | 38 | 32 | 0 | 198.385901 |
+| qwen38-wlf-ep32-iter40-grid-c38-a32-p2048 | peer | 38 | 32 | 2048 | 198.041785 |
+| qwen38-wlf-ep32-iter40-grid-c38-a32-p512 | peer | 38 | 32 | 512 | 198.823389 |
+| qwen38-wlf-ep32-iter40-grid-c8-a32-p0 | peer | 8 | 32 | 0 | 152.647607 |
+| qwen38-wlf-ep32-iter40-grid-deepep-early | deepep | 0 | None | 0 | 109.021887 |
+| qwen38-wlf-ep32-iter40-grid-elastic16 | elastic | 0 | None | 0 | 114.402283 |
+| qwen38-wlf-ep32-iter40-grid-elastic38 | elastic | 0 | None | 0 | 107.803589 |
+| qwen38-wlf-ep32-iter40-grid-elastic8 | elastic | 0 | None | 0 | 115.138745 |
+| qwen38-wlf-ep32-iter40-grid-inline-a0-p0 | peer | 0 | 0 | 0 | 88.842365 |
+| qwen38-wlf-ep32-iter40-grid-inline-a8-p512 | peer | 0 | 8 | 512 | 90.222229 |
+| qwen38-wlf-ep32-iter40-grid-producer-control-attempt0 | deepep | 0 | None | 0 | 110.083630 |
+| qwen38-wlf-ep32-iter40-grid-producer-control-attempt0 | peer | 0 | 0 | 0 | 85.411011 |
+
+Fastest accepted peer: ('peer', 85.4110107421875, 'qwen38-wlf-ep32-iter40-grid-producer-control-attempt0').
+
+Fastest accepted elastic: ('elastic', 107.8035888671875, 'qwen38-wlf-ep32-iter40-grid-elastic38').
+
+Fastest accepted deepep: ('deepep', 109.02188720703126, 'qwen38-wlf-ep32-iter40-grid-deepep-early').
+
+**Local-pointer resource screening.** GlobalE16 on one PPU, not ICN or EP32. Whole-host audit clean=True. These values do not enter distributed speedups. See iter40-local-grid-screen.json.
+
+Only a lower complete-step latency counts as a win; resource budgets, busy-loop hints and visible concurrency are hypotheses rather than wire/MMA utilization measurements.

@@ -450,6 +450,8 @@ def main():
                     "dispatch_external_serial": getattr(plan, "dispatch_external_serial", None) if backend == "peer" else None,
                     "input_assist_warp_rows": os.environ.get("DG_INPUT_ASSIST_WARP_ROWS", "1"),
                     "input_ready_yield_every": os.environ.get("DG_INPUT_READY_YIELD_EVERY", "0"),
+                    "input_ready_pause_cycles": os.environ.get("DG_INPUT_READY_PAUSE_CYCLES", "0"),
+                    "external_input_compute_cus": os.environ.get("DG_EXTERNAL_INPUT_COMPUTE_CUS", "0"),
                     "input_assist_static_geometry": os.environ.get("DG_INPUT_ASSIST_STATIC_GEOMETRY", "1"),
                     "last_fc1_assisted_tiles": int(plan.input_assisted_tiles) if backend == "peer" and plan.dispatch_assist_ctas else None,
                     "wgrad_overlap": plan.wgrad_overlap,
