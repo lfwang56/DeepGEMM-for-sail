@@ -84,6 +84,7 @@ def main():
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
+    parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--deepep-comm-sms", type=int, default=8)
     parser.add_argument("--deepep-scaleup", action="store_true",
                         help="Use DeepEP fabric intranode path across one verified supernode")
@@ -167,6 +168,7 @@ def main():
                                fuse_activation_backward=args.fuse_activation_backward,
                                vectorized_copy=not args.scalar_peer_copy,
                                reuse_packed_dy=args.reuse_packed_dy)
+                options["staged_return"] = args.staged_return
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend == "deepep":
                 options = {"comm_sms": args.deepep_comm_sms}
@@ -270,6 +272,7 @@ def main():
                     "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
                     "peer_dispatch_cache_aiu": getattr(plan, "dispatch_cache_aiu", None) if backend == "peer" else None,
+                    "peer_staged_return": getattr(plan, "staged_return", None) if backend == "peer" else None,
                     "peer_reuse_packed_dy": getattr(plan, "reuse_packed_dy", None) if backend == "peer" else None,
                     "deepep_version": getattr(plan, "deep_ep_version", None),
                     "deepep_backend": getattr(plan, "deep_ep_backend", None),

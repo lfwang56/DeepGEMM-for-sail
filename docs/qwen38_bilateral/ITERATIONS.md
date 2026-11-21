@@ -169,3 +169,18 @@ The best measured DeepEP communication setting replaces the initial8-CU and24-CU
 {"case": "distributed_matrix_phase", "name": "qwen38-wlf-ep32-t8192-iter3-control", "returncode": 0}
 ```
 The future staged-return source is present but disabled in these controls. Its independent small/Qwen references passed; its distributed graph and performance gates remain separate.
+
+### Iteration 4 — TSM redistribution for contiguous BF16x8 return stores
+
+- Direction: reuse drained GEMM mainloop shared memory for BF16 accumulator pairs, then redistribute into contiguous128-bit peer stores. Dispatch and return remain inside the GEMMs; no separate output/scatter buffer or return kernel. Explicit staged_return option, defaultFalse.
+- Correctness: BN64/128/256 unit passed130.959s; complete Qwen expert-dimension reference passed both masked/ragged and duplicate-skew distributions, worstRMS0.00494. EP2 independent CPU reference and128dynamic-route graph replays passed, with normal teardown and clean gate.
+- Paired Qwen EP32T1024 SN1: tuned DeepEP38CUs46.9889832ms; staged-return bilateral49.2693939ms, samples [49.2206207,49.2526611,49.2714874,49.2693939,49.2770874]. All32parents and allfour gates passed.
+- Result:0.61% slower than iteration3unstaged48.9703064ms; do not enable by default. Two consecutive directions (AIU, staged return) have not materially improved the best fusion time.
+- Next: inspect shared staging layout/transaction cost and FC1 scheduling. An aligned shared-row padding control can test whether the transpose layout, rather than remote store width, negates the return benefit. No claim of physical floor.
+
+### Complete public-text LM checks in wlf runtime (partial held-out audit)
+
+- Three matched seeds, EP2,57.8M4-layerH512/I1024/E8/K2,2000steps, public pinned TinyShakespeare. Iteration3 peer cache16/AIU/packed-DY compared with nativeBF16; small LM is not Qwen2.4T convergence validation.
+- Seeds4827/6113 completed and fully evaluated111539held-out successors: Native1.5816298120/1.5929814162;Peer1.5815587536/1.5918998886. No quality-win claim.
+- Original seed4891 BOTH paths failed identical unfrozen-dense preflight router gradient .042700646>unchanged.04, overallgradRMS.00333; branch choices differ by[0,0,2,1]tokens across layers. Preserve failures.
+- Explicit fixed-route preflight records those unfrozen differences, then compares continuous gradients on actualselected expert IDs. Both paths passed: selected differences[0,0,0,0], overallRMS.00226,maxparameter.00449, unchangedtolerance. This option only affects the independent oracle, and real2000-steptrainingremainsdynamic. Both retried seed4891trainingjobs nowcompleted2000steps and clean gates; fullheldoutevaluationstillpending.

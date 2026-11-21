@@ -26,7 +26,7 @@ class PeerMoEPlan(NativeMoEPlan):
     def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
                  active_rows=True, fuse_local_grad=True, fuse_activation_backward=False,
                  vectorized_copy=True, dispatch_cache_n=0, reuse_packed_dy=False,
-                 dispatch_cache_aiu=False, **kwargs):
+                 dispatch_cache_aiu=False, staged_return=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -51,6 +51,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if dispatch_cache_aiu and not dispatch_cache_n:
             raise ValueError("AIU cache reads require dispatch_cache_n > 0")
         self.dispatch_cache_aiu = dispatch_cache_aiu
+        if not isinstance(staged_return, bool):
+            raise TypeError("staged_return must be bool")
+        self.staged_return = staged_return and fuse_return
         if not isinstance(reuse_packed_dy, bool):
             raise TypeError("reuse_packed_dy must be bool")
         if reuse_packed_dy and self.transport != "peer":
@@ -145,6 +148,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.gate_up if role == "dhidden" and self.fuse_activation_backward else None,
             self.dispatch_cache_n if read else 0, self.dispatch_scratch if read else None,
             self.dispatch_cache_aiu if read else False,
+            self.staged_return if write else False,
         )
 
     @torch.no_grad()

@@ -128,6 +128,50 @@ __device__ __forceinline__ void scatter_peer_output(
     }
 }
 
+template <typename DstT, uint32_t BM, uint32_t BN, uint32_t SHAPE_N, bool Coherent,
+          class Accum, class Coordinates>
+__device__ __forceinline__ void scatter_peer_output_staged(
+        const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
+        DstT* stage, uint32_t row_base, uint32_t valid_rows, uint32_t column_base) {
+    // All MMA readers must finish before reusing the input pipeline storage.
+    __syncthreads();
+    CUTLASS_PRAGMA_UNROLL
+    for (int wm = 0; wm < cute::size<1>(coordinates); ++wm) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
+            const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
+            if (row >= valid_rows) continue;
+            CUTLASS_PRAGMA_UNROLL
+            for (int wn = 0; wn < cute::size<2>(coordinates); ++wn) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int mn = 0; mn < cute::size<0, 2>(coordinates); ++mn) {
+                    const uint32_t col = cute::get<1>(coordinates(cute::make_coord(cute::_0{}, mm, mn), wm, wn));
+                    const auto* values = cute::raw_pointer_cast(accum(cute::make_coord(cute::_, mm, mn), wm, wn).data());
+                    *reinterpret_cast<uint32_t*>(stage + uint64_t(row) * BN + col)
+                        = tix::cvt_rte_bf16x2_f32(values[1], values[0]);
+                }
+            }
+        }
+    }
+    __syncthreads();
+    // Redistribute fragment pairs into contiguous BF16x8 remote stores. No
+    // extra global output buffer or separate return kernel is introduced.
+    constexpr uint32_t vectors = BN / 8;
+    for (uint32_t index = threadIdx.x; index < valid_rows * vectors; index += blockDim.x) {
+        const uint32_t row = index / vectors, col = (index % vectors) * 8;
+        if (column_base + col >= SHAPE_N) continue;
+        const int route = Coherent ? load_pipeline_metadata(params.permutation + row_base + row)
+                                   : __ldg(params.permutation + row_base + row);
+        if (route < 0) continue;
+        const uint32_t rank = uint32_t(route) / params.destination_rows_per_rank;
+        if (rank >= params.num_ranks) continue;
+        auto* destination = reinterpret_cast<DstT*>(__ldg(params.destination_peers + rank));
+        destination += uint64_t(uint32_t(route) % params.destination_rows_per_rank) * SHAPE_N + column_base + col;
+        *reinterpret_cast<uint4*>(destination) = reinterpret_cast<const uint4*>(stage)[index];
+    }
+    __syncthreads();
+}
+
 }  // namespace training
 
 namespace training {
@@ -179,7 +223,7 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite,
           bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
-          bool DispatchCacheAiu = false>
+          bool DispatchCacheAiu = false, bool StagedReturn = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -482,8 +526,16 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
           training::activation_backward_epilogue<SHAPE_N>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
       } else if constexpr (PeerWrite) {
-          training::scatter_peer_output<DstT, SHAPE_N, Coherent>(accum, tCcC, params,
-              deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
+          if constexpr (StagedReturn) {
+              static_assert(BLOCK_M * BLOCK_N * sizeof(DstT)
+                  <= kSmemASize + smem_b_size(sizeof(SrcT), kNumStages, BLOCK_N, BLOCK_K));
+              training::scatter_peer_output_staged<DstT, BLOCK_M, BLOCK_N, SHAPE_N, Coherent>(
+                  accum, tCcC, params, reinterpret_cast<DstT*>(smem_buffer),
+                  deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
+          } else {
+              training::scatter_peer_output<DstT, SHAPE_N, Coherent>(accum, tCcC, params,
+                  deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
+          }
       } else {
           epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM>(accum, tCcC, args.c_ptr,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);

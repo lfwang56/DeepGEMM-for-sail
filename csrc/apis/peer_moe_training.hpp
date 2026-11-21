@@ -155,6 +155,7 @@ public:
         bool activation_backward;
         int dispatch_cache_n;
         bool dispatch_cache_aiu;
+        bool staged_return;
         int block_n, block_k, warp_m, warp_n, stages, threads;
         LaunchArgs launch_args;
         PeerGemmParams params;
@@ -166,6 +167,7 @@ public:
         if (args.activation_backward) name += "_activation_backward";
         if (args.dispatch_cache_n) name += fmt::format("_cache{}", args.dispatch_cache_n);
         if (args.dispatch_cache_aiu) name += "_aiu";
+        if (args.staged_return) name += "_staged_return";
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -175,14 +177,14 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}
+        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}
     >(params);
 }}
 )", args.threads, name(args), args.n, args.k, args.groups, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
        args.activation_backward ? "true" : "false", args.dispatch_cache_n,
-       args.dispatch_cache_aiu ? "true" : "false");
+       args.dispatch_cache_aiu ? "true" : "false", args.staged_return ? "true" : "false");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -198,7 +200,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       bool pack_input, const std::vector<int>& config,
                       const c10::optional<torch::Tensor>& activation_gate_up,
                       int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch,
-                      bool dispatch_cache_aiu) {
+                      bool dispatch_cache_aiu, bool staged_return) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -242,6 +244,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                    || dispatch_cache_n == 8 || dispatch_cache_n == 16);
     if (!read_peer) dispatch_cache_n = 0;
     DG_HOST_ASSERT(!dispatch_cache_aiu || (read_peer && dispatch_cache_n));
+    DG_HOST_ASSERT(!staged_return || write_peer);
     if (dispatch_cache_n) {
         DG_HOST_ASSERT(dispatch_scratch.has_value());
         const auto& scratch = dispatch_scratch.value();
@@ -276,6 +279,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     DG_HOST_ASSERT(smem <= 256 * 1024);
     PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(), dispatch_cache_n,
                               dispatch_cache_aiu,
+                              staged_return,
                               bn, bk, wm, wn, stages, threads,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     const auto code = PeerGemmRuntime::generate(args);
@@ -305,7 +309,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("read_peer"), py::arg("write_peer"), py::arg("compile_only") = false,
           py::arg("pack_input") = false, py::arg("config") = std::vector<int>{},
           py::arg("activation_gate_up") = py::none(), py::arg("dispatch_cache_n") = 0,
-          py::arg("dispatch_scratch") = py::none(), py::arg("dispatch_cache_aiu") = false);
+          py::arg("dispatch_scratch") = py::none(), py::arg("dispatch_cache_aiu") = false,
+          py::arg("staged_return") = false);
 }
 
 }  // namespace deep_gemm::training

@@ -208,6 +208,23 @@ class NativeTests(unittest.TestCase):
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
                   expected(x, ids, scores, w1, w2, dy, 5), "bf16")
 
+    def test_staged_peer_return(self):
+        if self.plan_class is not PeerMoEPlan:
+            self.skipTest("peer GEMM return epilogue")
+        for bn in (64, 128, 256):
+            x, ids, scores, w1, w2, dy = self.inputs()
+            ids[2].fill_(0)
+            ids[3, 1] = -1
+            valid = torch.full((), 5, device="cuda", dtype=torch.int32)
+            configs = {role: (bn, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
+            plan = PeerMoEPlan(256, 128, 3, 2, 7, chunk_tokens=3,
+                               gemm_configs=configs, dispatch_cache_n=4,
+                               reuse_packed_dy=True, staged_return=True)
+            y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
+            y.backward(dy)
+            check((y, x.grad, w1.grad, w2.grad, scores.grad),
+                  expected(x, ids, scores, w1, w2, dy, 5), "bf16")
+
     def test_peer_pointwise_switches(self):
         if self.plan_class is not PeerMoEPlan:
             self.skipTest("peer active-row and local-gradient controls")
@@ -330,7 +347,7 @@ class NativeTests(unittest.TestCase):
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
               collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0, reuse_packed_dy=False,
-              deepep=False, dispatch_cache_aiu=False):
+              deepep=False, dispatch_cache_aiu=False, staged_return=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -367,6 +384,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
         plan_options["reuse_packed_dy"] = True
     if dispatch_cache_aiu:
         plan_options["dispatch_cache_aiu"] = True
+    if staged_return:
+        plan_options["staged_return"] = True
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     if peer and not persistent:
@@ -464,11 +483,14 @@ if __name__ == "__main__":
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--deepep", action="store_true")
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
+    parser.add_argument("--staged-return", action="store_true")
     options, remaining = parser.parse_known_args()
     if options.deepep and (not options.ep or options.peer or options.persistent or options.collective_fused or options.fp8):
         parser.error("--deepep requires BF16 --ep and is a separate backend")
     if options.dispatch_cache_aiu and (not options.peer or not options.ep or not options.dispatch_cache_n):
         parser.error("--dispatch-cache-aiu requires --peer --ep --dispatch-cache-n > 0")
+    if options.staged_return and (not options.peer or not options.ep):
+        parser.error("--staged-return requires --peer --ep; unit cases exercise it automatically")
     if options.dispatch_cache_n and (not options.ep or not options.peer or options.persistent or options.no_fuse_dispatch):
         parser.error("--dispatch-cache-n requires --peer --ep with fused dispatch; unit tests cover cache groups automatically")
     if options.reuse_packed_dy and (not options.ep or not options.peer or options.persistent):
@@ -485,7 +507,8 @@ if __name__ == "__main__":
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
                   options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose,
-                  options.dispatch_cache_n, options.reuse_packed_dy, options.deepep, options.dispatch_cache_aiu)
+                  options.dispatch_cache_n, options.reuse_packed_dy, options.deepep, options.dispatch_cache_aiu,
+                  options.staged_return)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer
