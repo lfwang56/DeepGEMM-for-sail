@@ -31,6 +31,21 @@ class KernelTests(unittest.TestCase):
         torch.testing.assert_close(out.cpu(), expected.bfloat16(), rtol=0.008, atol=0.001)
         torch.testing.assert_close(grad.cpu(), expected_grad, rtol=0.008, atol=0.002)
 
+    def test_grouped_weight_transpose_bits(self):
+        for experts, hidden, intermediate in ((2, 256, 128), (3, 768, 384), (1, 7168, 2048)):
+            w1 = torch.randn(experts, 2 * intermediate, hidden, device="cuda").bfloat16()
+            w2 = torch.randn(experts, hidden, intermediate, device="cuda").bfloat16()
+            # Include signed zero, infinities and NaN payload bits: transpose
+            # performs no floating-point arithmetic or value conversion.
+            patterns = torch.tensor([0, -32768, 32767, 32640, -128, 128, 1, -1],
+                                    dtype=torch.int16, device="cuda")
+            w1.view(torch.int16).flatten()[:8].copy_(patterns)
+            a = torch.empty((experts, hidden, 2 * intermediate), device="cuda", dtype=torch.bfloat16)
+            b = torch.empty((experts, intermediate, hidden), device="cuda", dtype=torch.bfloat16)
+            launch(22, [w1, w2, a, b], [experts, hidden, intermediate])
+            torch.testing.assert_close(a.view(torch.int16), w1.view(torch.int16).transpose(1, 2), rtol=0, atol=0)
+            torch.testing.assert_close(b.view(torch.int16), w2.view(torch.int16).transpose(1, 2), rtol=0, atol=0)
+
     def test_native_fp8_quantizers(self):
         a = torch.randn(5, 256).bfloat16()
         a[0].zero_()

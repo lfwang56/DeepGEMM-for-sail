@@ -205,12 +205,12 @@ class NativeTests(unittest.TestCase):
     def test_collective_active_pointwise(self):
         if self.plan_class is not NativeMoEPlan or self.compute != "bf16":
             self.skipTest("BF16 collective active-row control")
-        for active in (False, True):
+        for active, vectorized in ((a, v) for a in (False, True) for v in (False, True)):
             x, ids, scores, w1, w2, dy = self.inputs()
             ids.fill_(2)
             ids[3].fill_(-1)
             valid = torch.full((), 5, device="cuda", dtype=torch.int32)
-            plan = self.plan(active_pointwise=active)
+            plan = self.plan(active_pointwise=active, vectorized_routes=vectorized)
             y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
             y.backward(dy)
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
@@ -308,7 +308,7 @@ class NativeTests(unittest.TestCase):
 
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
-              collective_fused=False):
+              collective_fused=False, fast_weight_transpose=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -333,6 +333,7 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     plan_class = (PersistentMoEPlan if persistent else PeerMoEPlan if peer
                   else CollectiveFusedMoEPlan if collective_fused else NativeMoEPlan)
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
+    plan_options["fast_weight_transpose"] = fast_weight_transpose
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     if peer and not persistent:
@@ -422,6 +423,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
     parser.add_argument("--collective-fused", action="store_true")
+    parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     options, remaining = parser.parse_known_args()
     if options.collective_fused and (options.peer or options.persistent or options.fp8):
         parser.error("collective-fused is a separate BF16 backend")
@@ -434,12 +436,13 @@ if __name__ == "__main__":
     if options.ep:
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
-                  options.fuse_activation_backward, options.collective_fused)
+                  options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer
                                   else CollectiveFusedMoEPlan if options.collective_fused else NativeMoEPlan)
         NativeTests.plan_options = {"maximize_ctas": True} if options.persistent and options.maximize_ctas else {}
+        NativeTests.plan_options["fast_weight_transpose"] = options.fast_weight_transpose
         if options.gemm_config:
             NativeTests.plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer and not options.persistent:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 #include <hggc_runtime.h>
 #include <hggc_bf16.h>
 #include <cutlass/numeric_types.h>
@@ -291,17 +292,20 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                 pointer<Bf16>(p, 0)[offset + p.dim[1]] = __float2bfloat16(dh * silu);
             }
         }
-    } else if constexpr (Op == Operation::TransformDeviceRows) {
+    } else if constexpr (Op == Operation::TransformDeviceRows || Op == Operation::TransformDeviceRowsVector) {
         const int64_t rows = pointer<int32_t>(p, 3)[0];
+        constexpr int elements = Op == Operation::TransformDeviceRowsVector ? 8 : 1;
+        using Value = std::conditional_t<elements == 8, uint4, Bf16>;
+        const int64_t width = p.dim[1] / elements;
         if (rows < 0 || rows > p.dim[0]) {
             if (index == 0) atomicOr(pointer<int32_t>(p, 4), 2);
-        } else for (int64_t position = index; position < rows * p.dim[1];
+        } else for (int64_t position = index; position < rows * width;
                     position += int64_t(gridDim.x) * blockDim.x) {
-            const int route = pointer<int32_t>(p, 1)[position / p.dim[1]];
+            const int route = pointer<int32_t>(p, 1)[position / width];
             const bool valid = route >= 0 && route < p.dim[2];
-            const int64_t offset = int64_t(route) * p.dim[1] + position % p.dim[1];
-            if (p.dim[3]) pointer<Bf16>(p, 2)[position] = valid ? pointer<Bf16>(p, 0)[offset] : __float2bfloat16(0.f);
-            else if (valid) pointer<Bf16>(p, 2)[offset] = pointer<Bf16>(p, 0)[position];
+            const int64_t offset = int64_t(route) * width + position % width;
+            if (p.dim[3]) pointer<Value>(p, 2)[position] = valid ? pointer<Value>(p, 0)[offset] : Value{};
+            else if (valid) pointer<Value>(p, 2)[offset] = pointer<Value>(p, 0)[position];
         }
     } else if constexpr (Op == Operation::ZeroDeviceRows) {
         const int64_t rows = pointer<int32_t>(p, 1)[0];
@@ -310,6 +314,71 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         } else for (int64_t position = index; position < rows * p.dim[1];
                     position += int64_t(gridDim.x) * blockDim.x)
             pointer<Bf16>(p, 0)[position] = __float2bfloat16(0.f);
+    } else if constexpr (Op == Operation::BuildPermutationOnly) {
+        if (index >= p.dim[0]) return;
+        const int expert = pointer<int32_t>(p, 0)[index];
+        if (expert < 0) return;
+        const int row = pointer<int32_t>(p, 2)[expert] + pointer<int32_t>(p, 1)[index];
+        if (row >= p.dim[1]) atomicOr(pointer<int32_t>(p, 4), 2);
+        else pointer<int32_t>(p, 3)[row] = index;
+    } else if constexpr (Op == Operation::PackInputDeviceRows) {
+        const int64_t rows = pointer<int32_t>(p, 3)[0], width = p.dim[1] / 8;
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 4), 2);
+        } else for (int64_t position = index; position < rows * width;
+                    position += int64_t(gridDim.x) * blockDim.x) {
+            const int route = pointer<int32_t>(p, 1)[position / width];
+            uint4 value{};
+            if (route >= 0) {
+                const int64_t source_row = route / p.dim[3];
+                if (source_row < p.dim[2]) value = pointer<uint4>(p, 0)[source_row * width + position % width];
+                else atomicOr(pointer<int32_t>(p, 4), 2);
+            }
+            pointer<uint4>(p, 2)[position] = value;
+        }
+    } else if constexpr (Op == Operation::TransposeWeights) {
+        // Two independent expert-weight transposes share one launch. Transfer
+        // BF16 bits in aligned vectors. XOR vector columns avoid a single
+        // repeated TSM column for the transpose's strided lane accesses.
+        constexpr int tile_size = 128;
+        __shared__ __align__(16) uint4 tile[tile_size][tile_size / 8];
+        const int64_t first_tiles = p.dim[0] * (2 * p.dim[2] / tile_size) * (p.dim[1] / tile_size);
+        const bool first = block_index < first_tiles;
+        const int64_t rows = first ? 2 * p.dim[2] : p.dim[1];
+        const int64_t columns = first ? p.dim[1] : p.dim[2];
+        const int64_t tile_index = first ? block_index : block_index - first_tiles;
+        const int64_t column_tiles = columns / tile_size;
+        const int64_t tiles_per_group = (rows / tile_size) * column_tiles;
+        const int64_t group = tile_index / tiles_per_group;
+        const int64_t local_tile = tile_index % tiles_per_group;
+        const int64_t tile_row = local_tile / column_tiles, tile_column = local_tile % column_tiles;
+        const auto* source = pointer<uint4>(p, first ? 0 : 1);
+        auto* destination = pointer<uint4>(p, first ? 2 : 3);
+        #pragma unroll
+        for (int vector = thread; vector < tile_size * tile_size / 8; vector += 256) {
+            const int row = vector / (tile_size / 8), column = vector % (tile_size / 8) * 8;
+            const int64_t offset = ((group * rows + tile_row * tile_size + row) * columns
+                                   + tile_column * tile_size + column) / 8;
+            tile[row][(column / 8) ^ (row / 8)] = source[offset];
+        }
+        __syncthreads();
+        #pragma unroll
+        for (int vector = thread; vector < tile_size * tile_size / 8; vector += 256) {
+            const int row = vector / (tile_size / 8), column = vector % (tile_size / 8) * 8;
+            uint32_t words[4];
+            const auto read_bits = [&](int source_row) {
+                const uint4 value = tile[source_row][(row / 8) ^ (source_row / 8)];
+                const int part = (row % 8) / 2;
+                const uint32_t word = part == 0 ? value.x : part == 1 ? value.y : part == 2 ? value.z : value.w;
+                return (word >> (16 * (row & 1))) & 0xffffu;
+            };
+            #pragma unroll
+            for (int pair = 0; pair < 4; ++pair)
+                words[pair] = read_bits(column + 2 * pair) | (read_bits(column + 2 * pair + 1) << 16);
+            const int64_t offset = ((group * columns + tile_column * tile_size + row) * rows
+                                   + tile_row * tile_size + column) / 8;
+            destination[offset] = make_uint4(words[0], words[1], words[2], words[3]);
+        }
     } else if constexpr (Op == Operation::ReadChunk) {
         // full x, full IDs, chunk x, chunk IDs, valid token count, status.
         // dims: input capacity, chunk tokens,H,top-k,chunk start.

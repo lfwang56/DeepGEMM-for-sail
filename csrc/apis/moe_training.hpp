@@ -40,7 +40,7 @@ __global__ void moe_training_{}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ZeroDeviceRows));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeWeights));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -178,7 +178,8 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(2, 1, i32); expect(3, 1, i32);
             blocks = int64_t(get_num_sms()) * 4;
             break;
-        case Operation::TransformDeviceRows: {
+        case Operation::TransformDeviceRows:
+        case Operation::TransformDeviceRowsVector: {
             schema(5, 4);
             DG_HOST_ASSERT(dims[1] > 0 && dims[3] <= 1);
             const bool backward = dims[3];
@@ -186,6 +187,8 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(1, dims[0], i32);
             expect(2, (backward ? dims[0] : dims[2]) * dims[1], bf);
             expect(3, 1, i32); expect(4, 1, i32);
+            if (static_cast<Operation>(operation) == Operation::TransformDeviceRowsVector)
+                DG_HOST_ASSERT(dims[1] % 8 == 0);
             blocks = int64_t(get_num_sms()) * 4;
             break;
         }
@@ -195,6 +198,31 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(0, dims[0] * dims[1], bf); expect(1, 1, i32); expect(2, 1, i32);
             blocks = int64_t(get_num_sms()) * 4;
             break;
+        case Operation::BuildPermutationOnly:
+            schema(5, 2);
+            expect(0, dims[0], i32); expect(1, dims[0], i32);
+            DG_HOST_ASSERT(tensors[2].numel() > 1 && tensors[2].scalar_type() == i32);
+            expect(3, dims[1], i32); expect(4, 1, i32);
+            work = dims[0];
+            break;
+        case Operation::PackInputDeviceRows:
+            schema(5, 4);
+            DG_HOST_ASSERT(dims[1] > 0 && dims[1] % 8 == 0 && dims[2] > 0 && dims[3] > 0);
+            expect(0, dims[2] * dims[1], bf); expect(1, dims[0], i32);
+            expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        case Operation::TransposeWeights: {
+            schema(4, 3);
+            const auto e = dims[0], h = dims[1], i = dims[2];
+            DG_HOST_ASSERT(e > 0 && h > 0 && i > 0 && h % 128 == 0 && i % 128 == 0);
+            expect(0, e * 2 * i * h, bf); expect(1, e * h * i, bf);
+            expect(2, e * h * 2 * i, bf); expect(3, e * i * h, bf);
+            for (const auto& tensor : tensors)
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensor.data_ptr()) % 16 == 0);
+            blocks = e * (2 * i / 128) * (h / 128) + e * (h / 128) * (i / 128);
+            break;
+        }
     }
     if (blocks < 0) blocks = (work + 255) / 256;
     if (!blocks) return;
@@ -213,7 +241,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ZeroDeviceRows));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeWeights));
         Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
         compiler->build(fmt::format("moe_training_{}", operation), Runtime::generate(args));
     }

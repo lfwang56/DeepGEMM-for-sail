@@ -32,7 +32,8 @@ class NativeMoEPlan:
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  chunk_tokens=128, compute="bf16", group=None, device=None,
-                 check_errors=True, m_schedule="nopad", fuse_activation_quant=True, active_pointwise=True):
+                 check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
+                 active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
@@ -61,6 +62,12 @@ class NativeMoEPlan:
         if not isinstance(active_pointwise, bool):
             raise TypeError("active_pointwise must be bool")
         self.active_pointwise = active_pointwise and compute == "bf16" and m_schedule == "nopad" and self.transport == "collective"
+        if not isinstance(vectorized_routes, bool):
+            raise TypeError("vectorized_routes must be bool")
+        self.vectorized_routes = vectorized_routes and self.active_pointwise
+        if not isinstance(fast_weight_transpose, bool):
+            raise TypeError("fast_weight_transpose must be bool")
+        self.fast_weight_transpose = fast_weight_transpose
         self.alignment = math.lcm(128, dg.get_m_alignment_for_contiguous_layout())
         self.routes = self.size * chunk_tokens * topk
         # Sum ceil(count_e/alignment)*alignment <= routes + E*(alignment-1).
@@ -78,6 +85,8 @@ class NativeMoEPlan:
             recipe = compute if fuse_activation_quant else compute + ":separate_activation_quant"
             if self.active_pointwise:
                 recipe += ":active_pointwise"
+            if self.vectorized_routes:
+                recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule)
             descriptions = [None] * self.size
@@ -199,8 +208,11 @@ class NativeMoEPlan:
             self._quantize_weight("w1", w1)
             self._quantize_weight("w2", w2)
         if backward:
-            self.w1_t.copy_(w1.transpose(1, 2))
-            self.w2_t.copy_(w2.transpose(1, 2))
+            if self.fast_weight_transpose and w1.data_ptr() % 16 == 0 and w2.data_ptr() % 16 == 0:
+                _launch(22, [w1, w2, self.w1_t, self.w2_t], [self.e, self.h, self.i])
+            else:
+                self.w1_t.copy_(w1.transpose(1, 2))
+                self.w2_t.copy_(w2.transpose(1, 2))
             if self.compute == "fp8":
                 self._quantize_weight("w1_t", self.w1_t)
                 self._quantize_weight("w2_t", self.w2_t)
@@ -267,6 +279,10 @@ class NativeMoEPlan:
             operations.update((7, 8))
         if self.active_pointwise:
             operations.update((16, 17, 18))
+        if self.vectorized_routes:
+            operations.update((19, 20, 21))
+        if self.fast_weight_transpose:
+            operations.add(22)
         dg._C._moe_training_precompile(self.device.index, sorted(operations))
 
     def _gemm(self, a, weight, output, name, prequantized=False):
@@ -302,6 +318,12 @@ class NativeMoEPlan:
                 [self.routes, self.e, self.rank, self.size])
         _launch(1, [self.counts, self.offsets, self.lengths], [self.e, self.alignment])
         _launch(2, [self.offsets, self.group_ids, self.permutation], [self.rows, self.e])
+        if self.vectorized_routes:
+            _launch(19, [self.route_experts, self.route_rows, self.offsets, self.permutation, self.status],
+                    [self.routes, self.rows])
+            _launch(20, [self.gathered_x, self.permutation, self.packed_x, self.current_rows, self.status],
+                    [self.rows, h, self.size * c, k])
+            return
         if self.active_pointwise:
             _launch(18, [self.packed_x, self.current_rows, self.status], [self.rows, self.h])
         else:
@@ -331,7 +353,8 @@ class NativeMoEPlan:
     def _scatter_output(self):
         self.route_values.zero_()
         if self.active_pointwise:
-            _launch(17, [self.packed_output, self.permutation, self.route_values, self.current_rows, self.status],
+            _launch(21 if self.vectorized_routes else 17,
+                    [self.packed_output, self.permutation, self.route_values, self.current_rows, self.status],
                     [self.rows, self.h, self.routes, 0])
         else:
             _launch(4, [self.packed_output, self.permutation, self.route_values], [self.rows, self.h, self.routes])
@@ -380,7 +403,8 @@ class NativeMoEPlan:
                 _launch(11, [dy, scores, self.local_dy], dims)
                 self._gather(self.route_values, self.local_dy)
                 if self.active_pointwise:
-                    _launch(17, [self.route_values, self.permutation, self.packed_dy, self.current_rows, self.status],
+                    _launch(21 if self.vectorized_routes else 17,
+                            [self.route_values, self.permutation, self.packed_dy, self.current_rows, self.status],
                             [self.rows, self.h, self.routes, 1])
                 else:
                     _launch(5, [self.route_values, self.permutation, self.packed_dy], [self.rows, self.h, self.routes])

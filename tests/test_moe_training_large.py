@@ -31,6 +31,7 @@ def main():
     parser.add_argument("--no-fuse-dispatch", action="store_true")
     parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
+    parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     options = parser.parse_args()
     if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend not in ("peer", "collective_fused"):
         parser.error("peer switches require --backend peer")
@@ -60,6 +61,7 @@ def main():
     if options.backend == "collective_fused":
         extra.update(fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
+    extra["fast_weight_transpose"] = options.fast_weight_transpose
     plan = classes[options.backend](h, i, e, k, t, chunk_tokens=t, compute=options.compute, **extra)
     for pattern in ("balanced_masked", "duplicate_skewed"):
         if pattern == "duplicate_skewed":
@@ -88,6 +90,7 @@ def main():
                               fuse_dispatch=getattr(plan, "fuse_dispatch", None),
                               fuse_return=getattr(plan, "fuse_return", None),
                               fuse_activation_backward=getattr(plan, "fuse_activation_backward", None),
+                              fast_weight_transpose=plan.fast_weight_transpose,
                               reference="independent FP32 Torch routed experts", passed=passed)), flush=True)
         if not passed:
             raise AssertionError(errors)

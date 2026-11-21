@@ -78,6 +78,9 @@ def main():
     parser.add_argument("--activation-backward-ablation", action="store_true")
     parser.add_argument("--scalar-peer-copy", action="store_true")
     parser.add_argument("--collective-return-ablation", action="store_true")
+    parser.add_argument("--scalar-collective-copy", action="store_true")
+    parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--weight-transpose-ablation", action="store_true")
     args = parser.parse_args()
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
@@ -120,7 +123,9 @@ def main():
                 ("collective", "collective_fused") if args.backend == "collective_both" else (args.backend,))
     experiments = []
     for backend in backends:
-        if args.fp8_ablation:
+        if args.weight_transpose_ablation:
+            experiments.extend((backend, {"fast_weight_transpose": fast}) for fast in (False, True))
+        elif args.fp8_ablation:
             experiments.extend((backend, {"fuse_activation_quant": fused}) for fused in (False, True))
         elif backend == "peer" and args.peer_ablation:
             experiments.extend((backend, {"fuse_dispatch": dispatch, "fuse_return": returned})
@@ -155,13 +160,16 @@ def main():
             if backend == "collective":
                 options = {"m_schedule": args.m_schedule,
                            "fuse_activation_quant": not args.separate_fp8_quantization,
-                           "active_pointwise": not args.capacity_pointwise}
+                           "active_pointwise": not args.capacity_pointwise,
+                           "vectorized_routes": not args.scalar_collective_copy}
             if backend == "collective_fused":
                 options = {"active_pointwise": not args.capacity_pointwise,
+                           "vectorized_routes": not args.scalar_collective_copy,
                            "fuse_return": not args.no_fuse_return,
                            "fuse_activation_backward": args.fuse_activation_backward}
                 if args.gemm_config:
                     options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
+            options["fast_weight_transpose"] = args.fast_weight_transpose
             options.update(controls)
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
@@ -230,6 +238,7 @@ def main():
                     "gemm_configs": getattr(plan, "gemm_configs", None),
                     "collective_m_schedule": plan.m_schedule if backend.startswith("collective") else None,
                     "collective_active_pointwise": plan.active_pointwise if backend.startswith("collective") else None,
+                    "collective_vectorized_routes": plan.vectorized_routes if backend.startswith("collective") else None,
                     "collective_fuse_return": plan.fuse_return if backend == "collective_fused" else None,
                     "collective_fuse_activation_backward": plan.fuse_activation_backward if backend == "collective_fused" else None,
                     "collective_gemm_config": args.collective_gemm_config if backend == "collective" else None,
@@ -243,6 +252,7 @@ def main():
                     "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
+                    "fast_weight_transpose": plan.fast_weight_transpose,
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,
                     "median_max_rank_event_ms": statistics.median(elapsed_event),
                     "median_max_rank_wall_ms": statistics.median(elapsed_wall),

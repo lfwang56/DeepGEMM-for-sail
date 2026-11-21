@@ -31,6 +31,10 @@ enum class Operation : int {
     ActivationDeviceRows,
     TransformDeviceRows,
     ZeroDeviceRows,
+    BuildPermutationOnly,
+    PackInputDeviceRows,
+    TransformDeviceRowsVector,
+    TransposeWeights,
 };
 
 }  // namespace deep_gemm::training
