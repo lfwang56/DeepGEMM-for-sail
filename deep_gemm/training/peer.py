@@ -36,13 +36,19 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
-                 input_copy_ilp=1, dispatch_assist_ctas=0,
+                 input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False,
                  fuse_fc1_activation=False, **kwargs):
         if type(dispatch_assist_ctas) is not int or not 0 <= dispatch_assist_ctas <= 156:
             raise ValueError("dispatch_assist_ctas must be an integer in [0,156]")
+        if not isinstance(dispatch_external, bool):
+            raise TypeError("dispatch_external must be bool")
+        if dispatch_external and (not dispatch_assist_ctas or inline_dispatch):
+            raise ValueError("external dispatch requires positive assistants without inline owners")
         self.dispatch_assist_ctas = dispatch_assist_ctas
+        self.dispatch_external = dispatch_external
         if dispatch_assist_ctas:
-            inline_dispatch = True
+            inline_dispatch = not dispatch_external
+            dispatch_pipeline = True
         if kwargs.get("overlap_expert_dy", False) and (not dispatch_producer or not expert_local_grad
                 or ring_rows is None or dag_fusion or dag_backward or ffn_fusion
                 or dispatch_pipeline or return_pipeline):
@@ -53,13 +59,13 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("DW2 overlap requires the fused dHidden epilogue to preserve forward Hidden")
         if type(input_copy_ilp) is not int or input_copy_ilp not in (1, 2, 4, 8):
             raise ValueError("input_copy_ilp must be1,2,4or8")
-        if input_copy_ilp != 1 and not (dag_fusion or inline_dispatch or (dispatch_producer and producer_input_aiu)):
+        if input_copy_ilp != 1 and not (dag_fusion or inline_dispatch or dispatch_external or (dispatch_producer and producer_input_aiu)):
             raise ValueError("input copy ILP requires the forward DAG or producer input staging")
         self.input_copy_ilp = input_copy_ilp
         if not isinstance(fuse_fc1_activation, bool):
             raise TypeError("fuse_fc1_activation must be bool")
         g8 = kwargs.get("gate_up_layout", "split") == "g8"
-        if g8 and (self.transport != "peer" or ffn_fusion or (dag_fusion and not (dag_shared_pool and fuse_fc1_activation)) or (dispatch_pipeline and not inline_dispatch)
+        if g8 and (self.transport != "peer" or ffn_fusion or (dag_fusion and not (dag_shared_pool and fuse_fc1_activation)) or (dispatch_pipeline and not inline_dispatch and not dispatch_external)
                    or return_pipeline):
             raise ValueError("G8 supports direct/producer peer paths or the shared task pool with FC1 activation fusion")
         if fuse_fc1_activation and (not g8 or not expert_local_grad or not fuse_dispatch or not fuse_return
@@ -98,13 +104,13 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("eight-byte return stores require direct fused return without staging/resident/FFN modes")
         self.return_vector_bytes = return_vector_bytes
         block_m = kwargs.get("block_m", 128)
-        if block_m != 128 and (self.transport != "peer" or ffn_fusion or (dispatch_pipeline and not inline_dispatch)
+        if block_m != 128 and (self.transport != "peer" or ffn_fusion or (dispatch_pipeline and not inline_dispatch and not dispatch_external)
                                 or return_pipeline or staged_return or dispatch_cache_n):
             raise ValueError("BM256 currently supports direct/producer peer GEMMs without resident/cache/staging modes")
         if "packed_rows" in kwargs:
             raise ValueError("use ring_rows to enable routed-row scheduling")
         if ring_rows is not None:
-            if not expert_local_grad or ffn_fusion or (dispatch_pipeline and not inline_dispatch) or return_pipeline:
+            if not expert_local_grad or ffn_fusion or (dispatch_pipeline and not inline_dispatch and not dispatch_external) or return_pipeline:
                 raise ValueError("routed-row windows require expert-local gradients without a resident pipeline")
         self.ring_rows = ring_rows
         if kwargs.get("compute", "bf16") != "bf16":
@@ -213,7 +219,7 @@ class PeerMoEPlan(NativeMoEPlan):
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
                       self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
-                      self.inline_dispatch, self.dispatch_assist_ctas)
+                      self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -381,13 +387,14 @@ class PeerMoEPlan(NativeMoEPlan):
             self.status if dispatch_pipeline or return_pipeline else None,
             (self.return_pipeline_statistics if return_pipeline else self.pipeline_statistics if dispatch_pipeline else None)
                 if not compile_only else None,
-            0 if dispatch_pipeline and self.inline_dispatch else self.pipeline_comm_ctas,
+            0 if dispatch_pipeline and (self.inline_dispatch or self.dispatch_external) else self.pipeline_comm_ctas,
             self.pipeline_serialize,
             self.cache_return_addresses if write else False,
             self.block_m,
             self.return_vector_bytes if write else 4,
             interleaved, fc1_activation, keep_gate_up if fc1_activation else True,
             self.input_copy_ilp if producer_input_aiu or (dispatch_pipeline and self.inline_dispatch) else 1,
+            dispatch_pipeline and self.dispatch_external,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"

@@ -14,7 +14,7 @@ __device__ __forceinline__ T* peer_pointer(const Params& p, int index) {
     return reinterpret_cast<T*>(p.ptr[index]);
 }
 
-template <PeerOperation Op>
+template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
@@ -48,8 +48,8 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             peer_pointer<int32_t>(p, 7)[row] = low;
         }
     } else if constexpr (Op == PeerOperation::AssistInputTiles) {
-        const int64_t capacity = p.dim[0], width = p.dim[1] / 8;
-        const int64_t bm = p.dim[4], blocks = peer_pointer<int32_t>(p, 4)[0];
+        const int64_t capacity = p.dim[0], width = InputWidth ? InputWidth / 8 : p.dim[1] / 8;
+        const int64_t bm = InputBlockM ? InputBlockM : p.dim[4], blocks = peer_pointer<int32_t>(p, 4)[0];
         if (blocks < 0 || blocks > capacity / bm) {
             if (index == 0) atomicOr(peer_pointer<int32_t>(p, 6), 2);
             return;

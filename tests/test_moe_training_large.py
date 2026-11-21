@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
+    parser.add_argument("--dispatch-external", action="store_true")
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--overlap-expert-dy", action="store_true")
@@ -132,8 +133,9 @@ def main():
                      dag_backward=options.dag_backward, dag_direct_return=options.dag_direct_return)
         extra["input_copy_ilp"] = options.input_copy_ilp
         extra["dispatch_assist_ctas"] = options.dispatch_assist_ctas
+        extra["dispatch_external"] = options.dispatch_external
         if options.input_inline or options.dispatch_assist_ctas:
-            extra.update(inline_dispatch=True, dispatch_producer=False, producer_input_aiu=False, producer_local_aiu=False)
+            extra.update(inline_dispatch=not options.dispatch_external, dispatch_producer=False, producer_input_aiu=False, producer_local_aiu=False)
         extra["ffn_fusion"] = options.ffn_fusion
         extra["expert_local_grad"] = options.expert_local_grad
         if options.ring_rows is not None:
@@ -206,6 +208,7 @@ def main():
                               gemm_config=options.gemm_config,
                               inline_dispatch=getattr(plan, "inline_dispatch", None),
                               dispatch_assist_ctas=getattr(plan, "dispatch_assist_ctas", None),
+                              dispatch_external=getattr(plan, "dispatch_external", None),
                               cache_return_addresses=options.cache_return_addresses,
                               ffn_fusion=options.ffn_fusion,
                               expert_local_grad=options.expert_local_grad,

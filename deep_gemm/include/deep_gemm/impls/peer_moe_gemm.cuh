@@ -504,7 +504,8 @@ template <class _SrcT, GemmType kGemmType,
           bool ProducerInputAiu = false, bool DispatchPipeline = false,
           bool InlineDispatch = false, bool CacheReturn = false, bool FixedMTile = false,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
-          bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1>
+          bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
+          bool ExternalInput = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -512,14 +513,15 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const uint32_t selected_n_tile = ~0u) {
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
+    static_assert(!ExternalInput || (DispatchPipeline && !InlineDispatch && !PeerRead && !PeerWrite));
     static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
     static_assert(ReturnVectorBytes == 4 || ReturnVectorBytes == 8);
     static_assert(ReturnVectorBytes == 4 || (PeerWrite && !DispatchPipeline && !StagedReturn));
-    static_assert(!Fc1Activation || (GateUpG8 && !ActivationBackward && !PeerWrite && (!DispatchPipeline || InlineDispatch)));
+    static_assert(!Fc1Activation || (GateUpG8 && !ActivationBackward && !PeerWrite));
     if constexpr (DispatchPipeline) {
         static_assert(!PeerRead && !ActivationBackward && DispatchCacheN == 0
                       && FirstNTile == 0 && NumNTiles == 0);
-        if constexpr (!InlineDispatch) {
+        if constexpr (!InlineDispatch && !ExternalInput) {
             if (blockIdx.x < pipeline.communication_ctas) {
                 if constexpr (PeerWrite)
                     training::return_pipeline_consumer<BLOCK_M, BLOCK_N, SHAPE_N, BLOCK_SIZE>(params, pipeline);

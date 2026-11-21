@@ -23,13 +23,17 @@ public:
         Params params;
     };
     static std::string generate_impl(const Args& args) {
+        const int specialize = get_env<int>("DG_INPUT_ASSIST_STATIC_GEOMETRY", 1);
+        DG_HOST_ASSERT(specialize == 0 || specialize == 1);
+        const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_training.cuh>
 extern "C" __launch_bounds__({}, 1)
 __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {{
-    deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({})>(params);
+    deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}>(params);
 }}
-)", args.launch_args.block_dim.x, args.operation, args.operation);
+)", args.launch_args.block_dim.x, args.operation, args.operation,
+       assist ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -225,6 +229,7 @@ public:
         bool fc1_activation = false;
         bool keep_gate_up = true;
         int input_copy_ilp = 1;
+        bool external_input = false;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -243,7 +248,7 @@ public:
         if (args.pipeline.ready) name += args.write_peer ? "_return_pipeline" : "_dispatch_pipeline";
         if (args.pipeline.ready && args.pipeline.serialize) name += "_serialized";
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
-            name += "_owned_dispatch";
+            name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
         if (args.cache_return_addresses) name += "_cached_return";
         if (args.block_m != 128) name += fmt::format("_bm{}", args.block_m);
         if (args.return_vector_bytes != 4) name += fmt::format("_return{}", args.return_vector_bytes);
@@ -259,7 +264,7 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}
     >(params{});
 }}
 )", args.threads, name(args),
@@ -272,12 +277,12 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.first_n_tile, args.num_n_tiles, args.local_input_aiu ? "true" : "false",
        args.producer_input_aiu ? "true" : "false",
        args.pipeline.ready ? "true" : "false",
-       args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0 ? "true" : "false",
+       args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0 && !args.external_input ? "true" : "false",
        args.cache_return_addresses ? "true" : "false",
        args.return_vector_bytes,
        args.interleaved_gate_up ? "true" : "false",
        args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
-       args.input_copy_ilp,
+       args.input_copy_ilp, args.external_input ? "true" : "false",
        args.pipeline.ready ? ", pipeline" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -305,7 +310,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses,
                       int block_m = 128, int return_vector_bytes = 4,
                       bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true,
-                      int input_copy_ilp = 1) {
+                      int input_copy_ilp = 1, bool external_input = false) {
+    DG_HOST_ASSERT(!external_input || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !read_peer && !write_peer));
     DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
     DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu
                    || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !write_peer));
@@ -422,6 +428,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.fc1_activation = fc1_activation;
     args.keep_gate_up = keep_gate_up;
     args.input_copy_ilp = input_copy_ilp;
+    args.external_input = external_input;
     if (pipeline_ready.has_value()) {
         DG_HOST_ASSERT(!read_peer && (!activation_gate_up.has_value() || fc1_activation)
                        && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
@@ -461,7 +468,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
         // A CTA is not a CU: the actual kernel can have multiple resident
         // CTAs per CU. Fill that resident pool while reserving one CU's worth
         // of slots for framework progress. No grid-level oversubscription.
-        args.launch_args.grid_dim.x = (get_num_sms() - (pipeline_comm_ctas == 0 ? 0 : 1)) * occupancy;
+        args.launch_args.grid_dim.x = (get_num_sms() - (pipeline_comm_ctas == 0 && !external_input ? 0 : 1)) * occupancy;
         DG_HOST_ASSERT(pipeline_comm_ctas < args.launch_args.grid_dim.x);
         if (pipeline_statistics.has_value())
             DG_HOST_ASSERT(pipeline_statistics.value().numel() >= args.launch_args.grid_dim.x * 4);
@@ -498,7 +505,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("pipeline_serialize") = false, py::arg("cache_return_addresses") = false,
           py::arg("block_m") = 128, py::arg("return_vector_bytes") = 4,
           py::arg("interleaved_gate_up") = false, py::arg("fc1_activation") = false,
-          py::arg("keep_gate_up") = true, py::arg("input_copy_ilp") = 1);
+          py::arg("keep_gate_up") = true, py::arg("input_copy_ilp") = 1,
+          py::arg("external_input") = false);
 }
 
 }  // namespace deep_gemm::training

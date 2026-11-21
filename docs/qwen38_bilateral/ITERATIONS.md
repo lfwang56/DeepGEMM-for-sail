@@ -3048,3 +3048,58 @@ Median maximum-rank event milliseconds; optimizer/shared expert excluded.
 Best peerqwen38-wlf-ep32-iter33-input-producer-control-attempt2: 97.400525ms. Strongest DeepEPqwen38-wlf-ep32-iter33-input-deepep-early-dy: 120.065222ms. Ratio1.2327x. Reduction versus matched producer97.400525ms: 0.000%. Kernel-span concurrency alone is not wire utilization or a latency win.
 
 Artifacts: `outputs/qwen38/iter33-input-assist-controls.json`, `ep32-input-assist-reference.json`.
+
+
+## Iteration 34 — specialized addressing and separate input-consumer footprint
+
+**Review.** Three successive negative iterations31–33 triggered a new stall
+review (`stall_review_before34.md`), including fresh primary PPU SDK/Asys/Acu
+sources and new frozen33 resources. No physical floor has been established.
+The local-pointer33 trace shows real copy/compute overlap, but the inline
+GEMM carries240registers/thread and the copy kernel64. Its auxiliary vector
+positions divide by runtime64-bit width. Source cost is a hypothesis, not yet
+an attributed hardware counter result.
+
+**Changes.** Specialize input assistant H/BM in JIT, leaving raw BF16 bytes,
+padding, tile CAS and publication identical. Environment
+`DG_INPUT_ASSIST_STATIC_GEOMETRY=0` exactly retains the dynamic addressing
+geometry,1 enables constants. Compare both with the same inline assistant8.
+
+New `dispatch_external` compiles a GEMM consumer without either inline input
+copy or resident communication-CTA code. Its readiness scheduler acquires each
+tile before local AIU loads; an independent128-thread assistant supplies data.
+A compile-time ExternalInput template flag is necessary: runtime zero
+communication CTAs alone would retain both branches in the same register
+allocation. Native occupancy bounds the consumer grid to(numCUs-1)*occupancy,
+leaving room for progress of a lower-resource copy CTA. Retain timeout/status,
+per-window event joins, all-rank protocol agreement and graph-safe lifetimes.
+No NVIDIA-specific resource rule, precision change or payload omission.
+
+**Validation.** Independent full-width FP32, exact mutable graph comparisons
+for dynamic/static inline and external consumer against the producer, and
+actual EP32 balanced/masked/reversed/duplicate plus full C4096 all-to-expert0
+references gate timing. All accepted rows require four clean whole-host gates
+and32 clean ranks. Default producer and WG/DY scheduling remain unchanged.
+
+**Scope.** Domain EP32 H8192/I2048/E512/top10,T4096/rank,C4096,ring65536,
+BM256,G8,full FWD+rematerialized BWD and FP32 DW zero/accumulation.
+Strong installed DeepEP serial/early-DY38 controls are retained. Times are
+uninstrumented median maximum-rank device-event milliseconds.
+
+| Configuration | Backend | External | Static geometry | Assist CTAs | Full step ms |
+| --- | --- | --- | --- | ---: | ---: |
+| deepep-early-dy | deepep | None | 1 | None | 119.939490 |
+| external-static16 | peer | True | 1 | 16 | 228.583472 |
+| external-static32 | peer | True | 1 | 32 | 231.126782 |
+| external-static39 | peer | True | 1 | 39 | 239.948633 |
+| external-static8 | peer | True | 1 | 8 | 226.628149 |
+| inline-dynamic8 | peer | False | 0 | 8 | 104.075488 |
+| inline-static8 | peer | False | 1 | 8 | 102.269965 |
+| producer-control-attempt0 | deepep | None | 1 | None | 121.204871 |
+| producer-control-attempt0 | peer | False | 1 | 0 | 97.389264 |
+
+Best peerqwen38-wlf-ep32-iter34-input-producer-control-attempt0: 97.389264ms. Strongest DeepEPqwen38-wlf-ep32-iter34-input-deepep-early-dy: 119.939490ms. Ratio1.2315x. Reduction versus matched producer97.389264ms: 0.000%. Kernel-span concurrency alone is not wire utilization or a latency win.
+
+Native extension SHA256: 5548ec2a3d31327d6f7d043cb21afb9aa19fb19d3f9ec5ce210f8df3eca711ca
+
+Artifacts: `outputs/qwen38/iter34-input-assist-controls.json`, `ep32-input-assist-reference.json`.
