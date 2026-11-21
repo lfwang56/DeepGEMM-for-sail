@@ -156,3 +156,16 @@ The best measured DeepEP communication setting replaces the initial8-CU and24-CU
 - Compared to iteration2 without AIU49.3827667ms, only0.84% less time; below3% significance threshold. Still4.22% slower than the freshly measured tuned DeepEP baseline. Do not call this a material optimization win. Leave AIU optional and continue a different direction.
 - Source also exposes the peer cache/reuse/tile options in the existing complete-model public-text trainer and checkpoints so the chosen recipe can be tested end-to-end. Full model runs still pending for the final winner.
 - Next: address FC1 input-cache/GEMM scheduling and occupancy rather than assuming a bulk copy atom is sufficient. Broaden to T4096/8192 and keep the tuned DeepEP comparison.
+
+### Larger-token controls for iteration3
+
+- Same actual Qwen H8192/I2048/E512/K10, EP32 SN1 four hosts, C512 and5x20 graph steps. Paired tuned DeepEP38CUs versus cache16+AIU+packed-DY bilateral, staged_return=False.
+- T4096/rank: DeepEP176.3947021ms, bilateral184.1678833ms (bilateral4.41% slower).
+- T8192/rank: DeepEP348.2614502ms, bilateral364.1226807ms (bilateral4.56% slower).
+- Increasing token count alone did not establish a fusion gain over the tuned dispatch/combine baseline. Keep these negative results in the final report.
+- Whole-phase controller receipts at logging time:
+```json
+{"case": "distributed_matrix_phase", "name": "qwen38-wlf-ep32-t4096-iter3-control", "returncode": 0}
+{"case": "distributed_matrix_phase", "name": "qwen38-wlf-ep32-t8192-iter3-control", "returncode": 0}
+```
+The future staged-return source is present but disabled in these controls. Its independent small/Qwen references passed; its distributed graph and performance gates remain separate.
