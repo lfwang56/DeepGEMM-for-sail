@@ -32,7 +32,12 @@ class PeerMoEPlan(NativeMoEPlan):
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
                  pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
-                 expert_local_grad=False, ring_rows=None, **kwargs):
+                 expert_local_grad=False, ring_rows=None, return_vector_bytes=4, **kwargs):
+        if type(return_vector_bytes) is not int or return_vector_bytes not in (4, 8):
+            raise ValueError("return_vector_bytes must be 4 or 8")
+        if return_vector_bytes != 4 and (not fuse_return or return_pipeline or staged_return or ffn_fusion):
+            raise ValueError("eight-byte return stores require direct fused return without staging/resident/FFN modes")
+        self.return_vector_bytes = return_vector_bytes
         block_m = kwargs.get("block_m", 128)
         if block_m != 128 and (self.transport != "peer" or ffn_fusion or dispatch_pipeline
                                 or return_pipeline or inline_dispatch or staged_return or dispatch_cache_n):
@@ -277,6 +282,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.pipeline_serialize,
             self.cache_return_addresses if write else False,
             self.block_m,
+            self.return_vector_bytes if write else 4,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"

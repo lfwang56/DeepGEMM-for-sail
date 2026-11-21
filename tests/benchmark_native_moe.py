@@ -102,6 +102,7 @@ def main():
     parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
+    parser.add_argument("--return-vector-bytes", type=int, choices=(4, 8), default=4)
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -203,6 +204,7 @@ def main():
                 options["staged_return"] = args.staged_return
                 options["dispatch_cache_ctas"] = args.dispatch_cache_ctas
                 options["dispatch_producer"] = args.dispatch_producer
+                options["return_vector_bytes"] = args.return_vector_bytes
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -352,6 +354,7 @@ def main():
                     "pipeline_serialized_control": getattr(plan, "pipeline_serialize", None) if backend == "peer" else None,
                     "peer_inline_dispatch": getattr(plan, "inline_dispatch", None) if backend == "peer" else None,
                     "peer_cached_return_addresses": getattr(plan, "cache_return_addresses", None) if backend == "peer" else None,
+                    "peer_return_vector_bytes": getattr(plan, "return_vector_bytes", None) if backend == "peer" else None,
                     "peer_ffn_fusion": getattr(plan, "ffn_fusion", None) if backend == "peer" else None,
                     "peer_expert_local_grad": getattr(plan, "expert_local_grad", None) if backend == "peer" else None,
                     "ring_rows_requested": args.ring_rows,

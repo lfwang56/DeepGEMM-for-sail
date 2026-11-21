@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
+    parser.add_argument("--return-vector-bytes", type=int, choices=(4, 8), default=4)
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -106,7 +107,8 @@ def main():
                            dispatch_pipeline=args.dispatch_pipeline, return_pipeline=args.return_pipeline,
                            pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize,
                            inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses,
-                           ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad)
+                           ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad,
+                           return_vector_bytes=args.return_vector_bytes)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":

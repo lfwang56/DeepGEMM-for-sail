@@ -193,6 +193,7 @@ public:
         PeerDispatchPipeline pipeline{};
         bool cache_return_addresses = false;
         int block_m = 128;
+        int return_vector_bytes = 4;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -214,6 +215,7 @@ public:
             name += "_owned_dispatch";
         if (args.cache_return_addresses) name += "_cached_return";
         if (args.block_m != 128) name += fmt::format("_bm{}", args.block_m);
+        if (args.return_vector_bytes != 4) name += fmt::format("_return{}", args.return_vector_bytes);
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -223,7 +225,7 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}
     >(params{});
 }}
 )", args.threads, name(args),
@@ -238,6 +240,7 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.pipeline.ready ? "true" : "false",
        args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0 ? "true" : "false",
        args.cache_return_addresses ? "true" : "false",
+       args.return_vector_bytes,
        args.pipeline.ready ? ", pipeline" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -262,8 +265,11 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       const c10::optional<torch::Tensor>& pipeline_ready,
                       const c10::optional<torch::Tensor>& pipeline_status,
                       const c10::optional<torch::Tensor>& pipeline_statistics,
-                      int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses, int block_m = 128) {
+                      int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses,
+                      int block_m = 128, int return_vector_bytes = 4) {
     DG_HOST_ASSERT(block_m == 128 || block_m == 256);
+    DG_HOST_ASSERT(return_vector_bytes == 4 || return_vector_bytes == 8);
+    DG_HOST_ASSERT(return_vector_bytes == 4 || (write_peer && !pipeline_ready.has_value() && !staged_return));
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -334,6 +340,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     const int wm = config.empty() ? 64 : config[2];
     const int wn = config.empty() ? 64 : config[3];
     const int stages = config.empty() ? 3 : config[4];
+    DG_HOST_ASSERT(return_vector_bytes == 4 || (wm == 64 && wn == 64 && n % 16 == 0));
     DG_HOST_ASSERT(bn == 64 || bn == 128 || bn == 256);
     DG_HOST_ASSERT(bk == 64 || bk == 128);
     DG_HOST_ASSERT(wm == 32 || wm == 64 || wm == 128);
@@ -361,6 +368,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(!cache_return_addresses || (write_peer && !staged_return && !pipeline_ready.has_value()));
     args.cache_return_addresses = cache_return_addresses;
     args.block_m = block_m;
+    args.return_vector_bytes = return_vector_bytes;
     if (pipeline_ready.has_value()) {
         DG_HOST_ASSERT(!read_peer && !activation_gate_up.has_value()
                        && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
@@ -435,7 +443,7 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("pipeline_ready") = py::none(), py::arg("pipeline_status") = py::none(),
           py::arg("pipeline_statistics") = py::none(), py::arg("pipeline_comm_ctas") = 2,
           py::arg("pipeline_serialize") = false, py::arg("cache_return_addresses") = false,
-          py::arg("block_m") = 128);
+          py::arg("block_m") = 128, py::arg("return_vector_bytes") = 4);
 }
 
 }  // namespace deep_gemm::training

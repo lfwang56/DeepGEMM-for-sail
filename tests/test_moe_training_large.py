@@ -52,6 +52,7 @@ def main():
     parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
+    parser.add_argument("--return-vector-bytes", type=int, choices=(4, 8), default=4)
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -103,6 +104,7 @@ def main():
         extra["pipeline_serialize"] = options.pipeline_serialize
         extra["inline_dispatch"] = options.inline_dispatch
         extra["cache_return_addresses"] = options.cache_return_addresses
+        extra["return_vector_bytes"] = options.return_vector_bytes
         extra["ffn_fusion"] = options.ffn_fusion
         extra["expert_local_grad"] = options.expert_local_grad
         if options.ring_rows is not None:
@@ -173,6 +175,7 @@ def main():
                               expert_local_grad=options.expert_local_grad,
                               ring_rows=options.ring_rows,
                               block_m=plan.block_m,
+                              return_vector_bytes=getattr(plan, "return_vector_bytes", None),
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,

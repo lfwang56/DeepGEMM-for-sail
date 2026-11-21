@@ -11,6 +11,7 @@ parser.add_argument('--ffn-fusion-ablation', action='store_true')
 parser.add_argument('--expert-local-grad-ablation', action='store_true')
 parser.add_argument('--ring-rows-ablation', type=int)
 parser.add_argument('--block-m-ablation', action='store_true')
+parser.add_argument('--return-vector-ablation', action='store_true')
 args = parser.parse_args()
 if args.ffn_fusion_ablation and args.expert_local_grad_ablation:
     parser.error('choose one ablation')
@@ -46,6 +47,10 @@ with torch.cuda.stream(stream):
             options = dict(expert_local_grad=True, dispatch_producer=True,
                            producer_input_aiu=True, producer_local_aiu=True,
                            ring_rows=1024, block_m=256 if cache else 128)
+        if args.return_vector_ablation:
+            options = dict(expert_local_grad=True, dispatch_producer=True,
+                           producer_input_aiu=True, producer_local_aiu=True,
+                           ring_rows=1024, block_m=256, return_vector_bytes=8 if cache else 4)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
@@ -86,20 +91,22 @@ with torch.cuda.stream(stream):
         for plan in plans:
             plan.check()
         exact = {name:torch.equal(outputs[0][index],outputs[1][index])
-                 for name,index in ((('y',0),('dx',1)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation
+                 for name,index in ((('y',0),('dx',1)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation or args.return_vector_ablation
                                     else (('y',0),('dx',1),('dscores',4)))}
         errors = {}
-        for name,index in ((('dw1',2),('dw2',3),('dscores',4)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation
+        for name,index in ((('dw1',2),('dw2',3),('dscores',4)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation or args.return_vector_ablation
                            else (('dw1',2),('dw2',3))):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        case = ('block_m_graph_equivalence' if args.block_m_ablation else
+        case = ('return_vector_graph_equivalence' if args.return_vector_ablation else
+                'block_m_graph_equivalence' if args.block_m_ablation else
                 'routed_row_window_graph_equivalence' if args.ring_rows_ablation is not None else
                 'expert_grad_graph_equivalence' if args.expert_local_grad_ablation else
                 'ffn_graph_equivalence' if args.ffn_fusion_ablation else 'return_cache_graph_equivalence')
         print(json.dumps({'case':case,'pattern':pattern,
                           'exact':exact,'wgrad_relative_rms':errors,
-                          'source':('identical tensors; BM128 versus BM256, with matching metadata alignment' if args.block_m_ablation else
+                          'source':('identical tensors and BM256; four-byte versus eight-byte direct peer stores' if args.return_vector_ablation else
+                                    'identical tensors; BM128 versus BM256, with matching metadata alignment' if args.block_m_ablation else
                                     'identical tensors and expert-side gradients; full packed rows versus bounded routed-row windows' if args.ring_rows_ablation is not None else
                                     'identical tensors; source-side versus expert-side router gradient' if args.expert_local_grad_ablation else
                                     'identical tensors; old producer+AIU versus depth-first fused FFN' if args.ffn_fusion_ablation

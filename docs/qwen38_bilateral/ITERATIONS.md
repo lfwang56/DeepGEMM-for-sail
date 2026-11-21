@@ -2207,3 +2207,48 @@ first attempt rejected invalid CLI flags before timing; retry waits for a
 fourth idle SN1 host. No result is inferred from that failed diagnostic.
 Next: improve peer-return store throughput and profile the matched large-chunk
 DeepEP/explicit controls; assess larger compute tiles and Wgrad TSM contention.
+
+
+## Iteration20: coalesce direct peer-return stores
+
+Combine adjacent tc02 lane-owned BF16 pairs into eight-byte stores, using
+register shuffles with unchanged BF16 conversion. All lanes execute shuffles
+before row-validity predicates; no TSM staging. Opt-in return_vector_bytes8
+preserves four-byte control. Native extension SHA256
+0330c680a91e1c358d4c013517564e11ba6cc7208aaa516959a0cd77a81fd1c9.
+
+An independent native HGGC CuTe-coordinate probe verified BM128 and BM256
+fragment ownership: no mapping errors and exactly one writer per output.
+Torch inline compile probes failed due mixed CUDA/native headers; native
+hgcc -arch=ppu_15 succeeds. Full Qwen FP32 masked/skewed gradients and dynamic
+graph four/eight-byte equivalence pass; Y/DX/dScore exact, DW RMS~4e-7.
+Actual EP32 C4096/S65536 all-to-expert0 validates every output/gradient on
+all32 peer ranks, clean host audits.
+
+Same BF16 routed layer, graph warmup5, repeats5,20 iterations, max-rank events.
+EP32 has512 experts, EP8 proxy128; H8192/I2048/K10/T4096/C4096/S65536/BM256.
+Both paths keep full backward replay and FP32 DW zero/accumulation, no optimizer.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|vector4-step|100.286487|103.375500|
+|ep8|vector8-step|100.369183|103.472974|
+|ep32|vector4-step-attempt0|119.985620|104.552075|
+|ep32|vector8-backward|84.266241|74.914783|
+|ep32|vector8-forward|35.746500|29.840372|
+|ep32|vector8-step|120.072571|104.798071|
+
+All six benchmark phases completed rank exits and exclusive-node audits.
+This change measures return-store throughput, not a new cross-stage overlap
+mechanism. It does not reach the2–3x objective. Artifacts:
+outputs/qwen38/iter20-vector8-controls.json and
+outputs/qwen38/ep32-vector8-c4096-reference.json.
+
+Matched iteration19 traces now isolate the larger issue: FC1's producer
+sublaunch plus remainder costs~17.0ms per call, versus~15.3ms for explicit
+input staging plus local GEMM. This input-side penalty cancels much of the
+return-side fusion savings. The user explicitly prioritizes communication/
+compute overlap; next implement a GPU task DAG spanning dispatch, FC1,
+activation, FC2 and return, with a same-kernel forced-serial control and
+measured internal communication/computation activity. Preserve the best
+verified producer path as a comparison until the DAG proves faster.
