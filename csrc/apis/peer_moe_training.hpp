@@ -158,6 +158,7 @@ public:
         bool staged_return;
         int block_n, block_k, warp_m, warp_n, stages, threads;
         int dispatch_cache_ctas;
+        int first_n_tile, num_n_tiles;
         LaunchArgs launch_args;
         PeerGemmParams params;
     };
@@ -171,6 +172,8 @@ public:
         if (args.staged_return) name += "_staged_return";
         if (args.dispatch_cache_n && args.dispatch_cache_ctas != 2)
             name += fmt::format("_ctas{}", args.dispatch_cache_ctas);
+        if (args.first_n_tile || args.num_n_tiles)
+            name += fmt::format("_nslice{}_{}", args.first_n_tile, args.num_n_tiles);
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -180,14 +183,15 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}
+        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}
     >(params);
 }}
 )", args.threads, name(args), args.n, args.k, args.groups, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
        args.activation_backward ? "true" : "false", args.dispatch_cache_n,
-       args.dispatch_cache_aiu ? "true" : "false", args.staged_return ? "true" : "false");
+       args.dispatch_cache_aiu ? "true" : "false", args.staged_return ? "true" : "false",
+       args.first_n_tile, args.num_n_tiles);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -203,7 +207,8 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       bool pack_input, const std::vector<int>& config,
                       const c10::optional<torch::Tensor>& activation_gate_up,
                       int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch,
-                      bool dispatch_cache_aiu, bool staged_return, int dispatch_cache_ctas) {
+                      bool dispatch_cache_aiu, bool staged_return, int dispatch_cache_ctas,
+                      int first_n_tile, int num_n_tiles) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -278,6 +283,9 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     DG_HOST_ASSERT(wm == 32 || wm == 64 || wm == 128);
     DG_HOST_ASSERT(wn == 32 || wn == 64 || wn == 128);
     DG_HOST_ASSERT(bn % wn == 0 && stages >= 2 && stages <= 4);
+    DG_HOST_ASSERT(first_n_tile >= 0 && first_n_tile < (n + bn - 1) / bn && num_n_tiles >= 0);
+    DG_HOST_ASSERT(num_n_tiles == 0 || first_n_tile + num_n_tiles <= (n + bn - 1) / bn);
+    DG_HOST_ASSERT((first_n_tile == 0 && num_n_tiles == 0) || dispatch_cache_n == 0);
     const int threads = (128 / wm) * (bn / wn) * 32;
     DG_HOST_ASSERT(threads >= 32 && threads <= 256);
     const int smem = gemm_smem_total_size(2, stages, 128, bn, bk);
@@ -287,6 +295,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                               staged_return,
                               bn, bk, wm, wn, stages, threads,
                               dispatch_cache_ctas,
+                              first_n_tile, num_n_tiles,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     const auto code = PeerGemmRuntime::generate(args);
     const auto runtime = compiler->build(PeerGemmRuntime::name(args), code);
@@ -316,7 +325,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("pack_input") = false, py::arg("config") = std::vector<int>{},
           py::arg("activation_gate_up") = py::none(), py::arg("dispatch_cache_n") = 0,
           py::arg("dispatch_scratch") = py::none(), py::arg("dispatch_cache_aiu") = false,
-          py::arg("staged_return") = false, py::arg("dispatch_cache_ctas") = 2);
+          py::arg("staged_return") = false, py::arg("dispatch_cache_ctas") = 2,
+          py::arg("first_n_tile") = 0, py::arg("num_n_tiles") = 0);
 }
 
 }  // namespace deep_gemm::training

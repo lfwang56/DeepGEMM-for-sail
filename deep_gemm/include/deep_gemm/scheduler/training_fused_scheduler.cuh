@@ -74,4 +74,34 @@ struct CachedPeerScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     }
 };
 
+// Schedule a contiguous N-tile slice without enumerating and discarding the
+// other columns. A producer GEMM can materialize X while computing the first
+// slice; a subsequent local GEMM exposes the remaining tiles to the whole GPU.
+template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN,
+          uint32_t E, uint32_t FirstN, uint32_t CountN>
+struct SlicedPeerScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
+    using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
+    static constexpr uint32_t nblocks = (N + BN - 1) / BN;
+    static constexpr uint32_t slice_n = CountN == 0 ? nblocks - FirstN : CountN;
+    static_assert(FirstN < nblocks && slice_n > 0 && FirstN + slice_n <= nblocks);
+
+    __device__ __forceinline__ SlicedPeerScheduler(const int32_t* blocks, const int32_t* records)
+        : Base(blocks, records) {}
+
+    __device__ __forceinline__ bool fetch_next_work(uint32_t& m, uint32_t& n) {
+        const uint32_t next = (this->current_iter++) * gridDim.x + blockIdx.x;
+        if (next >= this->num_aligned_m_blocks_ * slice_n) return false;
+        const uint32_t record_index = next / slice_n;
+        const uint4 data = __ldg(this->expert_ids_and_cumsum_ + record_index);
+        m = record_index - data.z;
+        n = FirstN + next % slice_n;
+        this->curr_group_idx = data.x;
+        this->curr_group_m = data.y;
+        this->cumsum_m_block_idx = record_index;
+        this->curr_block_m_offset = data.w + m * BM;
+        this->valid_m_in_block = min(BM, data.y - m * BM);
+        return true;
+    }
+};
+
 }  // namespace deep_gemm::training

@@ -227,7 +227,8 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite,
           bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
-          bool DispatchCacheAiu = false, bool StagedReturn = false>
+          bool DispatchCacheAiu = false, bool StagedReturn = false,
+          uint32_t FirstNTile = 0, uint32_t NumNTiles = 0>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -253,12 +254,16 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
 
     static_assert(DispatchCacheN == 0 || (PeerRead && !Coherent));
     static_assert(!DispatchCacheAiu || DispatchCacheN != 0);
+    static_assert((FirstNTile == 0 && NumNTiles == 0) || (!Coherent && DispatchCacheN == 0));
     using OriginalScheduler = std::conditional_t<Coherent,
         training::CoherentFusedScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
         FusedGemmScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>>;
-    using TileScheduler = std::conditional_t<DispatchCacheN != 0,
+    using UnslicedScheduler = std::conditional_t<DispatchCacheN != 0,
         training::CachedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
                                      DispatchCacheN == 0 ? 1 : DispatchCacheN>, OriginalScheduler>;
+    using TileScheduler = std::conditional_t<FirstNTile != 0 || NumNTiles != 0,
+        training::SlicedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
+                                     FirstNTile, NumNTiles>, UnslicedScheduler>;
 
     // Shared memory
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);

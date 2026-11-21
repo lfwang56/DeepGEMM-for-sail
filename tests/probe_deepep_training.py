@@ -16,7 +16,9 @@ from moe_distributed_utils import destroy_training_process_group
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--legacy', action='store_true')
+    parser.add_argument('--unexpanded', action='store_true')
     args = parser.parse_args()
+    unexpanded = args.legacy or args.unexpanded
     rank, size = int(os.environ['RANK']), int(os.environ['WORLD_SIZE'])
     device = torch.device('cuda', int(os.environ['LOCAL_RANK']))
     torch.cuda.set_device(device)
@@ -60,8 +62,10 @@ def main():
             return rx, rw, handle, (ri >= 0).any(-1)
         rx, ri, rw, handle, event = buffer.dispatch(x, topk_idx=ids, topk_weights=scores,
             num_experts=experts, expert_alignment=alignment, num_sms=8,
-            do_cpu_sync=False, do_expand=True, async_with_compute_stream=True)
+            do_cpu_sync=False, do_expand=not unexpanded, async_with_compute_stream=True)
         event.current_stream_wait()
+        if unexpanded:
+            return rx, rw.masked_fill(ri < 0, 0), handle, (ri >= 0).any(-1)
         positions = torch.arange(rx.shape[0], device=device)
         mask = torch.zeros(rx.shape[0], device=device, dtype=torch.bool)
         previous = torch.zeros((), device=device, dtype=torch.int32)
@@ -72,14 +76,14 @@ def main():
 
     def forward():
         rx, rw, handle, mask = dispatch()
-        weights = rw.sum(-1, keepdim=True) if args.legacy else rw.reshape(-1, 1)
+        weights = rw.sum(-1, keepdim=True) if unexpanded else rw.reshape(-1, 1)
         payload = (rx.float() * weights).bfloat16()
         payload.masked_fill_(~mask[:, None], 0)
         y, _ = combine(payload, handle)
         return y
 
     rx, rw, handle, mask = dispatch()
-    if rank == 0 and not args.legacy:
+    if rank == 0 and not unexpanded:
         print(json.dumps(dict(case='deepep_expanded_layout', recv_x=list(rx.shape),
             recv_weights=list(rw.shape), psum=handle.psum_num_recv_tokens_per_expert.cpu().tolist(),
             cpu_counts=handle.num_recv_tokens_per_expert_list,
@@ -91,19 +95,27 @@ def main():
     dy = ((torch.arange(t, device=device)[:, None] % 3 + 1).expand_as(x)).bfloat16().contiguous()
     if args.legacy:
         rdy, _, _, _, _, event = buffer.dispatch(dy, handle=handle, async_finish=True)
+        backward_handle = handle
+    elif unexpanded:
+        rdy, _, _, backward_handle, event = buffer.dispatch(dy, handle=handle,
+            do_expand=False, do_cpu_sync=False, num_sms=8, async_with_compute_stream=True)
     else:
-        rdy, _, _, _, event = buffer.dispatch(dy, handle=handle, do_expand=True,
-            do_cpu_sync=False, num_sms=8, async_with_compute_stream=True)
+        # Installed2.2 explicitly rejects cached expanded dispatch. Recreate
+        # deterministic expanded routing and use its handle for the backward
+        # combine; the identity dScore check also verifies matching row order.
+        rdy, _, _, backward_handle, event = buffer.dispatch(dy, topk_idx=ids,
+            topk_weights=scores, num_experts=experts, expert_alignment=alignment,
+            do_expand=True, do_cpu_sync=False, num_sms=8, async_with_compute_stream=True)
     event.current_stream_wait()
     rdy.masked_fill_(~mask[:, None], 0)
-    weights = rw.sum(-1, keepdim=True) if args.legacy else rw.reshape(-1, 1)
+    weights = rw.sum(-1, keepdim=True) if unexpanded else rw.reshape(-1, 1)
     dx_rows = (rdy.float() * weights).bfloat16()
     ds_rows = (rx.float() * rdy.float()).sum(-1).contiguous()
     ds_rows.masked_fill_(~mask, 0)
-    if args.legacy:
+    if unexpanded:
         ds_rows = ds_rows[:, None].expand_as(rw).contiguous()
         ds_rows.masked_fill_(rw == 0, 0)  # Probe scores are .5 in every valid slot.
-    dx, ds = combine(dx_rows, handle, ds_rows)
+    dx, ds = combine(dx_rows, backward_handle, ds_rows)
     expected_dx = (dy.float() * (scores * (ids >= 0)).sum(-1, keepdim=True)).bfloat16()
     expected_ds = (x.float() * dy.float()).sum(-1, keepdim=True).expand_as(scores) * (ids >= 0)
     torch.testing.assert_close(dx, expected_dx, rtol=0, atol=0)
@@ -123,10 +135,10 @@ def main():
         torch.testing.assert_close(gy, expected_y, rtol=0, atol=0)
     if rank == 0:
         print(json.dumps(dict(case='deepep_expanded_training_probe', ranks=size,
-                             backend='legacy' if args.legacy else 'elastic',
+                             backend='legacy' if args.legacy else 'elastic_nonexpanded' if unexpanded else 'elastic_expanded',
                              forward=True, backward=True, dynamic_graph_replays=4,
                              passed=True)), flush=True)
-    del graph, gy, rx, rw, handle, mask, rdy, dx, ds, dx_rows, ds_rows
+    del graph, gy, rx, rw, handle, backward_handle, mask, rdy, dx, ds, dx_rows, ds_rows
     gc.collect()
     torch.cuda.synchronize()
     dist.barrier()

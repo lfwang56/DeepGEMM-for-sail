@@ -161,6 +161,8 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   backend="native" if options.backend == "collective" else options.backend,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(dispatch_cache_n=options.dispatch_cache_n,
+                                    dispatch_producer=options.dispatch_producer,
+                                    dispatch_producer_tiles=options.dispatch_producer_tiles,
                                     dispatch_cache_ctas=options.dispatch_cache_ctas,
                                     dispatch_cache_aiu=options.dispatch_cache_aiu,
                                     staged_return=options.staged_return,
@@ -211,11 +213,13 @@ def main():
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
+    parser.add_argument("--dispatch-producer", action="store_true")
+    parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--peer-fc1-config", type=int, nargs=5)
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2) and options.backend != "peer":
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer) and options.backend != "peer":
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
@@ -240,6 +244,8 @@ def main():
     plan_options = {}
     if options.backend == "peer":
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
+                            dispatch_producer=options.dispatch_producer,
+                            dispatch_producer_tiles=options.dispatch_producer_tiles,
                             dispatch_cache_ctas=options.dispatch_cache_ctas,
                             dispatch_cache_aiu=options.dispatch_cache_aiu,
                             staged_return=options.staged_return,

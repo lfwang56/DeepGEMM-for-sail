@@ -32,7 +32,8 @@ def evaluate_checkpoint(path, data_path):
     backend_options = dict(saved.get("backend_options", {}))
     if backend == "peer" and "backend_options" not in saved:
         training_options = saved.get("plan_options", {})
-        for key in ("dispatch_cache_n", "dispatch_cache_ctas", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return"):
+        for key in ("dispatch_cache_n", "dispatch_cache_ctas", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return",
+                    "dispatch_producer", "dispatch_producer_tiles"):
             if key in training_options:
                 backend_options[key] = training_options[key]
         if training_options.get("gemm_config"):

@@ -520,3 +520,100 @@ The future staged-return source is present but disabled in these controls. Its i
 ```
 - Best peer 49.840554810ms, paired DeepEP 47.020394897ms; ratio DeepEP/peer 0.943416, time reduction -5.9977%. Versus same-domain N256control, time reduction 0.5726%.
 - Cross-supernode DeepEP EP16 passed independent CPU reference and128dynamic-route graph replays, allparents/gatesnormal. CPU Gloo carries initialization metadata; DeepEP transports token/gradient payloads, with cross-host MNNVL disabled. OriginalEP64 NCCL-metadata attempt blocked in NativeMoEPlan recipe all_gather_object / pcclAllGather(socketaccept), before DeepEP initialization. Its own verified rank processes were terminated after timeout; allparents closed. No DeepEP64success claim yet.
+
+## Iteration7 — producer GEMM slice followed by a local remainder
+
+- Motivation: private N caching still limits FC1 parallelism. Compute the first1/2/4 N tiles while dispatching X inside GEMM, materialize packed X, then compute remaining N tiles locally. Kernel stream ordering publishes X; no cross-CTA residency barrier. Return writes remain fused. Both FC1 kernels and mandatory input writes are timed.
+- Same Qwen H8192/I2048/E16/K10,T1024,C512; BF16,FP32 DW, full forward/backward replay,256/64/64/64/S2,5x20 graph samples. Real installed DeepEP Buffer38CU paired in every case, Torch2.11 wlf_sgl_2.2. The routed layer excludes the shared expert and optimizer.
+- Producer unit covers1/2/4 tiles and the whole-FC1 case, masks, duplicates, ragged chunks and all gradients; passed. Qwen512-token full independent FP32 reference passed every Y/DX/DW1/DW2/dScore element, worst RMS0.004083. EP32 dynamic-route stress128replays passed all32ranks with clean ownership gates.
+- All3 performance phases finished all32parents0 and every ownership gate clean. Candidate first case usedSN2.225/.226/.227/.222; others used.225/.226/.227/.223. Comparisons use the paired denominator.
+- Native extension SHA2563b283ac13dc3a69e4b9edd6072a0f96dcb5eeab82299c6b14e7f67b57c8cfea2.
+
+```json
+[
+  {
+    "run": "qwen38-wlf-ep32-iter7-producer1-attempt0",
+    "nodes": [
+      "172.17.0.225",
+      "172.17.0.226",
+      "172.17.0.227",
+      "172.17.0.222"
+    ],
+    "producer_tiles": 1,
+    "deepep_ms": 47.0342529296875,
+    "peer_ms": 44.82920532226562,
+    "peer_samples": [
+      44.82920532226562,
+      44.83145446777344,
+      44.84373779296875,
+      44.8272216796875,
+      44.82712097167969
+    ],
+    "time_reduction_percent": 4.6881739797552395,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.6730231184046715e-07,
+      "dw2": 2.5834683015091287e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter7-producer2-attempt0",
+    "nodes": [
+      "172.17.0.225",
+      "172.17.0.226",
+      "172.17.0.227",
+      "172.17.0.223"
+    ],
+    "producer_tiles": 2,
+    "deepep_ms": 47.000274658203125,
+    "peer_ms": 51.00791931152344,
+    "peer_samples": [
+      50.952264404296876,
+      51.00296325683594,
+      51.02781372070312,
+      51.00791931152344,
+      51.01741333007813
+    ],
+    "time_reduction_percent": -8.52685368854722,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.6598377189657185e-07,
+      "dw2": 2.5620744281695806e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter7-producer4-attempt0",
+    "nodes": [
+      "172.17.0.225",
+      "172.17.0.226",
+      "172.17.0.227",
+      "172.17.0.223"
+    ],
+    "producer_tiles": 4,
+    "deepep_ms": 47.056539916992186,
+    "peer_ms": 52.83516845703125,
+    "peer_samples": [
+      52.795050048828124,
+      52.864324951171874,
+      52.83516845703125,
+      52.85762329101563,
+      52.80686645507812
+    ],
+    "time_reduction_percent": -12.28018156505466,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.658341600181302e-07,
+      "dw2": 2.601505570964946e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  }
+]
+```
+- Best paired reduction4.6882%, peer44.829205322ms vsDeepEP47.034252930ms, producer_tiles=1. This is a two-GEMM producer/consumer FC1 path, not the original single peer-read GEMM.
+- Separate baseline integration: new every-element distributed local-expert FP32 oracle passed2ranks onQwen H8192/I2048,E8,K10 with masks/zero-score/empty-source/duplicates and changing-route graph replay. Initial oracle attempt failed a deliberate one-stream plan check; fixed the test to keep preparation/execution/capture on one stream, then reran clean. Cross-domain64 smallshape graph128 passed with8RDMA ranks; actualQwen64 oracle still pending.
+- Isolated ElasticBuffer probe now passes forward,DX,dScore and4dynamic-route graph replays in nonexpanded mode after native header/thread-scope compatibility fixes. Expanded cached backward and expanded score combine are explicitly unsupported in this installed version. An initial nonexpanded run passed math but failed teardown JIT include order; isolated comm header order fixed and clean rerun passed. Installed package untouched; no Elastic timing claims yet.
