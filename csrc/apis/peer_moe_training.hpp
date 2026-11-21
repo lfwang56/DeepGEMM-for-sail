@@ -154,6 +154,7 @@ public:
         bool read_peer, write_peer;
         bool activation_backward;
         int dispatch_cache_n;
+        bool dispatch_cache_aiu;
         int block_n, block_k, warp_m, warp_n, stages, threads;
         LaunchArgs launch_args;
         PeerGemmParams params;
@@ -164,6 +165,7 @@ public:
                            args.block_k, args.warp_m, args.warp_n, args.stages);
         if (args.activation_backward) name += "_activation_backward";
         if (args.dispatch_cache_n) name += fmt::format("_cache{}", args.dispatch_cache_n);
+        if (args.dispatch_cache_aiu) name += "_aiu";
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -173,13 +175,14 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}
+        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}
     >(params);
 }}
 )", args.threads, name(args), args.n, args.k, args.groups, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
-       args.activation_backward ? "true" : "false", args.dispatch_cache_n);
+       args.activation_backward ? "true" : "false", args.dispatch_cache_n,
+       args.dispatch_cache_aiu ? "true" : "false");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -194,7 +197,8 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       bool read_peer, bool write_peer, bool compile_only,
                       bool pack_input, const std::vector<int>& config,
                       const c10::optional<torch::Tensor>& activation_gate_up,
-                      int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch) {
+                      int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch,
+                      bool dispatch_cache_aiu) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -237,6 +241,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     DG_HOST_ASSERT(dispatch_cache_n == 0 || dispatch_cache_n == 2 || dispatch_cache_n == 4
                    || dispatch_cache_n == 8 || dispatch_cache_n == 16);
     if (!read_peer) dispatch_cache_n = 0;
+    DG_HOST_ASSERT(!dispatch_cache_aiu || (read_peer && dispatch_cache_n));
     if (dispatch_cache_n) {
         DG_HOST_ASSERT(dispatch_scratch.has_value());
         const auto& scratch = dispatch_scratch.value();
@@ -270,6 +275,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     const int smem = gemm_smem_total_size(2, stages, 128, bn, bk);
     DG_HOST_ASSERT(smem <= 256 * 1024);
     PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(), dispatch_cache_n,
+                              dispatch_cache_aiu,
                               bn, bk, wm, wn, stages, threads,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     const auto code = PeerGemmRuntime::generate(args);
@@ -299,7 +305,7 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("read_peer"), py::arg("write_peer"), py::arg("compile_only") = false,
           py::arg("pack_input") = false, py::arg("config") = std::vector<int>{},
           py::arg("activation_gate_up") = py::none(), py::arg("dispatch_cache_n") = 0,
-          py::arg("dispatch_scratch") = py::none());
+          py::arg("dispatch_scratch") = py::none(), py::arg("dispatch_cache_aiu") = false);
 }
 
 }  // namespace deep_gemm::training

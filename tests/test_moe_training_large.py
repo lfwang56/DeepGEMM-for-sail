@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--reuse-packed-dy", action="store_true")
+    parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
     if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend not in ("peer", "collective_fused"):
@@ -75,6 +76,10 @@ def main():
         if options.backend != "peer" or options.no_fuse_dispatch:
             parser.error("dispatch cache requires peer fused dispatch")
         extra["dispatch_cache_n"] = options.dispatch_cache_n
+    if options.dispatch_cache_aiu:
+        if options.backend != "peer" or not options.dispatch_cache_n:
+            parser.error("AIU dispatch cache requires --backend peer --dispatch-cache-n > 0")
+        extra["dispatch_cache_aiu"] = True
     plan = classes[options.backend](h, i, e, k, t, chunk_tokens=t, compute=options.compute, **extra)
     for pattern in ("balanced_masked", "duplicate_skewed"):
         if pattern == "duplicate_skewed":
@@ -98,6 +103,7 @@ def main():
         passed = all(math.isfinite(value) and value < limit for value in errors.values())
         print(json.dumps(dict(case="large_full_gradient_reference", backend=options.backend,
                               compute=options.compute, hidden=h, intermediate=i, experts=e, topk=k,
+                              dispatch_cache_aiu=options.dispatch_cache_aiu,
                               tokens=t, valid_tokens=max(0, t - 3), pattern=pattern,
                               relative_rms=errors, every_element_compared=True,
                               fuse_dispatch=getattr(plan, "fuse_dispatch", None),

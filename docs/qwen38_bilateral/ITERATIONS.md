@@ -147,3 +147,12 @@ Same Qwen EP32 configuration and SN1 hosts, unchanged DeepEP training dataflow. 
 - comm CUs38: 46.940802002 ms; samples [47.030416870117186, 46.940802001953124, 46.92217102050781, 46.9336669921875, 46.999734497070314].
 
 The best measured DeepEP communication setting replaces the initial8-CU and24-CU denominators for final comparisons. AIU-cache candidate remains under separate correctness validation.
+
+### Iteration 3 — AIU loads from each CTA's contiguous input cache
+
+- Direction: retain the in-GEMM arbitrary peer gather, then use the native PPU AIU to feed the now-contiguous cached A rows into a matching swizzled TSM/MMA operand. Separate dispatch_cache_aiu option, defaultFalse. Ordinary gather paths retain their original copy atom.
+- Correctness: cache-group unit passed100.868s including partial-N groups and backward; full Qwen H8192/I2048/E16/K10/T19 independent FP32 reference passed every element for masked/ragged and duplicate-skew patterns. Worst relative RMS0.00494.
+- Matched EP32 SN1 paired run, all32 parents and all gates passed: tuned DeepEP38CUs46.9861084ms; bilateral AIU-cache48.9703064ms, samples [48.9510254,48.9621429,48.9878479,49.0075073,48.9703064].
+- Compared to iteration2 without AIU49.3827667ms, only0.84% less time; below3% significance threshold. Still4.22% slower than the freshly measured tuned DeepEP baseline. Do not call this a material optimization win. Leave AIU optional and continue a different direction.
+- Source also exposes the peer cache/reuse/tile options in the existing complete-model public-text trainer and checkpoints so the chosen recipe can be tested end-to-end. Full model runs still pending for the final winner.
+- Next: address FC1 input-cache/GEMM scheduling and occupancy rather than assuming a bulk copy atom is sufficient. Broaden to T4096/8192 and keep the tuned DeepEP comparison.

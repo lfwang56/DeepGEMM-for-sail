@@ -178,7 +178,8 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite,
-          bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0>
+          bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
+          bool DispatchCacheAiu = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -203,6 +204,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       cute::Layout<Shape< Int<BLOCK_M / WARP_M>, Int<BLOCK_N / WARP_N>, _1>>>;
 
     static_assert(DispatchCacheN == 0 || (PeerRead && !Coherent));
+    static_assert(!DispatchCacheAiu || DispatchCacheN != 0);
     using OriginalScheduler = std::conditional_t<Coherent,
         training::CoherentFusedScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
         FusedGemmScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>>;
@@ -225,15 +227,23 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     using ACopyInst = std::conditional_t<DispatchCacheN != 0,
         cute::PPU_CP_ASYNC_CACHEGLOBAL_ZFILL<cutlass::uint128_t>,
         cute::PPU_CP_ASYNC_CACHEALWAYS_ZFILL<cutlass::uint128_t>>;
-    using GemmOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<
+    using GatherOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<
             ArchTag, SrcT, false, Alignment, cute::Int<BLOCK_K>, BLOCK_SIZE,
             ACopyInst, cute::Int<BLOCK_M>>;
+    using GemmOperandA = std::conditional_t<DispatchCacheAiu,
+        cutlass::gemm::config::DefaultGemm_AIU_Operand<
+            ArchTag, SrcT, false, cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, false>, GatherOperandA>;
 
     using TilerA = typename GemmOperandA::GmemTiledCopy::Tiler_MN;
     using SmemLayoutA = decltype(tile_to_shape(typename GemmOperandA::SmemLayoutAtom{},
             Shape<cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, cute::Int<kNumStages>>{}));
 
     typename GemmOperandA::GmemTiledCopy gmem_tiled_copy_A;
+    if constexpr (DispatchCacheAiu) {
+        auto stride_A = cute::make_stride(cute::Int<SHAPE_K>{}, cute::_1{});
+        gmem_tiled_copy_A.desc_.template init<SrcT, false, get<0>(TilerA{}), get<1>(TilerA{})>(
+            nullptr, BLOCK_M, SHAPE_K, stride_A);
+    }
     auto gmem_thr_copy_A = gmem_tiled_copy_A.get_slice(thread_idx);
     Tensor sA = cute::make_tensor(cute::make_smem_ptr(smem_a), SmemLayoutA{});
     Tensor tAsA = gmem_thr_copy_A.partition_D(sA);
@@ -336,23 +346,40 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       Tensor gB = cute::local_tile(cute::make_mix_tensor_like(mB_nk), TileShape{}, take<0,3>(blk_coord_mnkl), Step< X,_1,_1>{});           // (BLK_N,BLK_K,k)
       Tensor tBgB = gmem_thr_copy_B.partition_S(gB);
 
+      auto copy_input_stage = [&](int tile, int stage) {
+          if constexpr (DispatchCacheAiu) {
+              // Arbitrary peer rows have already been gathered into this
+              // CTA's contiguous cache. AIU is legal for this local operand;
+              // its swizzled TSM layout uses the matching A load atom above.
+              const auto* cache = reinterpret_cast<const SrcT*>(params.dispatch_scratch)
+                  + uint64_t(blockIdx.x) * BLOCK_M * SHAPE_K;
+              auto shape_A = cute::make_shape(cute::Int<BLOCK_M>{}, cute::Int<SHAPE_K>{});
+              auto stride_A = cute::make_stride(cute::Int<SHAPE_K>{}, cute::_1{});
+              Tensor mA = cute::make_tensor(cute::make_gmem_ptr(cache), shape_A, stride_A);
+              Tensor gA = cute::local_tile(cute::make_mix_tensor_like(mA), TileShape{},
+                  cute::make_coord(cute::_0{}, cute::_, cute::_), Step<_1,X,_1>{});
+              Tensor tAgA = gmem_thr_copy_A.partition_S(gA);
+              copy_aiu(gmem_tiled_copy_A, tAgA(_,_,_,tile), tAsA(_,_,_,stage), warp_idx);
+          } else if constexpr (PeerRead) {
+              training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
+                  tAsA(_,_,_,stage), source_addresses, params.source_peers,
+                  BLOCK_K * tile, thread_idx,
+                  const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset,
+                  DispatchCacheN == 0 && params.pack_input && n_block_idx == 0);
+          } else {
+              copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
+                  tAsA(_,_,_,stage), args.a_ptr,
+                  blk_token_base, BLOCK_K * tile, shape_m, thread_idx);
+          }
+      };
+
       int k_tile_iter  = 0;
       int k_tile_count = size<2>(gB);
 
       CUTLASS_PRAGMA_UNROLL
       for (int k_pipe = 0; k_pipe < kNumStages; ++k_pipe) {
         if (k_tile_count > 0) {
-          if constexpr (PeerRead) {
-              training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
-                  tAsA(_,_,_,k_pipe), source_addresses, params.source_peers,
-                  BLOCK_K * k_tile_iter, thread_idx,
-                  const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset,
-                  DispatchCacheN == 0 && params.pack_input && n_block_idx == 0);
-          } else {
-              copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
-                  tAsA(_,_,_,k_pipe), args.a_ptr,
-                  blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx);
-          }
+          copy_input_stage(k_tile_iter, k_pipe);
           copy_aiu(gmem_tiled_copy_B, tBgB(_,_,_,k_tile_iter), tBsB(_,_,_,k_pipe), warp_idx);
           ++k_tile_iter;
         }
@@ -396,17 +423,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
           cp_async_wait<kNumStages-2>();
           __syncthreads();
           if (k_tile_count > 0) {
-            if constexpr (PeerRead) {
-                training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
-                    tAsA(_,_,_,smem_pipe_write), source_addresses, params.source_peers,
-                    BLOCK_K * k_tile_iter, thread_idx,
-                    const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset,
-                    DispatchCacheN == 0 && params.pack_input && n_block_idx == 0);
-            } else {
-                copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
-                    tAsA(_,_,_,smem_pipe_write), args.a_ptr,
-                    blk_token_base, BLOCK_K * k_tile_iter, shape_m, thread_idx);
-            }
+            copy_input_stage(k_tile_iter, smem_pipe_write);
             copy_aiu(gmem_tiled_copy_B, tBgB(_,_,_,k_tile_iter), tBsB(_,_,_,smem_pipe_write), warp_idx);
             ++k_tile_iter;
           }

@@ -159,6 +159,10 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
     common = dict(configuration=asdict(config), manifest=manifest, compute=options.compute,
                   backend="native" if options.backend == "collective" else options.backend,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
+                  plan_options=dict(dispatch_cache_n=options.dispatch_cache_n,
+                                    dispatch_cache_aiu=options.dispatch_cache_aiu,
+                                    reuse_packed_dy=options.reuse_packed_dy,
+                                    gemm_config=options.gemm_config),
                   initial_validation_loss=initial_loss, validation_loss=validation, ep_size=size)
     local_path = path.with_name(path.stem + f".rank{rank:03d}" + path.suffix)
     temporary = local_path.with_suffix(local_path.suffix + ".tmp")
@@ -198,7 +202,13 @@ def main():
     parser.add_argument("--global-batch", type=int, default=8)
     parser.add_argument("--sequence", type=int, default=128)
     parser.add_argument("--chunk-tokens", type=int, default=128)
+    parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
+    parser.add_argument("--dispatch-cache-aiu", action="store_true")
+    parser.add_argument("--reuse-packed-dy", action="store_true")
+    parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.reuse_packed_dy or options.gemm_config) and options.backend != "peer":
+        parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
         raise ValueError("experts and global batch must be divisible by EP size >=2")
@@ -219,10 +229,17 @@ def main():
     initial_hash = hashlib.sha256(b"".join(value.numpy().tobytes() for value in global_state.values())).hexdigest()
     local_experts, local_batch = config.experts // size, config.batch // size
     classes = {"collective": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan}
+    plan_options = {}
+    if options.backend == "peer":
+        plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
+                            dispatch_cache_aiu=options.dispatch_cache_aiu,
+                            reuse_packed_dy=options.reuse_packed_dy)
+        if options.gemm_config:
+            plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     plan = classes[options.backend](config.hidden, config.intermediate, local_experts, config.topk,
                                     local_batch * config.sequence, chunk_tokens=config.chunk_tokens,
                                     compute=options.compute, group=dist.group.WORLD, device=device,
-                                    check_errors=False)
+                                    check_errors=False, **plan_options)
     for block in model.blocks:
         experts = block.experts
         experts.backend, experts.plan = "native", plan
@@ -256,6 +273,7 @@ def main():
         print(json.dumps({"case": "distributed_lm_start", "rank": rank, "ep_size": size,
                           "backend": options.backend, "compute": options.compute, "graph": options.graph,
                           "configuration": asdict(config), "manifest": manifest,
+                          "plan_options": plan_options,
                           "initial_state_sha256": initial_hash, "initial_validation_loss": initial_loss,
                           "seed": options.seed}), flush=True)
 

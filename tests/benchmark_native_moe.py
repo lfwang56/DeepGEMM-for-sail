@@ -83,6 +83,7 @@ def main():
     parser.add_argument("--weight-transpose-ablation", action="store_true")
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--reuse-packed-dy", action="store_true")
+    parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--deepep-comm-sms", type=int, default=8)
     parser.add_argument("--deepep-scaleup", action="store_true",
                         help="Use DeepEP fabric intranode path across one verified supernode")
@@ -187,6 +188,7 @@ def main():
             options.update(controls)
             if backend == "peer" and options.get("fuse_dispatch", True):
                 options["dispatch_cache_n"] = args.dispatch_cache_n
+                options["dispatch_cache_aiu"] = args.dispatch_cache_aiu
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
             if isinstance(plan, ConfiguredCollectivePlan):
@@ -267,6 +269,7 @@ def main():
                     "peer_fuse_activation_backward": getattr(plan, "fuse_activation_backward", None) if backend == "peer" else None,
                     "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
+                    "peer_dispatch_cache_aiu": getattr(plan, "dispatch_cache_aiu", None) if backend == "peer" else None,
                     "peer_reuse_packed_dy": getattr(plan, "reuse_packed_dy", None) if backend == "peer" else None,
                     "deepep_version": getattr(plan, "deep_ep_version", None),
                     "deepep_backend": getattr(plan, "deep_ep_backend", None),
