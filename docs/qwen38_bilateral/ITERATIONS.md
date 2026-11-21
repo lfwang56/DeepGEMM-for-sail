@@ -2151,11 +2151,11 @@ ep32-route-window-skew-c768-reference.json and
 
 Quality receipts are recorded in public-text-lm-window18-paired.json. Six
 2000-step public-text MoE training jobs and six111539-target full evaluations
-have been collected, with per-seed frozen libraries. Audit/hash checks are
-reported explicitly below; pending issues must be resolved before a clean
-paired-quality conclusion is made.
+passed cleanly, with per-seed frozen libraries. Initial parameter hashes match
+for all three seed pairs. The collector decodes individual JSON objects from
+shared rank stdout, including records concatenated on the same output line.
 
-Quality status: native: start hash missing 6113; initial parameter hash mismatch 6113
+Quality status: clean paired validation; all per-seed initial parameter hashes match.
 Observed means: Native1.589084658165, peer1.588399054513.
 
 
