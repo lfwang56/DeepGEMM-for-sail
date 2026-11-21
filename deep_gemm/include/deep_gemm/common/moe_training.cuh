@@ -35,6 +35,8 @@ enum class Operation : int {
     PackInputDeviceRows,
     TransformDeviceRowsVector,
     TransposeWeights,
+    DeepEPReduceRows,
+    DeepEPBackwardRows,
 };
 
 }  // namespace deep_gemm::training

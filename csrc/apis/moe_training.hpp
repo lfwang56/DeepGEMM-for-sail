@@ -40,7 +40,7 @@ __global__ void moe_training_{}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeWeights));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPBackwardRows));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -212,6 +212,26 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
             blocks = int64_t(get_num_sms()) * 4;
             break;
+        case Operation::DeepEPReduceRows: {
+            schema(7, 6);
+            const auto m = dims[0], h = dims[1], n = dims[2], k = dims[3];
+            DG_HOST_ASSERT(h > 0 && h % 8 == 0 && k > 0 && dims[4] > 0 && dims[5] <= 1);
+            expect(0, m * h, bf); expect(1, n * k, i32); expect(2, n * k, i32);
+            expect(3, dims[4] + 1, i32); expect(4, n * k, fp);
+            expect(5, n * h, bf); expect(6, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        }
+        case Operation::DeepEPBackwardRows: {
+            schema(8, 4);
+            const auto m = dims[0], h = dims[1], n = dims[2], k = dims[3];
+            DG_HOST_ASSERT(h > 0 && k > 0);
+            expect(0, n * h, bf); expect(1, n * k, fp); expect(2, m, i32);
+            expect(3, m * h, bf); expect(4, m * h, bf); expect(5, n * k, fp);
+            expect(6, 1, i32); expect(7, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        }
         case Operation::TransposeWeights: {
             schema(4, 3);
             const auto e = dims[0], h = dims[1], i = dims[2];
@@ -241,7 +261,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeWeights));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPBackwardRows));
         Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
         compiler->build(fmt::format("moe_training_{}", operation), Runtime::generate(args));
     }

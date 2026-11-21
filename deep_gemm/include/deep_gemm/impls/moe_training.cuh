@@ -336,6 +336,65 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
             }
             pointer<uint4>(p, 2)[position] = value;
         }
+    } else if constexpr (Op == Operation::DeepEPReduceRows) {
+        // Invert the route layout from count/prefix metadata. This reduces
+        // top-k in registers and writes BF16 directly, without FP32 atomics,
+        // a zeroed FP32 receive matrix, or a separate conversion pass.
+        const int64_t width = p.dim[1] / 8;
+        for (int64_t position = index; position < p.dim[2] * width;
+             position += int64_t(gridDim.x) * blockDim.x) {
+            const int64_t token = position / width, column = position % width;
+            float sum[8]{};
+            for (int slot = 0; slot < p.dim[3]; ++slot) {
+                const int64_t route = token * p.dim[3] + slot;
+                const int expert = pointer<int32_t>(p, 1)[route];
+                if (expert < 0) continue;
+                if (expert >= p.dim[4]) {
+                    atomicOr(pointer<int32_t>(p, 6), 2);
+                    continue;
+                }
+                const int row = pointer<int32_t>(p, 3)[expert] + pointer<int32_t>(p, 2)[route];
+                if (row < 0 || row >= p.dim[0]) {
+                    atomicOr(pointer<int32_t>(p, 6), 2);
+                    continue;
+                }
+                const uint4 raw = pointer<uint4>(p, 0)[int64_t(row) * width + column];
+                const auto* values = reinterpret_cast<const Bf16*>(&raw);
+                const float weight = p.dim[5] ? pointer<float>(p, 4)[route] : 1.f;
+                #pragma unroll
+                for (int j = 0; j < 8; ++j) sum[j] += __bfloat162float(values[j]) * weight;
+            }
+            uint4 raw{};
+            auto* values = reinterpret_cast<Bf16*>(&raw);
+            #pragma unroll
+            for (int j = 0; j < 8; ++j) values[j] = __float2bfloat16(sum[j]);
+            pointer<uint4>(p, 5)[position] = raw;
+        }
+    } else if constexpr (Op == Operation::DeepEPBackwardRows) {
+        // Gather DY, apply router weights, and reduce dScore without a
+        // [receive_tokens, topk, hidden] expanded temporary.
+        const int64_t rows = pointer<int32_t>(p, 6)[0];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 7), 2);
+            return;
+        }
+        for (int64_t row = block_index * 8 + warp; row < rows;
+             row += int64_t(gridDim.x) * 8) {
+            const int route = pointer<int32_t>(p, 2)[row];
+            const bool valid = route >= 0 && route < p.dim[2] * p.dim[3];
+            if (route >= p.dim[2] * p.dim[3] && lane == 0)
+                atomicOr(pointer<int32_t>(p, 7), 2);
+            const float weight = valid ? pointer<float>(p, 1)[route] : 0.f;
+            float dot = 0.f;
+            for (int64_t col = lane; col < p.dim[1]; col += 32) {
+                const float dy = valid ? __bfloat162float(pointer<Bf16>(p, 0)[
+                    int64_t(route / p.dim[3]) * p.dim[1] + col]) : 0.f;
+                pointer<Bf16>(p, 4)[row * p.dim[1] + col] = __float2bfloat16(dy * weight);
+                if (valid) dot += dy * __bfloat162float(pointer<Bf16>(p, 3)[row * p.dim[1] + col]);
+            }
+            dot = warp_sum(dot);
+            if (valid && lane == 0) pointer<float>(p, 5)[route] = dot;
+        }
     } else if constexpr (Op == Operation::TransposeWeights) {
         // Two independent expert-weight transposes share one launch. Transfer
         // BF16 bits in aligned vectors. XOR vector columns avoid a single

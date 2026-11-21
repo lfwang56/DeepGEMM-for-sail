@@ -16,6 +16,42 @@ class KernelTests(unittest.TestCase):
         torch.manual_seed(9003)
         torch.set_num_threads(2)
 
+    def test_deepep_local_reduce_and_backward(self):
+        rows, h, n, k, e = 256, 256, 3, 3, 2
+        experts = torch.tensor([[0, 1, 0], [-1, 1, 0], [-1, -1, -1]], dtype=torch.int32, device="cuda")
+        route_rows = torch.tensor([[0, 0, 1], [-1, 1, 2], [-1, -1, -1]], dtype=torch.int32, device="cuda")
+        offsets = torch.tensor([0, 128, 256], dtype=torch.int32, device="cuda")
+        permutation = torch.full((rows,), -1, device="cuda", dtype=torch.int32)
+        mapping = {0: (0, 0), 128: (0, 1), 1: (0, 2), 129: (1, 1), 2: (1, 2)}
+        for row, (token, slot) in mapping.items():
+            permutation[row] = token * k + slot
+        weights = torch.rand(n, k, device="cuda")
+        weights[0, 0] = 0
+        weights.masked_fill_(experts < 0, float("nan"))
+        packed = torch.randn(rows, h, device="cuda").bfloat16()
+        output = torch.empty(n, h, device="cuda", dtype=torch.bfloat16)
+        current = torch.tensor(rows, device="cuda", dtype=torch.int32)
+        status = torch.zeros((), device="cuda", dtype=torch.int32)
+        for weighted in (False, True):
+            expected = torch.zeros(n, h, device="cuda")
+            for row, (token, slot) in mapping.items():
+                expected[token] += packed[row].float() * (weights[token, slot] if weighted else 1)
+            launch(23, [packed, experts, route_rows, offsets, weights, output, status],
+                   [rows, h, n, k, e, int(weighted)])
+            torch.testing.assert_close(output, expected.bfloat16(), rtol=.008, atol=.008)
+        dy = torch.randn(n, h, device="cuda").bfloat16()
+        packed_dy = torch.empty_like(packed)
+        ds = torch.zeros_like(weights)
+        launch(24, [dy, weights, permutation, packed, packed_dy, ds, current, status], [rows, h, n, k])
+        expected_dy = torch.zeros_like(packed)
+        expected_ds = torch.zeros_like(weights)
+        for row, (token, slot) in mapping.items():
+            expected_dy[row] = (dy[token].float() * weights[token, slot]).bfloat16()
+            expected_ds[token, slot] = (dy[token].float() * packed[row].float()).sum()
+        torch.testing.assert_close(packed_dy, expected_dy, rtol=0, atol=0)
+        torch.testing.assert_close(ds, expected_ds, rtol=2e-5, atol=2e-4)
+        self.assertEqual(int(status), 0)
+
     def test_activation_and_gradient(self):
         rows, intermediate = 7, 128
         gu = torch.randn(rows, 2 * intermediate).bfloat16()

@@ -329,7 +329,8 @@ class NativeTests(unittest.TestCase):
 
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
-              collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0, reuse_packed_dy=False):
+              collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0, reuse_packed_dy=False,
+              deepep=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -351,7 +352,12 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     w1 = global_w1[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     w2 = global_w2[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     dy = dys[rank].to(device)
-    plan_class = (PersistentMoEPlan if persistent else PeerMoEPlan if peer
+    if deepep:
+        from deep_gemm.training import DeepEPMoEPlan
+        # A valid route with zero weight must still receive dScore.
+        ps[1][1, 0] = 0
+        scores.data.copy_(ps[rank].to(device))
+    plan_class = (DeepEPMoEPlan if deepep else PersistentMoEPlan if persistent else PeerMoEPlan if peer
                   else CollectiveFusedMoEPlan if collective_fused else NativeMoEPlan)
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
     plan_options["fast_weight_transpose"] = fast_weight_transpose
@@ -429,8 +435,11 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     del graph
     for value in (x, scores, w1, w2):
         value.grad = None
-    del y, x, ids, scores, w1, w2, dy, valid, plan, stream
+    del y, x, ids, scores, w1, w2, dy, valid, stream
     gc.collect()
+    if hasattr(plan, "close"):
+        plan.close()
+    del plan
     destroy_training_process_group()
 
 
@@ -451,7 +460,10 @@ if __name__ == "__main__":
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--reuse-packed-dy", action="store_true")
+    parser.add_argument("--deepep", action="store_true")
     options, remaining = parser.parse_known_args()
+    if options.deepep and (not options.ep or options.peer or options.persistent or options.collective_fused or options.fp8):
+        parser.error("--deepep requires BF16 --ep and is a separate backend")
     if options.dispatch_cache_n and (not options.ep or not options.peer or options.persistent or options.no_fuse_dispatch):
         parser.error("--dispatch-cache-n requires --peer --ep with fused dispatch; unit tests cover cache groups automatically")
     if options.reuse_packed_dy and (not options.ep or not options.peer or options.persistent):
@@ -468,7 +480,7 @@ if __name__ == "__main__":
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
                   options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose,
-                  options.dispatch_cache_n, options.reuse_packed_dy)
+                  options.dispatch_cache_n, options.reuse_packed_dy, options.deepep)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer

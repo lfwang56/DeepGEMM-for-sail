@@ -5,5 +5,6 @@ from .native import NativeMoEPlan, native_moe
 from .peer import PeerMoEPlan
 from .persistent import PersistentMoEPlan
 from .collective_fused import CollectiveFusedMoEPlan
+from .deepep import DeepEPMoEPlan
 
-__all__ = ["MoEContext", "bf16_moe", "bf16_moe_forward", "bf16_moe_backward", "NativeMoEPlan", "PeerMoEPlan", "PersistentMoEPlan", "CollectiveFusedMoEPlan", "native_moe"]
+__all__ = ["MoEContext", "bf16_moe", "bf16_moe_forward", "bf16_moe_backward", "NativeMoEPlan", "PeerMoEPlan", "PersistentMoEPlan", "CollectiveFusedMoEPlan", "DeepEPMoEPlan", "native_moe"]
