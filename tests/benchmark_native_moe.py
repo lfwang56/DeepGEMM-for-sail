@@ -38,7 +38,7 @@ class ConfiguredCollectivePlan(NativeMoEPlan):
 
     def _gemm(self, a, weight, output, name, prequantized=False):
         bn, bk, wm, wn, stages = self.benchmark_gemm_config
-        configs = (dg.get_num_sms(), 128, bn, bk, wm, wn, stages, (0, 0, 0))
+        configs = (dg.get_num_sms(), self.block_m, bn, bk, wm, wn, stages, (0, 0, 0))
         dg.m_grouped_bf16_gemm_nt_nopad(a, weight, output, self.group_ids,
                                        m_rows=self.lengths, configs=configs)
 
@@ -101,6 +101,7 @@ def main():
     parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--ring-rows", type=int)
+    parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -114,6 +115,10 @@ def main():
         parser.error("Gloo metadata groups currently support only --backend deepep")
     if args.ring_rows is not None and args.backend not in ("peer", "deepep", "deepep_peer"):
         parser.error("routed-row windows require peer or DeepEP transports")
+    if args.block_m != 128 and (args.compute != "bf16" or args.backend in ("persistent", "collective_fused", "collective_both", "all")):
+        parser.error("BM256 requires BF16 peer/DeepEP or a configured collective control")
+    if args.block_m == 256 and args.backend in ("collective", "both") and args.collective_gemm_config is None:
+        args.collective_gemm_config = [256, 64, 64, 64, 2]
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
     if args.fp8_ablation and (args.backend != "collective" or args.compute != "fp8"):
@@ -232,6 +237,7 @@ def main():
                 if args.gemm_config:
                     options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
             options["fast_weight_transpose"] = args.fast_weight_transpose
+            options["block_m"] = args.block_m
             if args.ring_rows is not None:
                 options["ring_rows"] = args.ring_rows
             options.update(controls)
@@ -350,6 +356,7 @@ def main():
                     "peer_expert_local_grad": getattr(plan, "expert_local_grad", None) if backend == "peer" else None,
                     "ring_rows_requested": args.ring_rows,
                     "packed_ring_rows": plan.rows,
+                    "block_m": plan.block_m,
                     "full_routed_row_capacity": plan.full_row_capacity,
                     "route_window_count": getattr(plan, "route_window_count", 1),
                     "pipeline_statistics_last_fc1": (plan.pipeline_statistics.cpu().tolist()

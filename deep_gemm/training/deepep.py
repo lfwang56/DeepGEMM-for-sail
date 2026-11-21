@@ -31,6 +31,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
             raise ValueError("DeepEP routed-row windows require topk<=32 and an int32-bounded receive matrix")
         self.active_pointwise = self.vectorized_routes = True
         self.gemm_configs = gemm_configs or {}
+        if self.block_m == 256 and not self.gemm_configs:
+            self.gemm_configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
         if type(comm_sms) is not int or comm_sms < 2 or comm_sms % 2:
             raise ValueError("DeepEP communication CU count must be an even integer >=2")
         self.comm_sms = comm_sms
@@ -80,7 +82,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
     def _gemm(self, a, weight, output, name, prequantized=False):
         role = {"w1": "fc1", "w2": "fc2", "w2_t": "dhidden", "w1_t": "dx"}[name]
         config = self.gemm_configs.get(role)
-        options = {} if config is None else {"configs": (dg.get_num_sms(), 128, *config, (0, 0, 0))}
+        options = {} if config is None else {"configs": (dg.get_num_sms(), self.block_m, *config, (0, 0, 0))}
         dg.m_grouped_bf16_gemm_nt_nopad(a, weight, output, self.group_ids,
                                        m_rows=self.lengths, **options)
 

@@ -34,13 +34,16 @@ class NativeMoEPlan:
                  chunk_tokens=128, compute="bf16", group=None, device=None,
                  check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
                  active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True,
-                 packed_rows=None):
+                 packed_rows=None, block_m=128):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
             raise ValueError("invalid expert, top-k or token capacity")
         if compute not in ("bf16", "fp8"):
             raise ValueError("compute must be 'bf16' or 'fp8'")
+        if type(block_m) is not int or block_m not in (128, 256) or (block_m != 128 and compute != "bf16"):
+            raise ValueError("block_m must be128, or256 for BF16")
+        self.block_m = block_m
         if m_schedule not in ("nopad", "contiguous"):
             raise ValueError("m_schedule must be 'nopad' or 'contiguous'")
         if not isinstance(fuse_activation_quant, bool):
@@ -69,7 +72,7 @@ class NativeMoEPlan:
         if not isinstance(fast_weight_transpose, bool):
             raise TypeError("fast_weight_transpose must be bool")
         self.fast_weight_transpose = fast_weight_transpose
-        self.alignment = math.lcm(128, dg.get_m_alignment_for_contiguous_layout())
+        self.alignment = math.lcm(block_m, dg.get_m_alignment_for_contiguous_layout())
         self.routes = self.size * chunk_tokens * topk
         # Sum ceil(count_e/alignment)*alignment <= routes + E*(alignment-1).
         self.full_row_capacity = math.ceil((self.routes + local_experts * (self.alignment - 1)) / self.alignment) * self.alignment
@@ -94,7 +97,7 @@ class NativeMoEPlan:
             if self.vectorized_routes:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                           recipe, self.transport, m_schedule, self.rows)
+                           recipe, self.transport, m_schedule, self.rows, block_m)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):

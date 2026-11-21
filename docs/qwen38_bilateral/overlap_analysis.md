@@ -69,7 +69,7 @@ overlap. Fresh uninstrumented controls are required. The first such rerun
 finished all32 ranks but foreign GPU work appeared on227 and223; exclude that
 entire phase's timings and move the next run to an idle domain window.
 
-## Next candidate
+## Resident pipeline follow-up (completed)
 
 Opt-in resident tile pipeline: reserve communication CTAs, acquire/release one
 flag per input M tile, and feed local AIU GEMM loads immediately when each tile
@@ -84,3 +84,44 @@ by summing CTA cycles or treating clock64 values across CUs as synchronized.
 Artifacts in the campaign workspace: outputs/qwen38/overlap-decomposition.json,
 work/reference/qwen38-{deepep,unfused,iter10}-profile.sqlite, and the replayable
 work/analyze-moe-overlap.py. Profile runs are diagnostic, not candidate timing.
+
+
+## Routed-row windows and larger source chunks (iteration18)
+
+The source-token dispatch chunk is no longer also the physical local GEMM
+capacity. Global routing metadata covers the worst skew, while a65536-row
+local activation ring processes every routed row in GPU-selected windows.
+This permits EP32 C4096 at H8192 without overflowing the existing int32
+physical-matrix indexing. Independent all-element FP32 extreme-skew checks
+passed on every rank for both DeepEP and peer paths, including all1,310,720
+routes directed at one expert. No token or route is dropped.
+
+Clean uninstrumented max-rank event medians at T4096: old C768 DeepEP164.589ms,
+peer140.078ms; C4096/S65536 DeepEP129.608ms, peer112.326ms. A matched explicit
+peer-copy control is113.331ms. The net bilateral speedup over equally tuned
+DeepEP is1.154x; the difference from explicit peer copy is only0.9%. The
+larger old-baseline ratio includes source chunking, fewer repeated FP32
+weight-gradient updates and other scheduling changes, so is not pure overlap.
+
+The new fused rank0 Asys trace has112.259ms kernel union: local GEMMs56.547ms,
+mixed GEMM+peer traffic33.852ms, expert-gradient communication/pointwise4.701ms,
+rank barriers4.905ms, other routing/activation/copies/zeroing9.673ms, weight
+transpose2.581ms. DW1 is10.862ms and DW2 is5.669ms, down from22.076/11.160ms
+in the old small-source-chunk reference. Standalone-kernel communication/
+compute intersection remains0ms. Internal mixed-kernel overlap has not yet
+been measured directly; mixed duration is not pure compute time. Matching
+large-chunk DeepEP and explicit-copy traces are being collected before
+reporting a new communication fraction.
+
+Public-text full-model validation is complete for this recipe: a57.8M MoE LM,
+2000steps, three paired seeds, full111539-token validation. Matched initial
+states and all train/eval node audits passed. BF16 native mean loss1.589085,
+peer1.588399 (relative mean difference-0.0431%). This is small-model numerical
+quality evidence, not full2.4T-model convergence or a statistical superiority
+claim. Raw concatenated JSON logging was decoded with JSONDecoder, preserving
+both rank-start records.
+
+Local evidence: outputs/qwen38/iter18-routed-row-window-controls.json,
+outputs/qwen38/ep32-route-window-skew-c4096-reference.json,
+outputs/qwen38/iter18-fused-overlap-decomposition.json and
+outputs/qwen38/public-text-lm-window18-paired.json.

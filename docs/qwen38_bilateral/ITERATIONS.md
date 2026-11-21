@@ -2162,3 +2162,48 @@ Observed means: Native1.589084658165, peer1.588399054513.
 Next: profile large-source compute and weight reuse, then tune matched BM256
 compute/metadata alignment and direct-return vector stores. Keep scopes and
 baseline settings explicit; do not count mixed kernels as pure compute.
+
+
+## Iteration19: BM256 compute tiles and matching routing alignment
+
+Hypothesis: larger M tiles reduce repeated weight reads. Add opt-in block_m128|256
+to native, DeepEP and peer paths. Metadata/ring alignment follows the tile, active
+pointwise operations use the actual block height, and incompatible resident/FFN
+paths reject BM256. GPU parameter layouts are unchanged. Both comparison paths
+use BN256/BK64/WM64/WN64/S2 and the same BM; no asymmetric baseline tuning.
+Native extension SHA256: c47526a2f9d2e9fd55bcb0f4dafdf063282c7538c2827bd7b55466e30499e813.
+Chip ZW-M890P/ppu0015, runtime wlf_sgl_2.2 Torch2.11; native build Torch2.10.
+
+Correctness: full H8192/I2048/E16/K10 FP32 masked/skewed comparisons passed;
+BM128/BM256 changing-route graph equivalence has exact Y/DX/dScore and DW
+relative RMS about4e-7. Two-rank DeepEP full FP32 graphs passed all patterns.
+Actual EP32 C4096/S65536 all-to-expert0 validates every Y/DX/DW/dScore element
+on both backends;64 records and four host audits pass. No routed rows omitted.
+
+Uninstrumented graph benchmarks, five repeats of20 iterations after5 warmups,
+max-rank CUDA events; complete FWD and rematerialized BWD with FP32 DW zero/
+accumulation, no optimizer. EP32 uses512 total routed experts, EP8 proxy128.
+
+|Group|Phase|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|bm128-step|109.822156|112.045581|
+|ep8|bm256-backward|72.869116|73.836353|
+|ep8|bm256-forward|27.513718|29.567972|
+|ep8|bm256-step|100.379224|103.553369|
+|ep32|bm128-step-attempt0|129.651379|112.240784|
+|ep32|bm256-backward|84.300879|75.017804|
+|ep32|bm256-forward|35.694443|29.861374|
+|ep32|bm256-step|120.135889|104.716187|
+
+All eight phases passed all rank exits and exclusive-node audits. BM256 reduces
+actual EP32 peer step from112.241ms to104.716ms, while equally tuned DeepEP
+falls from129.651ms to120.136ms. This is compute/weight-reuse improvement; the
+net DeepEP/peer ratio is about1.147x, still below the2–3x target. EP8 peer stays
+slower than DeepEP. Do not claim a new overlap ratio from this tile change.
+
+Artifacts: outputs/qwen38/iter19-bm256-controls.json and
+outputs/qwen38/ep32-bm256-c4096-reference.json. Iter18's matched DeepEP profile
+first attempt rejected invalid CLI flags before timing; retry waits for a
+fourth idle SN1 host. No result is inferred from that failed diagnostic.
+Next: improve peer-return store throughput and profile the matched large-chunk
+DeepEP/explicit controls; assess larger compute tiles and Wgrad TSM contention.

@@ -51,9 +51,14 @@ def main():
     parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--ring-rows", type=int)
+    parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
+    if options.block_m == 256:
+        if options.backend not in ("native", "peer") or options.compute != "bf16":
+            parser.error("BM256 currently requires BF16 native/peer")
+        options.gemm_config = options.gemm_config or [256, 64, 64, 64, 2]
     if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend not in ("peer", "collective_fused"):
         parser.error("peer switches require --backend peer")
     torch.cuda.set_device(0)
@@ -111,6 +116,7 @@ def main():
         extra.update(fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
     extra["fast_weight_transpose"] = options.fast_weight_transpose
+    extra["block_m"] = options.block_m
     if options.reuse_packed_dy:
         if options.backend != "peer":
             parser.error("packed gradient reuse requires peer backend")
@@ -166,6 +172,7 @@ def main():
                               ffn_fusion=options.ffn_fusion,
                               expert_local_grad=options.expert_local_grad,
                               ring_rows=options.ring_rows,
+                              block_m=plan.block_m,
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,

@@ -33,6 +33,10 @@ class PeerMoEPlan(NativeMoEPlan):
                  pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
                  expert_local_grad=False, ring_rows=None, **kwargs):
+        block_m = kwargs.get("block_m", 128)
+        if block_m != 128 and (self.transport != "peer" or ffn_fusion or dispatch_pipeline
+                                or return_pipeline or inline_dispatch or staged_return or dispatch_cache_n):
+            raise ValueError("BM256 currently supports direct/producer peer GEMMs without resident/cache/staging modes")
         if "packed_rows" in kwargs:
             raise ValueError("use ring_rows to enable routed-row scheduling")
         if ring_rows is not None:
@@ -140,6 +144,8 @@ class PeerMoEPlan(NativeMoEPlan):
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
                 raise ValueError("EP ranks must agree on the peer gradient and return protocol")
+        if gemm_configs is None and self.block_m == 256:
+            gemm_configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
             raise ValueError("unknown peer GEMM configuration role")
@@ -202,7 +208,7 @@ class PeerMoEPlan(NativeMoEPlan):
             delattr(self, name)
         self.source_rows = torch.empty(self.rows, device=self.device, dtype=torch.int32)
         self.identity_rows = torch.arange(self.rows, device=self.device, dtype=torch.int32)
-        self.work_info = torch.empty((self.rows // 128, 4), device=self.device, dtype=torch.int32)
+        self.work_info = torch.empty((self.rows // self.block_m, 4), device=self.device, dtype=torch.int32)
         self.num_blocks = torch.zeros(1, device=self.device, dtype=torch.int32)
         self.buffers.update(source_rows=self.source_rows, identity_rows=self.identity_rows,
                             work_info=self.work_info, num_blocks=self.num_blocks)
@@ -270,6 +276,7 @@ class PeerMoEPlan(NativeMoEPlan):
             0 if dispatch_pipeline and self.inline_dispatch else self.pipeline_comm_ctas,
             self.pipeline_serialize,
             self.cache_return_addresses if write else False,
+            self.block_m,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
@@ -340,7 +347,7 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(1, [self.permutation, self.source_rows], [self.rows, self.size * self.chunk_tokens], True)
         _peer(2, [self.route_experts, self.route_rows, self.offsets, self.permutation, self.source_rows, self.status],
               [self.routes, self.rows, self.k], True)
-        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128], True)
+        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m], True)
         _peer(4, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size], True)
         if not self.fuse_dispatch:
@@ -392,7 +399,7 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.routes, capacity, self.k])
         if self.ring_rows is not None:
             return
-        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
+        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m])
 
     def _chunk_forward(self, w1, w2, pack_input=False, return_output=True):
         if self.ring_rows is not None:
@@ -407,7 +414,7 @@ class PeerMoEPlan(NativeMoEPlan):
 
     def _set_window(self, start):
         set_route_window(self, start)
-        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
+        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m])
 
     def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True):
         if self.ffn_fusion:
@@ -440,17 +447,17 @@ class PeerMoEPlan(NativeMoEPlan):
     def _scatter_peer(self, destination, compile_only=False):
         _peer(12 if self.vectorized_copy else 6,
               [self.packed_output, self.permutation, self.pointer_tables[destination], self.status, self.num_blocks],
-              [self.rows, self.h, self.chunk_tokens * self.k, self.size], compile_only)
+              [self.rows, self.h, self.chunk_tokens * self.k, self.size, self.block_m], compile_only)
 
     def _stage_input(self, compile_only=False):
         _peer(11 if self.vectorized_copy else 7,
               [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
-              [self.rows, self.h, self.chunk_tokens, self.k, self.size], compile_only)
+              [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
 
     def _activation(self, backward=False, compile_only=False):
         if self.active_rows:
             _peer(9 if backward else 8, [self.gate_up, self.hidden, self.num_blocks, self.status],
-                  [self.rows, self.i], compile_only)
+                  [self.rows, self.i, self.block_m], compile_only)
         elif not compile_only:
             tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
             _launch(8 if backward else 7, tensors, [self.rows, self.i])
@@ -461,7 +468,8 @@ class PeerMoEPlan(NativeMoEPlan):
             tensors.append(self.num_blocks)
         operation = (11 if self.vectorized_copy else 7) if self.active_rows else 4
         _peer(operation, tensors,
-              [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size], compile_only)
+              [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size]
+              + ([self.block_m] if self.active_rows else []), compile_only)
 
     def _local_gradients(self, dy, scores, dscores, start, compile_only=False):
         _peer(10, [self.local_values, dy, scores, dscores, self.local_dy],
@@ -471,7 +479,7 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(13, [self.pointer_tables["raw_dy"], self.pointer_tables["raw_scores"],
                    self.pointer_tables["local_dscores"], self.permutation,
                    self.packed_output, self.packed_dy, self.num_blocks, self.status],
-              [self.rows, self.h, self.chunk_tokens, self.k, self.size], compile_only)
+              [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
 
     def _publish_gradient_chunk(self, dy, scores, start):
         count = max(0, min(self.chunk_tokens, dy.shape[0] - start))

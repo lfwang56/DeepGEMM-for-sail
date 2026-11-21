@@ -65,7 +65,9 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             blocks = int64_t(get_num_sms()) * 2;
             break;
         case PeerOperation::ExpertLocalGradients:
-            schema(8, 5);
+            DG_HOST_ASSERT(dims.size() == 5 || dims.size() == 6);
+            schema(8, dims.size());
+            if (dims.size() == 6) DG_HOST_ASSERT(dims[5] == 128 || dims[5] == 256);
             DG_HOST_ASSERT(dims[1] > 0 && dims[1] % 8 == 0 && dims[2] > 0 && dims[3] > 0
                            && dims[4] > 0 && dims[4] <= 64);
             expect(0, dims[4], i64); expect(1, dims[4], i64); expect(2, dims[4], i64);
@@ -116,7 +118,9 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             break;
         case PeerOperation::Scatter:
         case PeerOperation::ScatterVector:
-            schema(5, 4);
+            DG_HOST_ASSERT(dims.size() == 4 || dims.size() == 5);
+            schema(5, dims.size());
+            if (dims.size() == 5) DG_HOST_ASSERT(dims[4] == 128 || dims[4] == 256);
             DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[3] > 0 && dims[3] <= 64);
             expect(0, dims[0] * dims[1], bf); expect(1, dims[0], i32);
             expect(2, dims[3], i64); expect(3, 1, i32);
@@ -128,7 +132,9 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             break;
         case PeerOperation::PackActive:
         case PeerOperation::PackActiveVector:
-            schema(5, 5);
+            DG_HOST_ASSERT(dims.size() == 5 || dims.size() == 6);
+            schema(5, dims.size());
+            if (dims.size() == 6) DG_HOST_ASSERT(dims[5] == 128 || dims[5] == 256);
             DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[3] > 0 && dims[4] > 0 && dims[4] <= 64);
             expect(0, dims[4], i64); expect(1, dims[0], i32);
             expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
@@ -139,7 +145,9 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             break;
         case PeerOperation::ActivationActive:
         case PeerOperation::ActivationBackwardActive:
-            schema(4, 2);
+            DG_HOST_ASSERT(dims.size() == 2 || dims.size() == 3);
+            schema(4, dims.size());
+            if (dims.size() == 3) DG_HOST_ASSERT(dims[2] == 128 || dims[2] == 256);
             DG_HOST_ASSERT(dims[0] >= 0 && dims[1] > 0);
             expect(0, dims[0] * 2 * dims[1], bf); expect(1, dims[0] * dims[1], bf);
             expect(2, 1, i32); expect(3, 1, i32);
@@ -184,6 +192,7 @@ public:
         PeerGemmParams params;
         PeerDispatchPipeline pipeline{};
         bool cache_return_addresses = false;
+        int block_m = 128;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -204,6 +213,7 @@ public:
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += "_owned_dispatch";
         if (args.cache_return_addresses) name += "_cached_return";
+        if (args.block_m != 128) name += fmt::format("_bm{}", args.block_m);
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -213,12 +223,12 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
     >(params{});
 }}
 )", args.threads, name(args),
        args.pipeline.ready ? ", const deep_gemm::training::PeerDispatchPipeline pipeline" : "",
-       args.n, args.k, args.groups, args.block_n, args.block_k,
+       args.n, args.k, args.groups, args.block_m, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
        args.activation_backward ? "true" : "false", args.dispatch_cache_n,
@@ -252,7 +262,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       const c10::optional<torch::Tensor>& pipeline_ready,
                       const c10::optional<torch::Tensor>& pipeline_status,
                       const c10::optional<torch::Tensor>& pipeline_statistics,
-                      int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses) {
+                      int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses, int block_m = 128) {
+    DG_HOST_ASSERT(block_m == 128 || block_m == 256);
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -263,17 +274,18 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(a.numel() <= INT32_MAX && weight.numel() <= INT32_MAX && out.numel() <= INT32_MAX);
     const auto [m, k] = get_shape<2>(a);
     const auto [groups, n, k_] = get_shape<3>(weight);
-    DG_HOST_ASSERT(k == k_ && out.size(0) == m && out.size(1) == n && m > 0 && m % 128 == 0);
+    DG_HOST_ASSERT(k == k_ && out.size(0) == m && out.size(1) == n && m > 0 && m % block_m == 0);
     DG_HOST_ASSERT(n > 0 && n % 128 == 0 && k > 0 && k % 128 == 0 && groups > 0);
     DG_HOST_ASSERT(source_peers.dim() == 1 && source_peers.numel() > 0 && source_peers.numel() <= 64);
     DG_HOST_ASSERT(source_peers.scalar_type() == torch::kInt64 && destination_peers.scalar_type() == torch::kInt64);
     DG_HOST_ASSERT(source_peers.sizes() == destination_peers.sizes());
     DG_HOST_ASSERT(input_rows.numel() == m && permutation.numel() == m);
     DG_HOST_ASSERT(input_rows.scalar_type() == torch::kInt32 && permutation.scalar_type() == torch::kInt32);
-    DG_HOST_ASSERT(work_info.sizes() == at::IntArrayRef({m / 128, 4}) && work_info.scalar_type() == torch::kInt32);
+    DG_HOST_ASSERT(work_info.sizes() == at::IntArrayRef({m / block_m, 4}) && work_info.scalar_type() == torch::kInt32);
     DG_HOST_ASSERT(num_blocks.numel() == 1 && num_blocks.scalar_type() == torch::kInt32);
     DG_HOST_ASSERT(source_rows_per_rank > 0 && destination_rows_per_rank > 0);
     DG_HOST_ASSERT(!pack_input || read_peer);
+    DG_HOST_ASSERT(block_m == 128 || (!pipeline_ready.has_value() && !dispatch_cache_n && !staged_return));
     DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
     const int ranks = source_peers.numel();
     DG_HOST_ASSERT(int64_t(ranks) * source_rows_per_rank <= INT32_MAX);
@@ -333,9 +345,9 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(!local_input_aiu || (!read_peer && !write_peer && first_n_tile > 0));
     DG_HOST_ASSERT(!producer_input_aiu || (read_peer && !write_peer && pack_input
                    && first_n_tile == 0 && num_n_tiles == 1 && dispatch_cache_n == 0));
-    const int threads = (128 / wm) * (bn / wn) * 32;
+    const int threads = (block_m / wm) * (bn / wn) * 32;
     DG_HOST_ASSERT(threads >= 32 && threads <= 1024);
-    const int smem = gemm_smem_total_size(2, stages, 128, bn, bk);
+    const int smem = gemm_smem_total_size(2, stages, block_m, bn, bk);
     DG_HOST_ASSERT(smem <= 256 * 1024);
     PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(), dispatch_cache_n,
                               dispatch_cache_aiu,
@@ -348,6 +360,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     DG_HOST_ASSERT(!cache_return_addresses || (write_peer && !staged_return && !pipeline_ready.has_value()));
     args.cache_return_addresses = cache_return_addresses;
+    args.block_m = block_m;
     if (pipeline_ready.has_value()) {
         DG_HOST_ASSERT(!read_peer && !activation_gate_up.has_value()
                        && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
@@ -397,9 +410,9 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
         std::printf("[PeerTraining_BF16:]\n");
         std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
                     int(groups), int(n), int(k), read_peer, write_peer, int(m));
-        std::printf("tile:[128,%d,%d], warp:[%d,%d], stages:%d, threads:%d, "
+        std::printf("tile:[%d,%d,%d], warp:[%d,%d], stages:%d, threads:%d, "
                     "dynamic_smem_bytes:%d, blocks_per_cu:%d, grid:%u\n",
-                    bn, bk, wm, wn, stages, threads, smem, occupancy, args.launch_args.grid_dim.x);
+                    block_m, bn, bk, wm, wn, stages, threads, smem, occupancy, args.launch_args.grid_dim.x);
     }
     if (!compile_only) PeerGemmRuntime::launch(runtime, args);
     return int(args.launch_args.grid_dim.x);
@@ -421,7 +434,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("local_input_aiu") = false, py::arg("producer_input_aiu") = false,
           py::arg("pipeline_ready") = py::none(), py::arg("pipeline_status") = py::none(),
           py::arg("pipeline_statistics") = py::none(), py::arg("pipeline_comm_ctas") = 2,
-          py::arg("pipeline_serialize") = false, py::arg("cache_return_addresses") = false);
+          py::arg("pipeline_serialize") = false, py::arg("cache_return_addresses") = false,
+          py::arg("block_m") = 128);
 }
 
 }  // namespace deep_gemm::training

@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--ffn-fusion", action="store_true")
     parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--ring-rows", type=int)
+    parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -92,7 +93,7 @@ def main():
     torch.cuda.empty_cache()
     configs = {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     for backend in args.backends:
-        options = dict(gemm_configs=configs)
+        options = dict(gemm_configs=configs, block_m=args.block_m)
         if args.ring_rows is not None:
             options["ring_rows"] = args.ring_rows
         if backend == "peer":
@@ -159,6 +160,7 @@ def main():
             ffn_fusion=args.ffn_fusion if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,
             ring_rows=args.ring_rows, last_window_rows=int(plan.current_rows),
+            block_m=plan.block_m,
             full_routed_row_capacity=plan.full_row_capacity,
             route_window_count=getattr(plan, "route_window_count", 1),
             gemm_config=args.gemm_config,

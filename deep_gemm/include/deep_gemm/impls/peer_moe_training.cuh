@@ -52,7 +52,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
         // here, produce the mandatory BF16 packed DY and return one FP32
         // derivative per unique source route. Valid zero scores still have a
         // score derivative; padded routes produce zero packed gradients.
-        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 6)[0]) * 128;
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 6)[0]) * (p.dim[5] ? p.dim[5] : 128);
         if (rows < 0 || rows > p.dim[0]) {
             if (index == 0) atomicOr(peer_pointer<int32_t>(p, 7), 2);
             return;
@@ -161,7 +161,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
         // Explicit dispatch control: stage only the current padded rows. Avoid
         // making the unfused control pay for the worst-skew ring capacity.
         // Peer pointers, permutation, output, status, work count.
-        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * 128;
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * (p.dim[5] ? p.dim[5] : 128);
         constexpr int elements = Op == PeerOperation::PackActiveVector ? 8 : 1;
         const int64_t width = p.dim[1] / elements;
         if (rows < 0 || rows > p.dim[0]) {
@@ -184,7 +184,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
     } else if constexpr (Op == PeerOperation::ActivationActive || Op == PeerOperation::ActivationBackwardActive) {
         // Both matrices keep their physical worst-skew capacity. Only rows
         // referenced by the GPU work list are consumed by the expert GEMMs.
-        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 2)[0]) * 128;
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 2)[0]) * (p.dim[2] ? p.dim[2] : 128);
         if (rows < 0 || rows > p.dim[0]) {
             if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
         } else for (int64_t position = index; position < rows * p.dim[1];
@@ -233,7 +233,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
     } else if constexpr (Op == PeerOperation::Scatter || Op == PeerOperation::ScatterVector) {
         // Packed result, permutation, destination pointers, status, work count.
         // dims: capacity, H, destination rows per rank, P.
-        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * 128;
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * (p.dim[4] ? p.dim[4] : 128);
         constexpr int elements = Op == PeerOperation::ScatterVector ? 8 : 1;
         using Value = std::conditional_t<elements == 8, uint4, __ppu_bfloat16>;
         const int64_t width = p.dim[1] / elements;
