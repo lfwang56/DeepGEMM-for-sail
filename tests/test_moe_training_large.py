@@ -61,6 +61,8 @@ def main():
     parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--dag-shared-pool", action="store_true")
     parser.add_argument("--dag-input-prefetch", action="store_true")
+    parser.add_argument("--dag-backward", action="store_true")
+    parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
@@ -121,7 +123,8 @@ def main():
         extra.update(dag_fusion=options.dag_fusion, dag_input_ctas=options.dag_input_ctas,
                      dag_return_ctas=options.dag_return_ctas, dag_serialize=options.dag_serialize,
                      dag_trace=options.dag_trace, dag_shared_pool=options.dag_shared_pool,
-                     dag_input_prefetch=options.dag_input_prefetch)
+                     dag_input_prefetch=options.dag_input_prefetch,
+                     dag_backward=options.dag_backward, dag_direct_return=options.dag_direct_return)
         extra["ffn_fusion"] = options.ffn_fusion
         extra["expert_local_grad"] = options.expert_local_grad
         if options.ring_rows is not None:
@@ -202,6 +205,8 @@ def main():
                               fuse_fc1_activation=getattr(plan, "fuse_fc1_activation", None),
                               dag_shared_pool=getattr(plan, "dag_shared_pool", None),
                               dag_input_prefetch=getattr(plan, "dag_input_prefetch", None),
+                              dag_backward=getattr(plan, "dag_backward", None),
+                              dag_direct_return=getattr(plan, "dag_direct_return", None),
                               dag_serialized_control=getattr(plan, "dag_serialize", None),
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,

@@ -30,12 +30,62 @@ __device__ __forceinline__ bool dag_wait(
 
 template <uint32_t N, uint32_t K, uint32_t E, uint32_t BM, uint32_t BN,
           uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
-          bool Fc1Activation = false, bool KeepGateUp = true>
+          bool Fc1Activation = false, bool KeepGateUp = true,
+          bool BackwardActivation = false, bool PeerWrite = false>
 __device__ __forceinline__ void dag_gemm(const PeerGemmParams& p, uint32_t m, uint32_t n) {
     training_bf16_peer_gemm_impl<cutlass::bfloat16_t, GemmType::MGroupedFused,
-        N, K, E, BM, BN, BK, WM, WN, Threads, Stages, false, false,
-        false, false, 0, false, false, 0, 0, true, false,
-        false, false, false, true, 4, Fc1Activation, Fc1Activation, KeepGateUp>(p, {}, m, n);
+        N, K, E, BM, BN, BK, WM, WN, Threads, Stages, false, PeerWrite,
+        false, BackwardActivation, 0, false, false, 0, 0, true, false,
+        false, false, false, true, 4, Fc1Activation || BackwardActivation,
+        Fc1Activation, KeepGateUp>(p, {}, m, n);
+}
+
+// Same vector, accumulation and BF16 rounding order as ExpertLocalGradients.
+// The input task consumes this M tile's replayed Y before publishing dHidden;
+// later DX jobs may then reuse the same local output workspace safely.
+template <uint32_t H, uint32_t BM, uint32_t Threads>
+__device__ __forceinline__ void dag_gradient_input(const PeerFfnDagParams& p, uint32_t base) {
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    constexpr uint32_t width = H / 8, warps = Threads / 32;
+    const uint32_t stride = p.ffn.first.destination_rows_per_rank;
+    const uint32_t topk = stride / p.ffn.first.source_rows_per_rank;
+    const auto* score_peers = reinterpret_cast<const uint64_t*>(p.ffn.first.dispatch_scratch);
+    const auto* dscore_peers = reinterpret_cast<const uint64_t*>(p.ffn.second.dispatch_scratch);
+    auto* packed_dy = reinterpret_cast<uint4*>(const_cast<void*>(p.ffn.first.gemm.a_ptr));
+    const auto* packed_y = reinterpret_cast<const uint4*>(p.ffn.second.gemm.c_ptr);
+    for (uint32_t local_row = warp; local_row < BM; local_row += warps) {
+        const uint32_t row = base + local_row;
+        const int route = __ldg(p.ffn.first.permutation + row);
+        const bool valid = route >= 0 && uint64_t(route) < uint64_t(p.ffn.first.num_ranks) * stride;
+        if (route >= 0 && !valid && lane == 0) atomicOr(p.global_status, 2u);
+        const uint32_t owner = valid ? uint32_t(route) / stride : 0;
+        const uint32_t local_route = valid ? uint32_t(route) % stride : 0;
+        const auto* dy = valid ? reinterpret_cast<const uint4*>(__ldg(p.ffn.first.source_peers + owner))
+            + uint64_t(local_route / topk) * width : nullptr;
+        const float score = valid ? reinterpret_cast<const float*>(__ldg(score_peers + owner))[local_route] : 0.f;
+        float dot = 0.f;
+        for (uint32_t column = lane; column < width; column += 32) {
+            const uint4 raw_dy = valid ? dy[column] : uint4{};
+            const uint4 raw_y = valid ? packed_y[uint64_t(row) * width + column] : uint4{};
+            const auto* d = reinterpret_cast<const __ppu_bfloat16*>(&raw_dy);
+            const auto* y = reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+            uint4 raw_weighted{};
+            auto* weighted = reinterpret_cast<__ppu_bfloat16*>(&raw_weighted);
+            #pragma unroll
+            for (int j = 0; j < 8; ++j) {
+                const float value = __bfloat162float(d[j]);
+                weighted[j] = __float2bfloat16(value * score);
+                dot += value * __bfloat162float(y[j]);
+            }
+            packed_dy[uint64_t(row) * width + column] = raw_weighted;
+        }
+        #pragma unroll
+        for (int delta = 16; delta; delta >>= 1) dot += __shfl_down_sync(0xffffffffu, dot, delta);
+        if (valid && lane == 0)
+            reinterpret_cast<float*>(__ldg(dscore_peers + owner))[local_route] = dot;
+    }
+    __threadfence();
+    __syncthreads();
 }
 
 // One CTA records all time samples using its own clock. The samples describe
@@ -281,14 +331,16 @@ __device__ __forceinline__ bool dag_claim_queue(
 // Workers never claim FC1 work whose input still needs an unscheduled producer.
 template <uint32_t H, uint32_t I, uint32_t E, uint32_t BM, uint32_t BN,
           uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
-          bool Return, bool Trace, bool Fc1Activation = false, bool InputPrefetch = false>
+          bool Return, bool Trace, bool Fc1Activation = false, bool InputPrefetch = false,
+          bool Backward = false, bool DirectReturn = false>
 __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams p) {
     static_assert(H % BN == 0 && I % BN == 0);
+    static_assert(!Backward || (Return && !Fc1Activation));
     __shared__ uint32_t entry_status;
     if (threadIdx.x == 0) entry_status = tix::ld_acq(p.global_status);
     __syncthreads();
     if (entry_status) return;
-    constexpr uint32_t pairs = I / BN, n1 = 2 * pairs, n2 = H / BN;
+    constexpr uint32_t pairs = I / BN, n1 = (Backward ? 1 : 2) * pairs, n2 = H / BN;
     const uint32_t mtiles = __ldg(p.ffn.first.gemm.aligned_num_m_blocks);
     const uint32_t max_m = p.ffn.first.gemm.shape_m / BM;
     const uint32_t fc2tasks = mtiles * n2;
@@ -309,7 +361,7 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
                 && (!Return || tix::ld_acq(p.state + DoneReturn) == fc2tasks);
             if (done || tix::ld_acq(p.state + DagError)) kind = 5;
             else {
-                if constexpr (Return) {
+                if constexpr (Return && !DirectReturn) {
                     if ((!p.serialize || tix::ld_acq(p.state + DoneFC2) == fc2tasks)
                             && dag_claim_queue(p.state, HeadReturn, TailReturn, task)) kind = 4;
                 }
@@ -351,6 +403,9 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
             dag_activity<Trace>(p.state, ActiveInput, true);
             const uint4 record = __ldg(records + tile);
             const uint32_t base = record.w + (tile - record.z) * BM;
+            if constexpr (Backward) {
+                dag_gradient_input<H, BM, Threads>(p, base);
+            } else {
             for (uint32_t row = threadIdx.x; row < BM; row += Threads) {
                 const uint32_t source = __ldg(p.ffn.first.gemm.sorted_token_ids + base + row);
                 uint64_t address = 0;
@@ -363,6 +418,7 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
             }
             __syncthreads();
             pack_producer_input_rows<BM, H, Threads>(addresses, p.ffn.first, base);
+            }
             dag_activity<Trace>(p.state, ActiveInput, false);
             if (threadIdx.x == 0) {
                 tix::red_add_rel(p.input_ready + tile, 1u);
@@ -376,12 +432,12 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
             const uint32_t item = tix::ld_acq(fc1_queue + task) - 1;
             const uint32_t tile = item / n1, column = item % n1, pair = column % pairs;
             dag_activity<Trace>(p.state, ActiveFC1, true);
-            dag_gemm<2*I, H, E, BM, BN, BK, WM, WN, Threads, Stages,
-                     Fc1Activation, !Return>(p.ffn.first, tile, column);
+            dag_gemm<Backward ? I : 2*I, H, E, BM, BN, BK, WM, WN, Threads, Stages,
+                     Fc1Activation, !Return, Backward>(p.ffn.first, tile, column);
             __threadfence();
             __syncthreads();
             dag_activity<Trace>(p.state, ActiveFC1, false);
-            if constexpr (Fc1Activation) {
+            if constexpr (Fc1Activation || Backward) {
                 // Every G8 FC1 tile already writes its compact hidden slice.
                 // Publish FC2 only after all slices are visible. Replay keeps
                 // BF16 gate/up as well, for the later activation gradient.
@@ -426,19 +482,27 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
             if (!dag_wait(p, p.queue + task, 1u)) break;
             const uint32_t item = tix::ld_acq(p.queue + task) - 1;
             dag_activity<Trace>(p.state, ActiveFC2, true);
-            dag_gemm<H, I, E, BM, BN, BK, WM, WN, Threads, Stages>(p.ffn.second, item / n2, item % n2);
+            dag_gemm<H, Backward ? 2*I : I, E, BM, BN, BK, WM, WN, Threads, Stages,
+                     false, true, false, Return && DirectReturn>(p.ffn.second, item / n2, item % n2);
             __threadfence();
             __syncthreads();
             dag_activity<Trace>(p.state, ActiveFC2, false);
             if (threadIdx.x == 0) {
                 if constexpr (Return) {
+                    if constexpr (DirectReturn) {
+                        // Return traffic is embedded in this GEMM epilogue.
+                        // Do not label its entire span independent communication.
+                        tix::red_add_rel(p.state + DoneReturn, 1u);
+                    } else {
                     tix::red_add_rel(p.output_ready + item, 1u);
                     const uint32_t slot = atomicAdd(p.state + TailReturn, 1u);
                     tix::red_add_rel(return_queue + slot, item + 1);
+                    }
                 }
                 tix::red_add_rel(p.state + DoneFC2, 1u);
             }
         } else if (kind == 4) {
+            if constexpr (Return && !DirectReturn) {
             if (!dag_wait(p, return_queue + task, 1u)) break;
             const uint32_t item = tix::ld_acq(return_queue + task) - 1;
             const uint32_t tile = item / n2, column_base = (item % n2) * BN;
@@ -471,6 +535,7 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
             __syncthreads();
             dag_activity<Trace>(p.state, ActiveReturn, false);
             if (threadIdx.x == 0) tix::red_add_rel(p.state + DoneReturn, 1u);
+            }
         }
         __syncthreads();
     }

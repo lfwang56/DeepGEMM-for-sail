@@ -166,6 +166,9 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
                                     fuse_fc1_activation=options.fuse_fc1_activation,
+                                    dag_fusion=options.dag_fusion, dag_backward=options.dag_backward,
+                                    dag_direct_return=options.dag_direct_return,
+                                    dag_shared_pool=options.dag_fusion or options.dag_backward,
                                     dispatch_cache_n=options.dispatch_cache_n,
                                     dispatch_producer=options.dispatch_producer,
                                     producer_local_aiu=options.producer_local_aiu,
@@ -223,6 +226,9 @@ def main():
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
+    parser.add_argument("--dag-fusion", action="store_true")
+    parser.add_argument("--dag-backward", action="store_true")
+    parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
@@ -238,6 +244,8 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
+    if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend != "peer":
+        parser.error("DAG options require --backend peer")
     if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.expert_local_grad or options.ring_rows is not None) and options.backend != "peer":
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
@@ -268,6 +276,9 @@ def main():
                             producer_input_aiu=options.producer_input_aiu,
                             fuse_activation_backward=options.fuse_activation_backward,
                             fuse_fc1_activation=options.fuse_fc1_activation,
+                            dag_fusion=options.dag_fusion, dag_backward=options.dag_backward,
+                            dag_direct_return=options.dag_direct_return,
+                            dag_shared_pool=options.dag_fusion or options.dag_backward,
                             expert_local_grad=options.expert_local_grad,
                             ring_rows=options.ring_rows,
                             dispatch_producer_tiles=options.dispatch_producer_tiles,

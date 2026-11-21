@@ -35,6 +35,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  expert_local_grad=False, ring_rows=None, return_vector_bytes=4,
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
+                 dag_backward=False, dag_direct_return=False,
                  fuse_fc1_activation=False, **kwargs):
         if not isinstance(fuse_fc1_activation, bool):
             raise TypeError("fuse_fc1_activation must be bool")
@@ -46,7 +47,8 @@ class PeerMoEPlan(NativeMoEPlan):
                                    or dispatch_cache_n or ffn_fusion):
             raise ValueError("FC1 activation fusion requires G8, bilateral fusion and expert-local gradients")
         self.fuse_fc1_activation = fuse_fc1_activation
-        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool, dag_input_prefetch)):
+        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool,
+                                                       dag_input_prefetch, dag_backward, dag_direct_return)):
             raise TypeError("DAG switches must be bool")
         if any(type(value) is not int or value < 1 for value in (dag_input_ctas, dag_return_ctas)):
             raise ValueError("DAG communication CTA counts must be positive integers")
@@ -55,14 +57,22 @@ class PeerMoEPlan(NativeMoEPlan):
                            or inline_dispatch or dispatch_cache_n or staged_return or return_vector_bytes != 4):
             raise ValueError("DAG fusion requires direct bilateral fusion and expert-local gradients without other pipelines")
         self.dag_fusion = dag_fusion
+        if dag_backward and (not g8 or not dag_shared_pool or not expert_local_grad
+                             or not fuse_activation_backward or not fuse_dispatch or not fuse_return
+                             or ring_rows is None or ffn_fusion or dispatch_cache_n or dispatch_pipeline
+                             or return_pipeline or inline_dispatch or staged_return or return_vector_bytes != 4):
+            raise ValueError("backward DAG requires G8 shared-pool routed windows and fused activation gradients")
+        if dag_direct_return and not (dag_shared_pool and (dag_fusion or dag_backward)):
+            raise ValueError("DAG direct return requires an active shared task pool")
+        self.dag_backward, self.dag_direct_return = dag_backward, dag_direct_return
         self.dag_input_ctas, self.dag_return_ctas = dag_input_ctas, dag_return_ctas
         self.dag_serialize, self.dag_trace = dag_serialize, dag_trace
         self.dag_shared_pool = dag_shared_pool
         self.dag_input_prefetch = dag_input_prefetch
         if dag_input_prefetch and not dag_shared_pool:
             raise ValueError("input prefetch credits require the shared DAG task pool")
-        if dag_shared_pool and not dag_fusion:
-            raise ValueError("shared DAG task pools require dag_fusion")
+        if dag_shared_pool and not (dag_fusion or dag_backward):
+            raise ValueError("shared DAG task pools require forward or backward DAG execution")
         if type(return_vector_bytes) is not int or return_vector_bytes not in (4, 8):
             raise ValueError("return_vector_bytes must be 4 or 8")
         if return_vector_bytes != 4 and (not fuse_return or return_pipeline or staged_return or ffn_fusion):
@@ -174,7 +184,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.reuse_packed_dy = reuse_packed_dy and fuse_dispatch
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
         if self.group is not None:
-            recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad)
+            recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
+                      self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
+                      self.dag_input_prefetch, self.dag_serialize)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -252,10 +264,11 @@ class PeerMoEPlan(NativeMoEPlan):
             allocate_route_windows(self)
         self.dag_controls = None
         self._dag_slot = 0
-        if dag_fusion:
-            config = self.gemm_configs.get("fc1", (256, 64, 64, 64, 2))
-            if self.gemm_configs.get("fc2", config) != config:
-                raise ValueError("DAG FC1 and FC2 currently require matching GEMM tiles")
+        if dag_fusion or dag_backward:
+            config = self.gemm_configs.get("fc1" if dag_fusion else "dhidden", (256, 64, 64, 64, 2))
+            roles = (("fc1", "fc2") if dag_fusion else ()) + (("dhidden", "dx") if dag_backward else ())
+            if any(self.gemm_configs.get(role, config) != config for role in roles):
+                raise ValueError("GEMMs in the same DAG plan require matching tiles")
             bn, bk, wm, wn, stages = config
             if bn not in (128, 256) or bk != 64 or wm != 64 or wn != 64 or stages not in (2, 3, 4):
                 raise ValueError("unsupported DAG GEMM tile")
@@ -263,7 +276,9 @@ class PeerMoEPlan(NativeMoEPlan):
                 raise ValueError("DAG hidden and intermediate dimensions must be divisible by BN")
             self.dag_config = config
             tiles, pairs, n2 = self.rows // self.block_m, self.i // bn, self.h // bn
-            self.dag_slots = 2 * math.ceil(self.max_tokens / self.chunk_tokens) * self.route_window_count
+            windows = math.ceil(self.max_tokens / self.chunk_tokens) * self.route_window_count
+            self.dag_forward_slots = windows if dag_fusion else 0
+            self.dag_slots = ((2 if dag_fusion else 0) + (1 if dag_backward else 0)) * windows
             sample_capacity = 8192 if dag_trace else 1
             descriptions = (("state", (18,), torch.int32),
                             ("input_ready", (tiles * (1 + 2*pairs if dag_shared_pool else 1),), torch.int32),
@@ -408,6 +423,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.dag_fusion:
             self._dag(w1, w2, return_output=True, compile_only=True)
             self._dag(w1, w2, return_output=False, compile_only=True)
+        if self.dag_backward:
+            self._dag(self.w2_t, self.w1_t, backward=True, compile_only=True)
         if self.expert_local_grad:
             self._expert_gradients(compile_only=True)
         if self.ring_rows is not None:
@@ -513,7 +530,7 @@ class PeerMoEPlan(NativeMoEPlan):
         if synchronize_output:
             self._barrier(1)
 
-    def _dag(self, w1, w2, return_output=True, compile_only=False):
+    def _dag(self, w1, w2, return_output=True, compile_only=False, backward=False):
         slot = 0 if compile_only else self._dag_slot
         if not compile_only:
             if slot >= self.dag_slots:
@@ -524,14 +541,20 @@ class PeerMoEPlan(NativeMoEPlan):
             if self.dag_trace:
                 self.dag_monitor[slot].zero_()
         controls = [*self.dag_controls[:6], self.dag_monitor[slot], self.dag_samples[slot], self.status]
+        tensors = [self.packed_dy if backward else self.packed_x,
+                   w1, self.gate_up, self.hidden, w2, self.packed_output,
+                   self.pointer_tables["raw_dy" if backward else "local_x"],
+                   self.pointer_tables["local_dx" if backward else "local_values"],
+                   self.source_rows, self.permutation, self.work_info, self.num_blocks]
+        if backward:
+            tensors.extend([self.pointer_tables["raw_scores"], self.pointer_tables["local_dscores"]])
         self.dag_grid = dg._C._moe_training_peer_dag(
-            [self.packed_x, w1, self.gate_up, self.hidden, w2, self.packed_output,
-             self.pointer_tables["local_x"], self.pointer_tables["local_values"],
-             self.source_rows, self.permutation, self.work_info, self.num_blocks],
+            tensors,
             controls, self.chunk_tokens, self.chunk_tokens * self.k, self.block_m,
             self.dag_config, self.dag_input_ctas, self.dag_return_ctas, return_output,
             self.dag_serialize, self.dag_trace, compile_only, self.dag_shared_pool,
-            self.fuse_fc1_activation, self.dag_input_prefetch)
+            self.fuse_fc1_activation and not backward, self.dag_input_prefetch,
+            backward, self.dag_direct_return)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(
@@ -592,16 +615,23 @@ class PeerMoEPlan(NativeMoEPlan):
         for window in range(0, self.full_row_capacity, self.rows):
             self._set_window(window)
             self._chunk_forward_single(w1, w2, pack_input=True, return_output=False)
-            self._expert_gradients()
-            dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
-            self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.identity_rows, role="dhidden")
-            if not self.fuse_activation_backward:
-                self._activation(backward=True)
-            dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
-            self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
-                            write=self.fuse_return, destination="local_dx")
-            if not self.fuse_return:
-                self._scatter_peer("local_dx")
+            if self.dag_backward:
+                self._dag(self.w2_t, self.w1_t, backward=True)
+                # The fused dHidden epilogue writes only gate/up gradients,
+                # preserving forward hidden values for full DW2 accumulation.
+                dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+                dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+            else:
+                self._expert_gradients()
+                dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+                self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.identity_rows, role="dhidden")
+                if not self.fuse_activation_backward:
+                    self._activation(backward=True)
+                dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+                self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
+                                write=self.fuse_return, destination="local_dx")
+                if not self.fuse_return:
+                    self._scatter_peer("local_dx")
         self._barrier(start * 4 + 3)
         _launch(6, [self.local_dx, scores, dx],
                 [self.chunk_tokens, self.h, self.k, dy.shape[0], start, 0])
@@ -623,8 +653,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
-            if self.dag_fusion:
-                self._dag_slot = self.dag_slots // 2
+            if self.dag_fusion or self.dag_backward:
+                self._dag_slot = self.dag_forward_slots
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()

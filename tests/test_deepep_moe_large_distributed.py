@@ -15,7 +15,7 @@ import os
 import torch
 import torch.distributed as dist
 
-from deep_gemm.training import DeepEPMoEPlan
+from deep_gemm.training import DeepEPMoEPlan, PeerMoEPlan
 from moe_distributed_utils import destroy_training_process_group
 from test_moe_training import reference
 from deep_gemm.training.layout import to_g8_weight, from_g8_weight
@@ -28,6 +28,11 @@ def relative_rms(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=("deepep", "peer"), default="deepep")
+    parser.add_argument("--dag-fusion", action="store_true")
+    parser.add_argument("--dag-backward", action="store_true")
+    parser.add_argument("--dag-direct-return", action="store_true")
+    parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--intermediate", type=int, default=2048)
     parser.add_argument("--local-experts", type=int, default=8)
@@ -45,7 +50,10 @@ def main():
     torch.cuda.set_device(device)
     torch.set_num_threads(2)
     torch.backends.cuda.matmul.allow_tf32 = False
-    dist.init_process_group("gloo", timeout=timedelta(seconds=600))
+    metadata_backend = "nccl" if args.backend == "peer" else "gloo"
+    dist.init_process_group(metadata_backend, timeout=timedelta(seconds=600),
+                            device_id=device if metadata_backend == "nccl" else None)
+    reference_group = dist.new_group(backend="gloo", timeout=timedelta(seconds=600)) if args.backend == "peer" else dist.group.WORLD
     h, i, e, k, t = args.hidden, args.intermediate, args.local_experts, args.topk, args.tokens
     if min(h, i, e, k, t) < 1 or k > size * e:
         raise ValueError("invalid model or token dimensions")
@@ -70,14 +78,22 @@ def main():
     if args.gate_up_layout == "g8":
         w1 = to_g8_weight(w1)
     configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
-    plan = DeepEPMoEPlan(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
-                        group=dist.group.WORLD, device=device, comm_sms=args.comm_sms,
+    plan_options = (dict(comm_sms=args.comm_sms) if args.backend == "deepep" else
+                    dict(dag_fusion=args.dag_fusion, dag_backward=args.dag_backward,
+                         dag_direct_return=args.dag_direct_return,
+                         dag_shared_pool=args.dag_fusion or args.dag_backward,
+                         expert_local_grad=True, reuse_packed_dy=True, fuse_activation_backward=True,
+                         fuse_fc1_activation=args.fuse_fc1_activation,
+                         dispatch_producer=not args.dag_fusion,
+                         producer_input_aiu=not args.dag_fusion, producer_local_aiu=not args.dag_fusion))
+    plan = (DeepEPMoEPlan if args.backend == "deepep" else PeerMoEPlan)(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
+                        group=dist.group.WORLD, device=device, **plan_options,
                         ring_rows=args.ring_rows,
                         block_m=args.block_m,
                         gate_up_layout=args.gate_up_layout,
                         gemm_configs=configs, check_errors=False)
     print(json.dumps(dict(case="large_deepep_stage", rank=rank, stage="plan_ready",
-                          rdma_ranks=plan.deep_ep_rdma_ranks)), flush=True)
+                          backend=args.backend, rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None))), flush=True)
 
     def actual():
         y = plan.forward(x, ids, scores, w1, w2, valid)
@@ -126,26 +142,29 @@ def main():
         totals = []
         for partial in (ry, gx, gp):
             total = partial.detach().cpu().contiguous()
-            dist.all_reduce(total)
+            dist.all_reduce(total, group=reference_group)
             totals.append(total[local_slice].to(device))
         expected = (totals[0], totals[1], gw1, gw2, totals[2])
         compared = (outputs[0], outputs[1], from_g8_weight(outputs[2]), outputs[3], outputs[4]) if args.gate_up_layout == "g8" else outputs
         errors = {name: relative_rms(a, b) for name, a, b in zip(
             ("y", "dx", "dw1", "dw2", "dscores"), compared, expected)}
         passed = all(math.isfinite(error) and error < .04 for error in errors.values())
-        print(json.dumps(dict(case="large_distributed_deepep_reference", rank=rank,
+        print(json.dumps(dict(case="large_distributed_deepep_reference" if args.backend == "deepep" else "large_distributed_peer_reference", rank=rank,
             ranks=size, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens=t, chunk_tokens=args.chunk_tokens, pattern=pattern,
             graph=args.graph, relative_rms=errors, every_element_compared=True,
             ring_rows=args.ring_rows, packed_ring_rows=plan.rows,
             block_m=plan.block_m,
             route_window_count=plan.route_window_count,
-            payload_transport=plan.deep_ep_backend, rdma_ranks=plan.deep_ep_rdma_ranks,
-            rdma_qps=plan.deep_ep_qps, communication_cus=plan.comm_sms,
-            metadata_backend="gloo", reference="independent FP32 Torch local experts + CPU sum",
+            backend=args.backend, gate_up_layout=args.gate_up_layout,
+            dag_fusion=args.dag_fusion, dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return,
+            payload_transport=getattr(plan, "deep_ep_backend", "verified direct peer domain"),
+            rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None),
+            rdma_qps=getattr(plan, "deep_ep_qps", None), communication_cus=getattr(plan, "comm_sms", None),
+            metadata_backend=metadata_backend, reference="independent FP32 Torch local experts + CPU sum",
             passed=passed)), flush=True)
         passed_tensor = torch.tensor(int(passed))
-        dist.all_reduce(passed_tensor, op=dist.ReduceOp.MIN)
+        dist.all_reduce(passed_tensor, op=dist.ReduceOp.MIN, group=reference_group)
         if not passed_tensor.item():
             raise AssertionError("at least one rank failed the independent reference")
         del rx, rp, rw1, rw2, ry, gx, gw1, gw2, gp, expected, totals
@@ -154,7 +173,10 @@ def main():
     gc.collect()
     torch.cuda.synchronize(device)
     dist.barrier()
-    plan.close()
+    if hasattr(plan, "close"):
+        plan.close()
+    del plan
+    gc.collect()
     destroy_training_process_group()
 
 

@@ -2569,3 +2569,81 @@ the required stall reassessment before editing iteration26. The next
 unimplemented direction is a backward task pipeline joining DY/score
 fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
 must be computed in full. Record its actual scope and controls explicitly.
+
+
+## Iteration26: backward task pipeline and optional direct GEMM return
+
+Join raw DY/score fetch and score-gradient publication, dHidden with BF16-
+rounded G8 activation backward, DX and gradient return in a shared ready-
+task pool. It can accompany the producer forward independently of forward
+DAG execution. Input consumes replayed Y before DX may reuse its workspace.
+The existing activation-backward epilogue preserves forward hidden values,
+so full FP32 DW2 and DW1 can run after the backward pool without retaining
+another activation copy. No gradient, replay, valid route or precision
+boundary is omitted. Per-window weight-gradient accumulation order remains.
+
+Optional direct return writes FC2/DX results to source ranks in the GEMM
+rather than local output plus a copy task. Replay still keeps local Y.
+FC2/DX task spans then include peer traffic; their entire duration must not
+be classified as pure compute or counted as independent communication
+simultaneously. The GPU argument structure stays unchanged; optional host
+flags and backward score pointer tables select the new path. All-rank plan
+agreement includes the DAG protocol flags. Defaults remain unchanged.
+
+Native SHA2565d86fffae382ef733d3486844886aca9bc458253ed6c87357bdaef21ece485a8.
+ZW-M890P/ppu0015, wlf_sgl_2.2 Torch2.11 runtime/Torch2.10 native build.
+Full H8192/I2048/E16/K10 FP32 masked/skewed checks pass. Five dynamic-graph
+comparisons cover backward-only, both directions, direct/copy return and
+serial/parallel controls; all four patterns have exact Y/DX/dScore and
+DW RMS below5e-7. X, DY and routing weights change between patterns.
+Actual EP32 E512 independent FP32 checks cover balanced/masked, duplicate
+and reversed routing, including an empty input rank:96 records. A separate
+C4096/S65536 all-to-expert0 oracle passes32 records. Clean whole-host audits
+accompany every accepted phase. Node226 became busy between the two oracle
+phases; the next fresh gate selected225/227/223/222 instead.
+
+Stall reassessment preceded this edit: reviewed iterations23–25, all-rank
+iteration24 activity and prior resource counters, then fetched current
+primary T-Head HGGC guide1044 and blog36 about M890 TSM group conflicts.
+They motivate examining resource balance, not a universal overlap target.
+No physical performance floor was established. Documentation guidance and
+the installed2.2.0 toolchain remain distinct.
+Sources: https://developer.t-head.cn/api/developer/document/chapter/content?chapterId=1044
+and https://developer.t-head.cn/api/developer/content/detail?bizType=BLOG&id=36 .
+
+H8192/I2048/K10, T4096/C4096/S65536/BM256/BN256/BK64/WM64/WN64/S2.
+EP32 has512 total experts; EP8 is explicitly an E128 proxy. Full FWD plus
+replayed BWD and FP32 DW zero/accumulation, no optimizer; separately named
+forward/backward scopes retain their stated work. Warmup5,20 graph iterations,
+5 repeats, median of max-rank event times. DeepEP receives the same G8
+parameter layout and GEMM tiles. Low input-copy credits remain disabled.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|EP8 proxy E128|backward-copy|101.535986|107.112939|
+|EP8 proxy E128|backward-direct|101.518622|108.212610|
+|EP8 proxy E128|both-copy|101.415167|111.031152|
+|EP8 proxy E128|both-direct|101.350555|112.153772|
+|EP8 proxy E128|forward-copy|101.597034|106.541467|
+|EP8 proxy E128|forward-direct|101.363745|106.199634|
+|EP8 proxy E128|producer-control|101.386554|102.558630|
+|EP32 E512|backward-copy|121.159167|104.256702|
+|EP32 E512|backward-direct|121.092053|105.855237|
+|EP32 E512|backward-direct-backward|85.084546|77.317920|
+|EP32 E512|both-copy|121.119971|107.635242|
+|EP32 E512|both-direct|121.071582|109.075110|
+|EP32 E512|both-direct-forward|36.115594|30.973901|
+|EP32 E512|forward-copy|121.119983|104.207532|
+|EP32 E512|forward-direct|120.956445|104.239185|
+|EP32 E512|producer-control-attempt0|121.162427|100.879974|
+
+Choose the complete-step winner against both producer and tuned DeepEP;
+functional fusion and task overlap alone are insufficient. Nine complete
+57.8M public-text LM trainings also finished2000 steps (Native, backward-
+only pool and forward/backward pool, three seeds each). Full111539-target
+held-out evaluation evidence is collected separately, without claiming
+Qwen2.4T model convergence or statistical noninferiority.
+
+Artifacts: outputs/qwen38/iter26-backward-dag-{proxy,controls}.json,
+ep32-backward-dag-{balanced,c4096}-reference.json. Source-level scope and
+mixed-kernel timing caveats must accompany future overlap figures.

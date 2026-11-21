@@ -8,15 +8,16 @@ class PeerDagRuntime final : public LaunchRuntime<PeerDagRuntime> {
 public:
     struct Args {
         int h, i, e, bm, bn, bk, wm, wn, stages, threads;
-        bool return_output, trace, shared_pool, fc1_activation, input_prefetch;
+        bool return_output, trace, shared_pool, fc1_activation, input_prefetch, backward, direct_return;
         LaunchArgs launch_args;
         PeerFfnDagParams params;
     };
     static std::string name(const Args& a) {
-        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}{}{}",
+        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}{}{}{}{}",
             a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn, a.stages, a.return_output, a.trace,
             a.shared_pool ? "_shared_pool" : "", a.fc1_activation ? "_g8_swiglu" : "",
-            a.input_prefetch ? "_input_prefetch" : "");
+            a.input_prefetch ? "_input_prefetch" : "", a.backward ? "_backward_g8" : "",
+            a.direct_return ? "_direct_return" : "");
     }
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
@@ -28,8 +29,9 @@ __global__ void {}(const deep_gemm::training::PeerFfnDagParams params) {{
 )", a.threads, name(a), a.shared_pool ? "peer_ffn_shared_pool_impl" : "peer_ffn_dag_impl",
        a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn,
        a.threads, a.stages, a.return_output ? "true" : "false", a.trace ? "true" : "false",
-       a.shared_pool ? fmt::format(", {}, {}", a.fc1_activation ? "true" : "false",
-                                  a.input_prefetch ? "true" : "false") : "");
+       a.shared_pool ? fmt::format(", {}, {}, {}, {}", a.fc1_activation ? "true" : "false",
+                                  a.input_prefetch ? "true" : "false", a.backward ? "true" : "false",
+                                  a.direct_return ? "true" : "false") : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -42,16 +44,18 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
                         int block_m, const std::vector<int>& config,
                         int input_ctas, int return_ctas, bool return_output,
                         bool serialize, bool trace, bool compile_only, bool shared_pool = false,
-                        bool fc1_activation = false, bool input_prefetch = false) {
-    DG_HOST_ASSERT((!fc1_activation && !input_prefetch) || shared_pool);
-    DG_HOST_ASSERT(tensors.size() == 12 && controls.size() == 9 && tensors[0].is_cuda());
+                        bool fc1_activation = false, bool input_prefetch = false,
+                        bool backward = false, bool direct_return = false) {
+    DG_HOST_ASSERT((!fc1_activation && !input_prefetch && !backward && !direct_return) || shared_pool);
+    DG_HOST_ASSERT(!backward || (return_output && !fc1_activation));
+    DG_HOST_ASSERT(tensors.size() == (backward ? 14 : 12) && controls.size() == 9 && tensors[0].is_cuda());
     const auto device = tensors[0].device();
     const c10::cuda::CUDAGuard guard(device);
     DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
     for (size_t j = 0; j < tensors.size(); ++j) {
         const auto& t = tensors[j];
         DG_HOST_ASSERT(t.device() == device && t.is_contiguous() && t.numel() <= INT32_MAX);
-        DG_HOST_ASSERT(t.scalar_type() == (j < 6 ? torch::kBFloat16 : j < 8 ? torch::kInt64 : torch::kInt32));
+        DG_HOST_ASSERT(t.scalar_type() == (j < 6 ? torch::kBFloat16 : j < 8 || j >= 12 ? torch::kInt64 : torch::kInt32));
     }
     for (size_t j = 0; j < controls.size(); ++j) {
         const auto& t = controls[j];
@@ -65,10 +69,11 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     const auto& w2 = tensors[4];
     const auto& output = tensors[5];
     DG_HOST_ASSERT(input.dim() == 2 && w1.dim() == 3 && w2.dim() == 3);
-    const int m = input.size(0), h = input.size(1), e = w1.size(0), i = w1.size(1) / 2;
+    const int m = input.size(0), h = input.size(1), e = w1.size(0), i = w1.size(1) / (backward ? 1 : 2);
     DG_HOST_ASSERT((block_m == 128 || block_m == 256) && m > 0 && m % block_m == 0);
     DG_HOST_ASSERT(h > 0 && h % 256 == 0 && i > 0 && i % 128 == 0 && e > 0);
-    DG_HOST_ASSERT(w1.sizes() == at::IntArrayRef({e, 2*i, h}) && w2.sizes() == at::IntArrayRef({e, h, i}));
+    DG_HOST_ASSERT(w1.sizes() == at::IntArrayRef({e, backward ? i : 2*i, h})
+                   && w2.sizes() == at::IntArrayRef({e, h, backward ? 2*i : i}));
     DG_HOST_ASSERT(gate.sizes() == at::IntArrayRef({m, 2*i}));
     DG_HOST_ASSERT(hidden.sizes() == at::IntArrayRef({m, i}) && output.sizes() == at::IntArrayRef({m, h}));
     const int ranks = tensors[6].numel();
@@ -76,6 +81,11 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     DG_HOST_ASSERT(tensors[8].numel() == m && tensors[9].numel() == m);
     DG_HOST_ASSERT(tensors[10].sizes() == at::IntArrayRef({m / block_m, 4}) && tensors[11].numel() == 1);
     DG_HOST_ASSERT(source_rows_per_rank > 0 && destination_rows_per_rank > 0);
+    DG_HOST_ASSERT(!backward || destination_rows_per_rank % source_rows_per_rank == 0);
+    if (backward) {
+        DG_HOST_ASSERT(tensors[12].sizes() == tensors[6].sizes()
+                       && tensors[13].sizes() == tensors[6].sizes());
+    }
     DG_HOST_ASSERT(int64_t(ranks) * source_rows_per_rank <= INT32_MAX);
     DG_HOST_ASSERT(int64_t(ranks) * destination_rows_per_rank <= INT32_MAX);
     DG_HOST_ASSERT(config.size() == 5);
@@ -98,12 +108,12 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     auto& first = p.ffn.first;
     first.gemm.a_ptr = input.data_ptr();
     first.gemm.b_ptr = w1.data_ptr();
-    first.gemm.c_ptr = gate.data_ptr();
+    first.gemm.c_ptr = backward ? hidden.data_ptr() : gate.data_ptr();
     first.gemm.expert_ids_and_cumsum = tensors[10].data_ptr<int32_t>();
     first.gemm.sorted_token_ids = tensors[8].data_ptr<int32_t>();
     first.gemm.aligned_num_m_blocks = tensors[11].data_ptr<int32_t>();
     first.gemm.shape_m = m;
-    if (fc1_activation) first.activation_gate_up = hidden.data_ptr();
+    if (fc1_activation || backward) first.activation_gate_up = backward ? gate.data_ptr() : hidden.data_ptr();
     first.source_peers = reinterpret_cast<const uint64_t*>(tensors[6].data_ptr<int64_t>());
     first.destination_peers = reinterpret_cast<const uint64_t*>(tensors[7].data_ptr<int64_t>());
     first.permutation = tensors[9].data_ptr<int32_t>();
@@ -111,9 +121,15 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     first.destination_rows_per_rank = destination_rows_per_rank;
     first.num_ranks = ranks;
     p.ffn.second = first;
-    p.ffn.second.gemm.a_ptr = hidden.data_ptr();
+    p.ffn.second.gemm.a_ptr = backward ? gate.data_ptr() : hidden.data_ptr();
     p.ffn.second.gemm.b_ptr = w2.data_ptr();
     p.ffn.second.gemm.c_ptr = output.data_ptr();
+    if (backward) {
+        // These scratch pointers are unused by local-AIU GEMM tasks. Keep
+        // score/dScore pointer tables here without changing the GPU ABI.
+        first.dispatch_scratch = tensors[12].data_ptr();
+        p.ffn.second.dispatch_scratch = tensors[13].data_ptr();
+    }
     p.state = reinterpret_cast<uint32_t*>(controls[0].data_ptr<int32_t>());
     p.input_ready = reinterpret_cast<uint32_t*>(controls[1].data_ptr<int32_t>());
     p.pair_done = reinterpret_cast<uint32_t*>(controls[2].data_ptr<int32_t>());
@@ -127,7 +143,7 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     p.input_ctas = input_ctas;
     p.return_ctas = return_output ? return_ctas : 0;
     p.serialize = serialize;
-    PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,shared_pool,fc1_activation,input_prefetch,
+    PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,shared_pool,fc1_activation,input_prefetch,backward,direct_return,
         {get_grid_shape(get_num_sms()),dim3(threads),smem},p};
     const auto runtime = compiler->build(PeerDagRuntime::name(a), PeerDagRuntime::generate(a));
     int occupancy = 0;
@@ -149,7 +165,8 @@ static void register_peer_dag_apis(pybind11::module_& m) {
         py::arg("block_m"), py::arg("config"), py::arg("input_ctas"), py::arg("return_ctas"),
         py::arg("return_output"), py::arg("serialize") = false, py::arg("trace") = false,
         py::arg("compile_only") = false, py::arg("shared_pool") = false,
-        py::arg("fc1_activation") = false, py::arg("input_prefetch") = false);
+        py::arg("fc1_activation") = false, py::arg("input_prefetch") = false,
+        py::arg("backward") = false, py::arg("direct_return") = false);
 }
 
 }  // namespace deep_gemm::training

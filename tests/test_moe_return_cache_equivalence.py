@@ -19,8 +19,18 @@ parser.add_argument('--dag-shared-pool', action='store_true')
 parser.add_argument('--dag-g8', action='store_true')
 parser.add_argument('--dag-input-prefetch', action='store_true')
 parser.add_argument('--dag-input-ctas', type=int, default=4)
+parser.add_argument('--dag-backward', action='store_true')
+parser.add_argument('--dag-backward-only', action='store_true')
+parser.add_argument('--dag-direct-return', action='store_true')
+parser.add_argument('--dag-direct-return-ablation', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
+if args.dag_backward_only:
+    args.dag_ablation = args.dag_backward = True
+if args.dag_direct_return_ablation:
+    args.dag_ablation = True
+if args.dag_backward and not args.dag_g8:
+    parser.error('backward DAG checks require --dag-g8')
 if args.dag_g8 and not (args.dag_shared_pool and (args.dag_ablation or args.dag_serialization_ablation)):
     parser.error('G8 DAG comparison requires shared-pool DAG ablation')
 if args.ffn_fusion_ablation and args.expert_local_grad_ablation:
@@ -64,13 +74,17 @@ with torch.cuda.stream(stream):
                            producer_input_aiu=True, producer_local_aiu=True,
                            ring_rows=1024, block_m=256, return_vector_bytes=8 if cache else 4)
         if args.dag_ablation or args.dag_serialization_ablation:
+            active = True if args.dag_serialization_ablation or args.dag_direct_return_ablation else cache
+            forward_dag = active and not args.dag_backward_only
+            backward_dag = active and args.dag_backward
             options = dict(expert_local_grad=True, ring_rows=1024, block_m=256,
-                           dag_fusion=True if args.dag_serialization_ablation else cache,
-                           dispatch_producer=False if args.dag_serialization_ablation else not cache,
-                           producer_input_aiu=False if args.dag_serialization_ablation else not cache,
-                           producer_local_aiu=False if args.dag_serialization_ablation else not cache,
+                           dag_fusion=forward_dag, dag_backward=backward_dag,
+                           dispatch_producer=not forward_dag,
+                           producer_input_aiu=not forward_dag,
+                           producer_local_aiu=not forward_dag,
                            dag_serialize=cache if args.dag_serialization_ablation else False)
-            options['dag_shared_pool'] = args.dag_shared_pool and options['dag_fusion']
+            options['dag_shared_pool'] = args.dag_shared_pool and (forward_dag or backward_dag)
+            options['dag_direct_return'] = active and (cache if args.dag_direct_return_ablation else args.dag_direct_return)
         if args.fc1_activation_ablation:
             options = dict(expert_local_grad=True, dispatch_producer=True,
                            producer_input_aiu=True, producer_local_aiu=True,
@@ -79,7 +93,7 @@ with torch.cuda.stream(stream):
         if args.dag_g8:
             options.update(gate_up_layout='g8', fuse_fc1_activation=True)
         if args.dag_input_prefetch:
-            options.update(dag_input_prefetch=bool(options.get('dag_fusion')),
+            options.update(dag_input_prefetch=bool(options.get('dag_fusion') or options.get('dag_backward')),
                            dag_input_ctas=args.dag_input_ctas)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
@@ -106,6 +120,9 @@ with torch.cuda.stream(stream):
 
     for pattern in ('balanced', 'ragged', 'duplicate_skewed', 'masked'):
         x.add_(.002)
+        dy.add_(.001)
+        scores.copy_(torch.randn_like(scores).softmax(-1))
+        scores[0, 0] = 0
         ids.copy_(original_ids)
         valid.fill_(t - 3 if pattern == 'ragged' else t)
         if pattern == 'duplicate_skewed':
@@ -137,6 +154,8 @@ with torch.cuda.stream(stream):
                 'ffn_graph_equivalence' if args.ffn_fusion_ablation else 'return_cache_graph_equivalence')
         print(json.dumps({'case':case,'pattern':pattern,
                           'dag_shared_pool':args.dag_shared_pool,
+                          'modes':[dict(forward_dag=p.dag_fusion,backward_dag=p.dag_backward,
+                                        direct_return=p.dag_direct_return) for p in plans],
                           'exact':exact,'wgrad_relative_rms':errors,
                           'source':('identical G8 parameters and GEMM tiles; separate versus register-fused BF16-rounded FC1/SwiGLU' if args.fc1_activation_ablation else
                                     'identical tensors and GEMM tiles; DAG enabled versus producer control, or DAG serial versus parallel' if args.dag_ablation or args.dag_serialization_ablation else
