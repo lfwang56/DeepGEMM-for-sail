@@ -9,8 +9,10 @@ step; wall time additionally includes host submission and synchronization.
 import argparse
 from datetime import timedelta
 import gc
+import hashlib
 import json
 import os
+from pathlib import Path
 import socket
 import statistics
 import time
@@ -32,6 +34,14 @@ def relative_rms(actual, expected):
     if not actual.numel():
         return 0.0
     return float((actual - expected).square().mean().sqrt() / expected.square().mean().sqrt().clamp_min(1e-12))
+
+
+def wgrad_lut_digest(device):
+    directory = os.environ.get("SAIL_DEEPGEMM_LUT_PATH")
+    if not directory:
+        return None
+    path = Path(directory) / (torch.cuda.get_device_name(device) + "_bf16_kgroupedcontiguous.lut")
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
 class ConfiguredCollectivePlan(NativeMoEPlan):
@@ -400,6 +410,8 @@ def main():
                     "ring_rows_requested": args.ring_rows,
                     "packed_ring_rows": plan.rows,
                     "block_m": plan.block_m,
+                    "runtime_lut_directory": os.environ.get("SAIL_DEEPGEMM_LUT_PATH"),
+                    "wgrad_lut_sha256": wgrad_lut_digest(device),
                     "full_routed_row_capacity": plan.full_row_capacity,
                     "route_window_count": getattr(plan, "route_window_count", 1),
                     "pipeline_statistics_last_fc1": (plan.pipeline_statistics.cpu().tolist()

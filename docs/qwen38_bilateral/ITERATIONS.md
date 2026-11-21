@@ -2717,3 +2717,44 @@ Artifacts: outputs/qwen38/iter27-input-ilp-{proxy,controls}.json,
 ep32-input-ilp8-{balanced,c4096}-reference.json; resource details in campaign
 work/qwen38-{producer-fc1-26,producer-ilp8-27}-acu-details.txt. Updated
 full-model quality for the chosen recipe is a separate follow-up.
+
+
+## Iteration 28 — weight-gradient geometry under an equally tuned DeepEP control
+
+**Direction.** Full-token Acu27 measured DW1/DW2 TSM load conflicts 0.70/0.69,
+216 registers per thread, 512 threads, zero stack and 25% theoretical occupancy.
+These are local operator counters, not ICN bandwidth. Test existing native
+runtime-LUT tile/warp/stage choices without changing arithmetic, buffers,
+BF16 boundaries, FP32 accumulation or the peer communication algorithm.
+The previous best producer input ILP8 recipe is fixed in all variants.
+The same wgrad LUT applies to both installed DeepEP and peer plans.
+
+**Validation.** Eight configurations pass every-element independent CPU FP32
+checks for full Qwen widths, empty/skewed dynamic group lengths, nonzero FP32
+accumulators and two graph replays; 32 oracle records, frozen iteration27 library.
+No candidate spills to stack. Runtime attributes range104–240 registers per
+thread. Canonical Torch2.11 host extension also passes actual32-rank independent
+FP32 routed-layer validation before timing. See native-host-build-compatibility.json
+for the separate native Torch2.10/2.11 build and GPU checks.
+
+**Measured scope.** Same-domain EP32, H8192/I2048/E512/top10, T4096/rank,
+C4096, BM256, G8, ring65536. Complete forward plus rematerialized backward,
+including FP32 gradient zero/accumulation; no optimizer/shared expert.
+Median maximum-rank device event milliseconds. Every row uses its own matched
+DeepEP Buffer dispatch/combine control,38 communication CUs.
+
+| Wgrad geometry | Peer full step ms | DeepEP full step ms | DeepEP / peer |
+| --- | ---: | ---: | ---: |
+| 128x128-w32x32-s2 | 118.296069 | 141.073083 | 1.1925x |
+| 128x128-w32x64-s2 | 114.864392 | 137.493066 | 1.1970x |
+| 128x128-w32x64-s4 | 114.354053 | 137.135596 | 1.1992x |
+| 128x256-w32x64-s2 | 114.686279 | 137.457166 | 1.1985x |
+| 256x128-w64x32-s2 | 116.284082 | 139.201062 | 1.1971x |
+| 256x256-w32x128-s4 | 98.494623 | 121.163403 | 1.2302x |
+| 256x256-w64x64-s2 | 102.946973 | 125.385681 | 1.2180x |
+| auto-attempt0 | 98.464209 | 121.192639 | 1.2308x |
+
+Accepted clean phases: 8/8 collected; eight phases were planned.
+Best observed geometry: `qwen38-wlf-ep32-iter28-wgrad-auto-attempt0`, peer98.464209ms, paired DeepEP121.192639ms (1.2308x). This is a full-step comparison; it does not establish physical network utilization or a2–3x gain.
+
+Artifacts: `outputs/qwen38/iter28-wgrad-geometry-controls.json`, `iter28-wgrad-geometry-reference.json`, `ep32-native211-reference.json`; LUT sources under `docs/qwen38_bilateral/wgrad_luts/`.
