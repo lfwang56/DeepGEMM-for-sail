@@ -1864,3 +1864,79 @@ articles34/36 (full source archived in work/reference/t-head-blog-34.json and36)
 The PPU article's TP inference case is not an EP training speedup claim. Asight
 DW1 evidence and measured waiting, not kernel count, drive the next direction.
 Full timing/audit/equality/EP2 records: outputs/qwen38/iter14-inline-owner-controls.json.
+
+
+## Iteration15: owner-prefix schedule and wider CTA controls
+
+Hypothesis: expose input-owner M tiles first, avoiding the previous row-major
+owner convoy; test 256/512/1024-thread GEMMs with identical compute tiles in
+DeepEP and peer. The public peer API now permits up to1024 threads while still
+querying actual occupancy and rejecting unavailable launch resources. Defaults
+remain the previous256-thread configuration. Prefix scheduling is opt-in via
+inline dispatch; existing producer/return behavior is preserved.
+
+Chip/toolchain: ZW-M890P/ppu0015, wlf_sgl_2.2 Torch2.11, native-built extension
+SHA256 0569f84c49ee8952b244de10aa4cff3917209e6e682330662a0353a5ca152a88.
+Qwen H8192/I2048/K10,T4096,C768, BN256/BK64/S2;256 threads WM64/WN64,
+512 threads WM32/WN64,1024 threads WM32/WN32. EP32 is the actual512-expert
+shape on225/226/227/223. EP8 on80 retains E16/rank but has128 total experts:
+it is only a proxy, and differs from earlier proxy host219. Do not compare
+absolute proxy timings between hosts. Five repeats of20 graph iterations,
+5warmups, max-rank event medians; routed experts only, no optimizer/shared
+expert, full backward rematerialization and FP32 DW zero/accumulation.
+
+Correctness: every-element independent FP32 large-shape masked and duplicate
+route checks passed for prefix256/512/1024 and native NoPad512/1024. Actual
+EP32 C768 all-to-expert-zero skew at1024 threads also passed all32 ranks and
+all four host idle audits, including preserved nonzero zero-score derivatives
+and exactly zero unused-expert gradients. Both wide configurations therefore
+apply to the baseline too; no asymmetric compute-speed attribution.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|prefix-1024|135.876831|168.121777|
+|ep8|prefix-1024-backward|103.458862|124.576953|
+|ep8|prefix-1024-forward|32.344177|43.325641|
+|ep8|prefix-256|138.035303|151.978906|
+|ep8|prefix-512|140.914600|175.888879|
+|ep8|prefix-512-backward|106.760583|129.374182|
+|ep8|prefix-512-forward|34.121500|46.483472|
+|ep8|producer-1024|135.825342|165.892712|
+|ep8|producer-256-attempt0|138.050867|147.157605|
+|ep8|producer-512|140.899304|173.460730|
+|ep32|prefix-1024|162.435608|167.459888|
+|ep32|prefix-1024-backward|116.777393|123.156689|
+|ep32|prefix-1024-forward|45.673547|44.355209|
+|ep32|prefix-256|164.548926|150.268311|
+|ep32|prefix-512|167.609229|173.026282|
+|ep32|prefix-512-backward|120.132788|126.610266|
+|ep32|prefix-512-forward|47.449921|46.527969|
+|ep32|producer-1024|162.437817|164.798328|
+|ep32|producer-256-attempt0|164.684619|144.865076|
+|ep32|producer-512|167.670325|170.124573|
+
+All20 benchmark phases completed every parent rank with clean host idle audits.
+The owner-prefix schedule removes the severe iteration14 convoy but does not
+beat the best producer recipe overall. Wider CTAs do not establish a fused
+winner. Retain the previously validated recipe as best, with the explicit-copy
+peer control still mandatory when attributing overlap. Evidence:
+outputs/qwen38/iter15-prefix-wide-controls.json and
+ep32-prefix-wide-skew-reference.json in the campaign workspace.
+
+The unrelated unchanged cross-domain EP64 DeepEP large-shape control also
+completed64 physical ranks on eight hosts for all four cases: T1024/C384
+85.403381ms, T4096/C384319.503271ms, T8192/C384634.097607ms, T4096/C256
+344.069653ms. This is eight logical host RDMA groups with MNNVL disabled,
+not a tuned supernode hierarchy or a cross-domain fused kernel. Evidence:
+outputs/qwen38/cross-ep64-large-token-chunk.json.
+
+Reassessment: separate-kernel communication is only16.63% of the measured
+DeepEP trace. Its local top-k reduction costs21.02ms/step, and weight gradients
+33.24ms. MoK's pinned benchmark utils use eager CUDA events (500warmups,
+100timed iterations), and time backward after a saved-context forward outside
+the measured range. Its DeepEP+Torch forward requests do_cpu_sync=True and
+constructs a GPU count tensor from a host count list. Our graph-resident GPU
+metadata/full-rematerialization contract is different. These differences must
+be reported; they do not justify weakening the current baseline. Next pursue
+whole-FFN depth-first tile fusion and local compute/layout work rather than
+more per-GEMM communication-CTA partition sweeps.

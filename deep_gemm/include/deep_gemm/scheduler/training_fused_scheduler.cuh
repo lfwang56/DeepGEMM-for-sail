@@ -56,10 +56,27 @@ struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
         const uint32_t next = (this->current_iter++) * (gridDim.x - control.communication_ctas)
                             + blockIdx.x - control.communication_ctas;
         if (next >= this->num_aligned_m_blocks_ * nblocks) return false;
-        const uint32_t record_index = next / nblocks;
+        uint32_t record_index;
+        if constexpr (InlineOwners) {
+            // Expose every independent input owner before scheduling columns
+            // that wait for it. Row-major ordering otherwise admits only
+            // grid/N owners and turns most resident CTAs into polling work.
+            if (next < this->num_aligned_m_blocks_) {
+                record_index = next;
+                n = 0;
+            } else if constexpr (nblocks > 1) {
+                const uint32_t consumer = next - this->num_aligned_m_blocks_;
+                record_index = consumer / (nblocks - 1);
+                n = 1 + consumer % (nblocks - 1);
+            } else {
+                return false;
+            }
+        } else {
+            record_index = next / nblocks;
+            n = next % nblocks;
+        }
         const uint4 data = __ldg(this->expert_ids_and_cumsum_ + record_index);
         m = record_index - data.z;
-        n = next % nblocks;
         this->curr_group_idx = data.x;
         this->curr_group_m = data.y;
         this->cumsum_m_block_idx = record_index;

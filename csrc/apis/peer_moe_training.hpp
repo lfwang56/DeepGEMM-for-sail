@@ -315,7 +315,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(!producer_input_aiu || (read_peer && !write_peer && pack_input
                    && first_n_tile == 0 && num_n_tiles == 1 && dispatch_cache_n == 0));
     const int threads = (128 / wm) * (bn / wn) * 32;
-    DG_HOST_ASSERT(threads >= 32 && threads <= 256);
+    DG_HOST_ASSERT(threads >= 32 && threads <= 1024);
     const int smem = gemm_smem_total_size(2, stages, 128, bn, bk);
     DG_HOST_ASSERT(smem <= 256 * 1024);
     PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(), dispatch_cache_n,

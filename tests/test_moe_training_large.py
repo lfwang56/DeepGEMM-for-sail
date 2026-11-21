@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--staged-return", action="store_true")
     parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
     parser.add_argument("--peer-fc1-config", type=int, nargs=5)
+    parser.add_argument("--gemm-config", type=int, nargs=5)
     parser.add_argument("--dispatch-producer", action="store_true")
     parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--producer-input-aiu", action="store_true")
@@ -71,9 +72,16 @@ def main():
     valid = torch.full((), max(0, t - 3), device="cuda", dtype=torch.int32)
     classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan,
                "collective_fused": CollectiveFusedMoEPlan}
+    if options.gemm_config and options.backend == "native":
+        from benchmark_native_moe import ConfiguredCollectivePlan
+        classes["native"] = ConfiguredCollectivePlan
+    if options.gemm_config and options.backend == "persistent":
+        parser.error("persistent kernel uses fixed GEMM tiles")
     extra = ({"gemm_configs": {role: (256, 64, 64, 64, 2)
                                for role in ("fc1", "fc2", "dhidden", "dx")}}
              if options.backend in ("peer", "collective_fused") else {"maximize_ctas": True} if options.backend == "persistent" else {})
+    if options.gemm_config and options.backend in ("peer", "collective_fused"):
+        extra["gemm_configs"] = {role:tuple(options.gemm_config) for role in ("fc1","fc2","dhidden","dx")}
     if options.backend == "peer":
         extra.update(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
@@ -111,6 +119,8 @@ def main():
             parser.error("staged return requires --backend peer")
         extra["staged_return"] = True
     plan = classes[options.backend](h, i, e, k, t, chunk_tokens=t, compute=options.compute, **extra)
+    if options.gemm_config and options.backend == "native":
+        plan.benchmark_gemm_config = tuple(options.gemm_config)
     for pattern in ("balanced_masked", "duplicate_skewed"):
         if pattern == "duplicate_skewed":
             ids.fill_(0)
@@ -141,6 +151,7 @@ def main():
                               return_pipeline=options.return_pipeline,
                               pipeline_comm_ctas=options.pipeline_comm_ctas,
                               pipeline_serialize=options.pipeline_serialize,
+                              gemm_config=options.gemm_config,
                               inline_dispatch=options.inline_dispatch,
                               cache_return_addresses=options.cache_return_addresses,
                               producer_local_aiu=options.producer_local_aiu,

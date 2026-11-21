@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--pipeline-serialize", action="store_true")
     parser.add_argument("--inline-dispatch", action="store_true")
     parser.add_argument("--cache-return-addresses", action="store_true")
+    parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--producer-input-aiu", action="store_true")
@@ -86,7 +87,7 @@ def main():
     del global_x, global_dy, global_scores, sources, pieces
     gc.collect()
     torch.cuda.empty_cache()
-    configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
+    configs = {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     for backend in args.backends:
         options = dict(gemm_configs=configs)
         if backend == "peer":
@@ -149,6 +150,7 @@ def main():
             pipeline_serialized=args.pipeline_serialize if backend == "peer" else None,
             inline_dispatch=args.inline_dispatch if backend == "peer" else None,
             cache_return_addresses=args.cache_return_addresses if backend == "peer" else None,
+            gemm_config=args.gemm_config,
             capacity_rows=plan.rows, alignment=plan.alignment, active_rows=active_rows,
             largest_active_element_offset=max(0, active_rows * h - 1),
             relative_rms=errors, unused_expert_gradients_exactly_zero=unused_zero,
