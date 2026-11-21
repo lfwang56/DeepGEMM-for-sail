@@ -100,7 +100,9 @@ torchrun --standalone --nproc-per-node=2 --max-restarts=0 \
 The manual single-device training suite covers GPU route/quantization primitives,
 BF16 and blockwise FP8 autograd, direct peer and persistent execution, dynamic
 routes, empty experts, FP32 master-weight updates between graph replays, and
-bounded workspace reuse. It writes the standard per-script logs and JUnit report:
+bounded workspace reuse. The six-script suite also checks the collective path
+with local GEMM return-ring fusion. It writes the standard per-script logs and
+JUnit report:
 
 ```bash
 python tests/checkin/run_checkin.py --suite ZW-M890P-MoETraining

@@ -47,6 +47,29 @@ The routes, peer transport, GEMM tiles, activations and FP32 wgrads stay the sam
 These switches support controlled fusion measurements and topology-specific
 staging choices. Persistent plans always fuse both directions.
 
+Use these names when reporting results:
+
+| Path | Dispatch | Return | Topology |
+| --- | --- | --- | --- |
+| Collective baseline | PCCL all-gather, then local packing | Local scatter, then PCCL reduce-scatter | Within or across supernodes |
+| Peer copy control (`False, False`) | Separate peer-copy kernel | Separate peer-store kernel | One direct-access domain |
+| Peer hybrid (`False, True`) | Separate peer-copy kernel | GEMM epilogue stores to the source rank | One direct-access domain |
+| Peer bilateral fusion (`True, True`) | GEMM reads from peer memory | GEMM epilogue stores to the source rank | One direct-access domain |
+| Collective local fusion | PCCL all-gather, then local packing | GEMM writes the local return ring, then PCCL reduce-scatter | Within or across supernodes |
+
+Here “hybrid” describes staging dispatch while fusing return. It does not mean
+a hierarchical combination of within-domain direct access and cross-domain
+RDMA. Such a sparse hierarchical transport is not implemented. Direct fusion
+still has synchronization and separate routing/activation kernels. Neither peer
+fusion switch means the whole MoE executes in a single kernel.
+
+The deployment baseline is optimized `NativeMoEPlan`. A controlled fusion
+baseline uses the same peer or collective-fused GEMMs with only the relevant
+fusion switch disabled. Independent Torch references verify numerical results;
+they are not performance denominators. State the baseline and GEMM configuration
+with every speedup, since changing transport, scheduling and tiles is a whole
+implementation comparison rather than an isolated fusion measurement.
+
 Peer plans default to GPU active-row pointwise work, fused local score/weighted
 gradients and BF16x8 copies. `active_rows=False`, `fuse_local_grad=False` and
 `vectorized_copy=False` retain benchmark controls. Both peer and collective-fused
@@ -54,7 +77,7 @@ plans accept `fuse_activation_backward=True` to put SwiGLU backward in the
 dHidden epilogue; its default is `False`, since the measured EP16 gain was small.
 See `docs/moe_training_scaling.md` for versioned baseline and controlled results.
 
-On measured M890 EP8/EP16 workloads, staging inputs and fusing the return was
+On measured M890 EP8/EP16/EP32 workloads, staging inputs and fusing the return was
 faster than fusing both directions. Select `fuse_dispatch=False,
 fuse_return=True` to use that mode. A measured large-GEMM configuration is
 `gemm_configs={role: (256,64,64,64,2) for role in
@@ -125,9 +148,18 @@ native FP32 wgrads are packed with zero padding to multiples of 128.
 
 Collective plans default to `m_schedule="nopad"`: grouped GEMMs use GPU expert
 lengths and skip unused trailing capacity. `"contiguous"` retains the original
-capacity-wide schedule as a benchmark control. Quantization/pointwise kernels
-still cover their allocated capacity. Use the nopad baseline when attributing
-gains to communication fusion.
+capacity-wide schedule as a benchmark control. BF16 NoPad collective plans also
+default to `active_pointwise=True` and `vectorized_routes=True`: packing,
+activations and route transforms visit current padded expert rows and use
+BF16x8 copies. The controls retain scalar/allocated-capacity work. FP8
+quantization/pointwise kernels still cover their allocated capacity. Use the
+optimized nopad baseline when attributing gains to communication fusion.
+
+All plans default to `fast_weight_transpose=True`. A combined grouped transpose
+prepares backward weights with BF16 bit preservation, including signed zero and
+NaN payloads. It falls back to Torch copies for unaligned source pointers.
+`fast_weight_transpose=False` retains the original Torch transpose-copy control;
+both sides of a performance comparison should use the same setting.
 
 Logical `workspace_bytes`/`activation_workspace_bytes` exclude caller tensors,
 optimizer state, driver/VMM reservations and spills. Compare allocator peaks in

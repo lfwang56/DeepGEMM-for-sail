@@ -28,6 +28,7 @@ SCRIPT_SUITES = {
         'tests/test_native_moe_training.py --fp8',
         'tests/test_native_moe_training.py --peer',
         'tests/test_native_moe_training.py --persistent',
+        'tests/test_native_moe_training.py --collective-fused',
     ],
     'ZW-M890P-MegaMoE': [
         '-m pytest -q -s --disable-warnings -x -k smoke tests/test_mega_moe.py',
