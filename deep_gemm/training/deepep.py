@@ -29,6 +29,10 @@ class DeepEPMoEPlan(NativeMoEPlan):
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
         if ring_rows is not None and (self.k > 32 or self.size * self.chunk_tokens * self.h > 2**31 - 1):
             raise ValueError("DeepEP routed-row windows require topk<=32 and an int32-bounded receive matrix")
+        # Preserve forward Hidden for concurrent DW2; dHidden uses a distinct
+        # bounded ring and the existing activation-backward kernel consumes it.
+        self.backward_hidden = (self._allocate("deepep_backward_hidden", (self.rows, self.i), torch.bfloat16)
+                                if self.wgrad_overlap == "both" else None)
         self.active_pointwise = self.vectorized_routes = True
         self.gemm_configs = gemm_configs or {}
         if self.block_m == 256 and not self.gemm_configs:
@@ -173,6 +177,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 else:
                     self.recv_accumulator.zero_()
                     for window in range(0, self.full_row_capacity, self.rows):
+                        self._join_wgrad()
                         self._set_window(window)
                         self._expert_forward(w1, w2)
                         self._reduce_window(rw, window, weighted=True)
@@ -222,6 +227,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 local_dx, local_ds = self._combine(rw, handle, weighted=False, dscores=self.recv_dscores)
                 dx[start:start + count].copy_(local_dx[:count])
                 dscores[start:start + count].copy_(local_ds[:count])
+                self._join_wgrad()
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             return dx, dw1, dw2, dscores
@@ -230,10 +236,13 @@ class DeepEPMoEPlan(NativeMoEPlan):
         _launch(24, [rdy, rw, self.permutation, self.packed_output,
                      self.packed_dy, self.recv_dscores, self.current_rows, self.status],
                 [self.rows, self.h, self.recv_capacity, self.k])
-        dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
-        self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
-        self._activation(backward=True)
-        dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+        self._wgrad(self.packed_dy, self.hidden, dw2,
+                    asynchronous=self.wgrad_overlap == "both")
+        dhidden = self.hidden if self.backward_hidden is None else self.backward_hidden
+        self._gemm(self.packed_dy, self.w2_t, dhidden, "w2_t")
+        self._activation(backward=True, hidden=dhidden)
+        self._wgrad(self.gate_up, self.packed_x, dw1,
+                    asynchronous=self.wgrad_overlap != "none")
         self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
 
     def close(self):

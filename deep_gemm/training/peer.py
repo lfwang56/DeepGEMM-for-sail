@@ -38,6 +38,10 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_backward=False, dag_direct_return=False,
                  input_copy_ilp=1,
                  fuse_fc1_activation=False, **kwargs):
+        if kwargs.get("wgrad_overlap", "none") != "none" and (dag_backward or ffn_fusion):
+            raise ValueError("wgrad stream overlap requires the separate backward GEMM schedule")
+        if kwargs.get("wgrad_overlap") == "both" and not fuse_activation_backward:
+            raise ValueError("DW2 overlap requires the fused dHidden epilogue to preserve forward Hidden")
         if type(input_copy_ilp) is not int or input_copy_ilp not in (1, 2, 4, 8):
             raise ValueError("input_copy_ilp must be1,2,4or8")
         if input_copy_ilp != 1 and not (dag_fusion or (dispatch_producer and producer_input_aiu)):
@@ -630,15 +634,20 @@ class PeerMoEPlan(NativeMoEPlan):
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
             else:
                 self._expert_gradients()
-                dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+                self._wgrad(self.packed_dy, self.hidden, dw2,
+                            asynchronous=self.wgrad_overlap == "both")
                 self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.identity_rows, role="dhidden")
                 if not self.fuse_activation_backward:
                     self._activation(backward=True)
-                dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
+                self._wgrad(self.gate_up, self.packed_x, dw1,
+                            asynchronous=self.wgrad_overlap != "none")
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
                                 write=self.fuse_return, destination="local_dx")
                 if not self.fuse_return:
                     self._scatter_peer("local_dx")
+                # Both wgrads read window metadata/activations. Join before
+                # any next-window overwrite and before entering rank barriers.
+                self._join_wgrad()
         self._barrier(start * 4 + 3)
         _launch(6, [self.local_dx, scores, dx],
                 [self.chunk_tokens, self.h, self.k, dy.shape[0], start, 0])

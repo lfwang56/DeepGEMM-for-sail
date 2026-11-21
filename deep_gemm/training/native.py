@@ -34,13 +34,19 @@ class NativeMoEPlan:
                  chunk_tokens=128, compute="bf16", group=None, device=None,
                  check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
                  active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True,
-                 packed_rows=None, block_m=128, gate_up_layout="split"):
+                 packed_rows=None, block_m=128, gate_up_layout="split", wgrad_overlap="none"):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
             raise ValueError("invalid expert, top-k or token capacity")
         if compute not in ("bf16", "fp8"):
             raise ValueError("compute must be 'bf16' or 'fp8'")
+        if wgrad_overlap not in ("none", "dw1", "both"):
+            raise ValueError("wgrad_overlap must be none, dw1 or both")
+        if wgrad_overlap != "none" and (compute != "bf16" or packed_rows is None
+                                        or self.transport not in ("peer", "deepep")):
+            raise ValueError("wgrad overlap requires a bounded BF16 peer or DeepEP plan")
+        self.wgrad_overlap = wgrad_overlap
         if type(block_m) is not int or block_m not in (128, 256) or (block_m != 128 and compute != "bf16"):
             raise ValueError("block_m must be128, or256 for BF16")
         self.block_m = block_m
@@ -101,7 +107,8 @@ class NativeMoEPlan:
             if self.vectorized_routes:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                           recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout)
+                           recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout,
+                           wgrad_overlap)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -110,6 +117,8 @@ class NativeMoEPlan:
         self._stream = None
         self._prepared = False
         self.buffers = {}
+        self._wgrad_stream = torch.cuda.Stream(device=self.device) if wgrad_overlap != "none" else None
+        self._wgrad_pending = False
 
         def allocate(name, shape, dtype=torch.bfloat16):
             if packed_rows is not None:
@@ -359,17 +368,37 @@ class NativeMoEPlan:
         self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
         self._scatter_output()
 
-    def _activation(self, backward=False):
+    def _wgrad(self, left, right, output, *, asynchronous=False):
+        if not asynchronous:
+            dg.k_grouped_bf16_gemm_tn_device(left, right, output, self.lengths, self.rows)
+            return
+        main = torch.cuda.current_stream(self.device)
+        self._wgrad_stream.wait_stream(main)
+        with torch.cuda.stream(self._wgrad_stream):
+            # Preserve allocator lifetime even if a later main-stream launch
+            # raises before the normal join. Inputs otherwise remain read-only.
+            for tensor in (left, right, output, self.lengths):
+                tensor.record_stream(self._wgrad_stream)
+            dg.k_grouped_bf16_gemm_tn_device(left, right, output, self.lengths, self.rows)
+        self._wgrad_pending = True
+
+    def _join_wgrad(self):
+        if self._wgrad_pending:
+            torch.cuda.current_stream(self.device).wait_stream(self._wgrad_stream)
+            self._wgrad_pending = False
+
+    def _activation(self, backward=False, hidden=None):
+        hidden = self.hidden if hidden is None else hidden
         fused = self.compute == "fp8" and self.fuse_activation_quant
         if fused:
-            tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
+            tensors = [self.gate_up, hidden] + ([self.gate_up] if backward else [])
             tensors += list(self.quantized[2 * self.i if backward else self.i])
             _launch(15 if backward else 14, tensors, [self.rows, self.i])
         elif self.active_pointwise:
-            _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status],
+            _launch(16, [self.gate_up, hidden, self.current_rows, self.status],
                     [self.rows, self.i, int(backward)] + ([8] if self.g8_interleaved else []))
         else:
-            tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
+            tensors = [self.gate_up, hidden] + ([self.gate_up] if backward else [])
             _launch(8 if backward else 7, tensors, [self.rows, self.i] + ([8] if self.g8_interleaved else []))
         return fused
 

@@ -124,6 +124,7 @@ def main():
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
+    parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
@@ -273,6 +274,7 @@ def main():
             options["fast_weight_transpose"] = args.fast_weight_transpose
             options["block_m"] = args.block_m
             options["gate_up_layout"] = args.gate_up_layout
+            options["wgrad_overlap"] = args.wgrad_overlap
             if args.ring_rows is not None:
                 options["ring_rows"] = args.ring_rows
             options.update(controls)
@@ -397,6 +399,7 @@ def main():
                     "dag_backward": getattr(plan, "dag_backward", None) if backend == "peer" else None,
                     "dag_direct_return": getattr(plan, "dag_direct_return", None) if backend == "peer" else None,
                     "input_copy_ilp": getattr(plan, "input_copy_ilp", None) if backend == "peer" else None,
+                    "wgrad_overlap": plan.wgrad_overlap,
                     "dag_direct_return_activity_scope": "return embedded in FC2/DX; task spans do not resolve internal overlap" if backend == "peer" and args.dag_direct_return else None,
                     "dag_input_prefetch_max_inflight_ctas": args.dag_input_ctas if backend == "peer" and args.dag_input_prefetch else None,
                     "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" and not args.dag_shared_pool else None,

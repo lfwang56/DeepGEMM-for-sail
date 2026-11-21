@@ -34,6 +34,7 @@ def main():
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
+    parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--intermediate", type=int, default=2048)
     parser.add_argument("--local-experts", type=int, default=8)
@@ -93,6 +94,7 @@ def main():
                         ring_rows=args.ring_rows,
                         block_m=args.block_m,
                         gate_up_layout=args.gate_up_layout,
+                        wgrad_overlap=args.wgrad_overlap,
                         gemm_configs=configs, check_errors=False)
     print(json.dumps(dict(case="large_deepep_stage", rank=rank, stage="plan_ready",
                           backend=args.backend, rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None))), flush=True)
@@ -161,6 +163,7 @@ def main():
             backend=args.backend, gate_up_layout=args.gate_up_layout,
             dag_fusion=args.dag_fusion, dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return,
             input_copy_ilp=args.input_copy_ilp if args.backend == "peer" else None,
+            wgrad_overlap=plan.wgrad_overlap,
             payload_transport=getattr(plan, "deep_ep_backend", "verified direct peer domain"),
             rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None),
             rdma_qps=getattr(plan, "deep_ep_qps", None), communication_cus=getattr(plan, "comm_sms", None),

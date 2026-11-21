@@ -2758,3 +2758,62 @@ Accepted clean phases: 8/8 collected; eight phases were planned.
 Best observed geometry: `qwen38-wlf-ep32-iter28-wgrad-auto-attempt0`, peer98.464209ms, paired DeepEP121.192639ms (1.2308x). This is a full-step comparison; it does not establish physical network utilization or a2–3x gain.
 
 Artifacts: `outputs/qwen38/iter28-wgrad-geometry-controls.json`, `iter28-wgrad-geometry-reference.json`, `ep32-native211-reference.json`; LUT sources under `docs/qwen38_bilateral/wgrad_luts/`.
+
+
+## Iteration 29 — overlap independent weight gradients with backward GEMMs and return
+
+**Direction.** The fastest producer schedule still serialized every local GEMM.
+Use one auxiliary native Torch stream: DW2 reads saved forward Hidden while
+the main stream computes dHidden/activation gradients; DW1 then waits for
+those gradients and runs alongside DX/return. An explicit join precedes
+every metadata/activation-window reuse. Peer joins before rank barriers.
+Both FP32 wgrads retain per-window accumulation order. Default `none` retains
+the original schedule; `dw1` is a single-switch control and `both` overlaps
+both gradients. No GPU math, precision boundaries or instructions change.
+
+**Strong baseline.** Installed DeepEP gets the same overlap choices. Its `both`
+mode writes dHidden into an additional bounded BF16 I-wide ring, preserving
+forward Hidden for DW2 without a copy. Final comparisons must use the best
+DeepEP mode, not a slower serial denominator. Base-plan all-rank agreement
+includes the mode. Side-stream tensor lifetime is recorded with the allocator.
+
+**Validation.** Producer serial/parallel graphs pass four changed-input,
+changed-score and changed-routing patterns each for `dw1` and `both`: exact
+Y/DX/dScore, DW relative RMS below5e-7. Full H8192/I2048/E16/top10 FP32 oracle
+passes masked and duplicate/skewed patterns. DeepEP EP2 graph protocol oracle
+passes all six records. The initial DeepEP allocation preflight caught a
+missing dtype argument; it was fixed before any timing. Domain EP32 balanced
+peer/DeepEP and full C4096 all-to-expert0 oracles are recorded separately;
+inspect their clean audits and completion before accepting domain timings.
+
+**Measured scope.** Qwen H8192/I2048/E512/top10, T4096/rank, C4096,
+ring65536, BM256, G8, producer input ILP8. EP16 uses32 experts/rank;
+EP32 uses16. Each is inside one supernode. Complete forward and rematerialized
+backward with FP32 gradient zero/accumulation; no optimizer/shared expert.
+Median maximum-rank event milliseconds; native Torch2.11 extension2ec4d537.
+
+| Domain EP | Wgrad mode | Peer full step ms | DeepEP full step ms | Paired ratio |
+| ---: | --- | ---: | ---: | ---: |
+| 16 | qwen38-wlf-ep16-iter29-wgrad-dw1 | incomplete/excluded | incomplete/excluded | — |
+| 16 | none | 106.704114 | 120.539600 | 1.1297x |
+
+EP16: best peer `none` 106.704114ms; strongest measured DeepEP `none` 120.539600ms; best/strongest ratio1.1297x. Peer change versus its matched serial control106.704114ms: 0.000% reduction.
+
+**Failed candidate; do not promote.** The actual EP32 DeepEP independent
+oracle failed DW1 with relative RMS0.87–0.93 on several ranks. The two-rank
+single-window check passed, but it did not exercise the missing dependency:
+the new join was accidentally inserted in the forward window loop rather
+than the backward window loop. Backward could overwrite packed X and lengths
+while auxiliary DW1 still read them. Peer has the intended per-window join
+and passed its independent oracle, but every nonserial paired comparison
+in this iteration is excluded. No EP32 candidate timing was launched after
+this failure. Preserve raw partial EP16 timings only as invalid diagnostics;
+fix and repeat the multi-window checks in the next iteration.
+
+The intended stream schedule enables concurrency, not a guarantee of faster
+execution or measured network/MMA overlap. Both kernels still compete for CU,
+register, TSM and memory resources. Use separate Asys spans and complete-step
+timings to evaluate the outcome; retain the faster serial recipe if necessary.
+
+Artifacts: `outputs/qwen38/iter29-wgrad-stream-ep{16,32}-controls.json`,
+`ep32-wgrad-stream-reference.json`; local preflight logs `work/qwen38-wgrad29-*`.

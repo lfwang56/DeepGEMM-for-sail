@@ -64,6 +64,7 @@ def main():
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
+    parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
@@ -142,6 +143,7 @@ def main():
     extra["fast_weight_transpose"] = options.fast_weight_transpose
     extra["block_m"] = options.block_m
     extra["gate_up_layout"] = options.gate_up_layout
+    extra["wgrad_overlap"] = options.wgrad_overlap
     if options.reuse_packed_dy:
         if options.backend != "peer":
             parser.error("packed gradient reuse requires peer backend")
@@ -210,6 +212,7 @@ def main():
                               dag_backward=getattr(plan, "dag_backward", None),
                               dag_direct_return=getattr(plan, "dag_direct_return", None),
                               input_copy_ilp=getattr(plan, "input_copy_ilp", None),
+                              wgrad_overlap=plan.wgrad_overlap,
                               dag_serialized_control=getattr(plan, "dag_serialize", None),
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
