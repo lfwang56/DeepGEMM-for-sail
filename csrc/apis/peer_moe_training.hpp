@@ -153,6 +153,7 @@ public:
         int n, k, groups;
         bool read_peer, write_peer;
         bool activation_backward;
+        int dispatch_cache_n;
         int block_n, block_k, warp_m, warp_n, stages, threads;
         LaunchArgs launch_args;
         PeerGemmParams params;
@@ -161,7 +162,9 @@ public:
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
                            args.read_peer, args.write_peer, args.n, args.k, args.block_n,
                            args.block_k, args.warp_m, args.warp_n, args.stages);
-        return args.activation_backward ? name + "_activation_backward" : name;
+        if (args.activation_backward) name += "_activation_backward";
+        if (args.dispatch_cache_n) name += fmt::format("_cache{}", args.dispatch_cache_n);
+        return name;
     }
     static std::string generate_impl(const Args& args) {
         return fmt::format(R"(
@@ -170,13 +173,13 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}
+        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}
     >(params);
 }}
 )", args.threads, name(args), args.n, args.k, args.groups, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
-       args.activation_backward ? "true" : "false");
+       args.activation_backward ? "true" : "false", args.dispatch_cache_n);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -190,7 +193,8 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       int source_rows_per_rank, int destination_rows_per_rank,
                       bool read_peer, bool write_peer, bool compile_only,
                       bool pack_input, const std::vector<int>& config,
-                      const c10::optional<torch::Tensor>& activation_gate_up) {
+                      const c10::optional<torch::Tensor>& activation_gate_up,
+                      int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -230,6 +234,18 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     params.destination_rows_per_rank = destination_rows_per_rank;
     params.num_ranks = ranks;
     params.pack_input = pack_input;
+    DG_HOST_ASSERT(dispatch_cache_n == 0 || dispatch_cache_n == 2 || dispatch_cache_n == 4
+                   || dispatch_cache_n == 8 || dispatch_cache_n == 16);
+    if (!read_peer) dispatch_cache_n = 0;
+    if (dispatch_cache_n) {
+        DG_HOST_ASSERT(dispatch_scratch.has_value());
+        const auto& scratch = dispatch_scratch.value();
+        DG_HOST_ASSERT(scratch.is_contiguous() && scratch.device() == a.device()
+                       && scratch.scalar_type() == torch::kBFloat16 && scratch.dim() == 2);
+        DG_HOST_ASSERT(scratch.size(1) == k && scratch.size(0) >= get_num_sms() * 2 * 128);
+        DG_HOST_ASSERT(scratch.numel() <= INT32_MAX);
+        params.dispatch_scratch = scratch.data_ptr();
+    }
     if (activation_gate_up.has_value()) {
         const auto& activation = activation_gate_up.value();
         DG_HOST_ASSERT(!write_peer && activation.device() == a.device() && activation.is_contiguous());
@@ -253,7 +269,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     DG_HOST_ASSERT(threads >= 32 && threads <= 256);
     const int smem = gemm_smem_total_size(2, stages, 128, bn, bk);
     DG_HOST_ASSERT(smem <= 256 * 1024);
-    PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(),
+    PeerGemmRuntime::Args args{n, k, groups, read_peer, write_peer, activation_gate_up.has_value(), dispatch_cache_n,
                               bn, bk, wm, wn, stages, threads,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     const auto code = PeerGemmRuntime::generate(args);
@@ -261,7 +277,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     int occupancy = 0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
     DG_HOST_ASSERT(occupancy > 0);
-    args.launch_args.grid_dim.x *= occupancy;
+    args.launch_args.grid_dim.x *= dispatch_cache_n ? std::min(occupancy, 2) : occupancy;
     if (get_env<int>("show_log")) {
         std::printf("[PeerTraining_BF16:]\n");
         std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
@@ -282,7 +298,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("source_rows_per_rank"), py::arg("destination_rows_per_rank"),
           py::arg("read_peer"), py::arg("write_peer"), py::arg("compile_only") = false,
           py::arg("pack_input") = false, py::arg("config") = std::vector<int>{},
-          py::arg("activation_gate_up") = py::none());
+          py::arg("activation_gate_up") = py::none(), py::arg("dispatch_cache_n") = 0,
+          py::arg("dispatch_scratch") = py::none());
 }
 
 }  // namespace deep_gemm::training

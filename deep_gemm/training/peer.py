@@ -25,7 +25,7 @@ class PeerMoEPlan(NativeMoEPlan):
 
     def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
                  active_rows=True, fuse_local_grad=True, fuse_activation_backward=False,
-                 vectorized_copy=True, **kwargs):
+                 vectorized_copy=True, dispatch_cache_n=0, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -40,6 +40,11 @@ class PeerMoEPlan(NativeMoEPlan):
         if not isinstance(vectorized_copy, bool):
             raise TypeError("vectorized_copy must be bool")
         self.vectorized_copy = vectorized_copy
+        if type(dispatch_cache_n) is not int or dispatch_cache_n not in (0, 2, 4, 8, 16):
+            raise ValueError("dispatch_cache_n must be 0, 2, 4, 8 or 16")
+        if dispatch_cache_n and (not fuse_dispatch or self.transport != "peer"):
+            raise ValueError("dispatch caching requires the peer fused-dispatch path")
+        self.dispatch_cache_n = dispatch_cache_n
         super().__init__(*args, **kwargs)
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
@@ -100,6 +105,11 @@ class PeerMoEPlan(NativeMoEPlan):
         self.num_blocks = torch.zeros(1, device=self.device, dtype=torch.int32)
         self.buffers.update(source_rows=self.source_rows, identity_rows=self.identity_rows,
                             work_info=self.work_info, num_blocks=self.num_blocks)
+        self.dispatch_scratch = None
+        if self.dispatch_cache_n:
+            cus = torch.cuda.get_device_properties(self.device).multi_processor_count
+            self.dispatch_scratch = torch.empty((cus * 2 * 128, self.h), device=self.device, dtype=torch.bfloat16)
+            self.buffers["dispatch_scratch"] = self.dispatch_scratch
         self.gate_up.zero_()
         self.hidden.zero_()
         self._prepared = False
@@ -122,6 +132,7 @@ class PeerMoEPlan(NativeMoEPlan):
             source_stride, self.chunk_tokens * self.k, read, write, compile_only,
             pack_input, self.gemm_configs.get(role, ()),
             self.gate_up if role == "dhidden" and self.fuse_activation_backward else None,
+            self.dispatch_cache_n if read else 0, self.dispatch_scratch if read else None,
         )
 
     @torch.no_grad()

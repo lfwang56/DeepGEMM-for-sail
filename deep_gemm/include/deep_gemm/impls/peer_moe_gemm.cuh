@@ -28,6 +28,29 @@ namespace deep_gemm {
 
 namespace training {
 
+template <uint32_t BM, uint32_t K, uint32_t Threads>
+__device__ __forceinline__ void cache_peer_input_rows(
+        uint64_t* addresses, const PeerGemmParams& params,
+        uint32_t packed_row_base, bool pack_input) {
+    auto* cache = reinterpret_cast<uint4*>(params.dispatch_scratch) + uint64_t(blockIdx.x) * BM * (K / 8);
+    auto* packed = reinterpret_cast<uint4*>(const_cast<void*>(params.gemm.a_ptr));
+    for (uint32_t position = threadIdx.x; position < BM * (K / 8); position += Threads) {
+        const uint32_t row = position / (K / 8), column = position % (K / 8);
+        const uint64_t address = addresses[row];
+        const uint4 value = address ? reinterpret_cast<const uint4*>(address)[column] : uint4{};
+        cache[position] = value;
+        if (pack_input)
+            packed[uint64_t(packed_row_base + row) * (K / 8) + column] = value;
+    }
+    // Consumers bypass L1 below. Make every thread's writes visible before
+    // another warp starts the local-cache-to-TSM pipeline.
+    __threadfence();
+    __syncthreads();
+    for (uint32_t row = threadIdx.x; row < BM; row += Threads)
+        addresses[row] = addresses[row] ? reinterpret_cast<uint64_t>(cache + uint64_t(row) * (K / 8)) : 0;
+    __syncthreads();
+}
+
 // The native implicit-permute mainloop already gathers token rows directly
 // into its shared-memory pipeline. Resolve each row through a peer pointer
 // table so that the GEMM itself performs the dispatch reads over ICN/fabric.
@@ -155,7 +178,7 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool PeerRead, bool PeerWrite,
-          bool Coherent = false, bool ActivationBackward = false>
+          bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     const auto& args = params.gemm;
@@ -179,9 +202,13 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       cute::MMA_Atom<MmaInst>,
       cute::Layout<Shape< Int<BLOCK_M / WARP_M>, Int<BLOCK_N / WARP_N>, _1>>>;
 
-    using TileScheduler = std::conditional_t<Coherent,
+    static_assert(DispatchCacheN == 0 || (PeerRead && !Coherent));
+    using OriginalScheduler = std::conditional_t<Coherent,
         training::CoherentFusedScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
         FusedGemmScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>>;
+    using TileScheduler = std::conditional_t<DispatchCacheN != 0,
+        training::CachedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
+                                     DispatchCacheN == 0 ? 1 : DispatchCacheN>, OriginalScheduler>;
 
     // Shared memory
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);
@@ -195,7 +222,9 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
 
     // load A from hbm to tsm: use async copy.
     constexpr int Alignment = 128 / cutlass::sizeof_bits<SrcT>::value;
-    using ACopyInst = cute::PPU_CP_ASYNC_CACHEALWAYS_ZFILL<cutlass::uint128_t>;
+    using ACopyInst = std::conditional_t<DispatchCacheN != 0,
+        cute::PPU_CP_ASYNC_CACHEGLOBAL_ZFILL<cutlass::uint128_t>,
+        cute::PPU_CP_ASYNC_CACHEALWAYS_ZFILL<cutlass::uint128_t>>;
     using GemmOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<
             ArchTag, SrcT, false, Alignment, cute::Int<BLOCK_K>, BLOCK_SIZE,
             ACopyInst, cute::Int<BLOCK_M>>;
@@ -279,7 +308,10 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       if constexpr (PeerRead) {
           __shared__ uint64_t cached_source_addresses[BLOCK_M];
           __syncthreads();
-          for (int row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE) {
+          bool first_in_group = true;
+          if constexpr (DispatchCacheN != 0) first_in_group = deep_scheduler.first_in_group;
+          if (first_in_group) {
+            for (int row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE) {
               const uint32_t source_row = Coherent ? training::load_pipeline_metadata(blk_token_base + row)
                                                     : __ldg(blk_token_base + row);
               uint64_t address = 0;
@@ -289,6 +321,11 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
                   address = __ldg(params.source_peers + rank) + uint64_t(local_row) * STRIDE_AM * sizeof(SrcT);
               }
               cached_source_addresses[row] = address;
+            }
+            __syncthreads();
+            if constexpr (DispatchCacheN != 0)
+                training::cache_peer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(cached_source_addresses,
+                    params, deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
           }
           __syncthreads();
           source_addresses = cached_source_addresses;
@@ -309,7 +346,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
               training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                   tAsA(_,_,_,k_pipe), source_addresses, params.source_peers,
                   BLOCK_K * k_tile_iter, thread_idx,
-                  const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
+                  const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset,
+                  DispatchCacheN == 0 && params.pack_input && n_block_idx == 0);
           } else {
               copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                   tAsA(_,_,_,k_pipe), args.a_ptr,
@@ -362,7 +400,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
                 training::copy_peer_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                     tAsA(_,_,_,smem_pipe_write), source_addresses, params.source_peers,
                     BLOCK_K * k_tile_iter, thread_idx,
-                    const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
+                    const_cast<void*>(args.a_ptr), deep_scheduler.curr_block_m_offset,
+                    DispatchCacheN == 0 && params.pack_input && n_block_idx == 0);
             } else {
                 copy_A_to_tsm<SrcT, ACopyInst, TilerA, BLOCK_M, BLOCK_K, STRIDE_AM>(
                     tAsA(_,_,_,smem_pipe_write), args.a_ptr,

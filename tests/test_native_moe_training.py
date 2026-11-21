@@ -187,6 +187,26 @@ class NativeTests(unittest.TestCase):
         y.backward(dy)
         check((y, x.grad, w1.grad, w2.grad, scores.grad), expected(x, ids, scores, w1, w2, dy), self.compute)
 
+    def test_peer_dispatch_cache_groups(self):
+        if self.plan_class is not PeerMoEPlan:
+            self.skipTest("peer in-GEMM dispatch cache")
+        # Six FC1 N tiles exercise reuse and the partial final N group.
+        for group_n in (2, 4, 8, 16):
+            torch.manual_seed(1849)
+            x = (torch.randn(7, 512, device="cuda") * .1).bfloat16().requires_grad_()
+            w1 = (torch.randn(3, 768, 512, device="cuda") * .03).bfloat16().requires_grad_()
+            w2 = (torch.randn(3, 512, 384, device="cuda") * .03).bfloat16().requires_grad_()
+            ids = torch.tensor([[0, 1], [2, 0], [0, 0], [-1, -1], [1, 2], [2, 1], [0, 2]], device="cuda")
+            scores = torch.rand(7, 2, device="cuda").requires_grad_()
+            dy = (torch.randn_like(x) * .1).bfloat16()
+            valid = torch.full((), 5, device="cuda", dtype=torch.int32)
+            plan = PeerMoEPlan(512, 384, 3, 2, 7, chunk_tokens=3,
+                               dispatch_cache_n=group_n, fuse_dispatch=True, fuse_return=True)
+            y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
+            y.backward(dy)
+            check((y, x.grad, w1.grad, w2.grad, scores.grad),
+                  expected(x, ids, scores, w1, w2, dy, 5), "bf16")
+
     def test_peer_pointwise_switches(self):
         if self.plan_class is not PeerMoEPlan:
             self.skipTest("peer active-row and local-gradient controls")
@@ -308,7 +328,7 @@ class NativeTests(unittest.TestCase):
 
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
-              collective_fused=False, fast_weight_transpose=False):
+              collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -334,6 +354,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
                   else CollectiveFusedMoEPlan if collective_fused else NativeMoEPlan)
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
     plan_options["fast_weight_transpose"] = fast_weight_transpose
+    if dispatch_cache_n:
+        plan_options["dispatch_cache_n"] = dispatch_cache_n
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     if peer and not persistent:
@@ -424,7 +446,10 @@ if __name__ == "__main__":
     parser.add_argument("--fuse-activation-backward", action="store_true")
     parser.add_argument("--collective-fused", action="store_true")
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     options, remaining = parser.parse_known_args()
+    if options.dispatch_cache_n and (not options.ep or not options.peer or options.persistent or options.no_fuse_dispatch):
+        parser.error("--dispatch-cache-n requires --peer --ep with fused dispatch; unit tests cover cache groups automatically")
     if options.collective_fused and (options.peer or options.persistent or options.fp8):
         parser.error("collective-fused is a separate BF16 backend")
     if options.gemm_config and (not (options.peer or options.collective_fused) or options.persistent or options.fp8):
@@ -436,7 +461,8 @@ if __name__ == "__main__":
     if options.ep:
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
-                  options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose)
+                  options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose,
+                  options.dispatch_cache_n)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer

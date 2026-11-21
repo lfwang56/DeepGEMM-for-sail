@@ -38,4 +38,40 @@ struct CoherentFusedScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     }
 };
 
+// Keep a short run of N tiles on one CTA. Its private input cache is populated
+// once for that run, without cross-CTA dependencies or residency barriers.
+template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN,
+          uint32_t E, uint32_t CacheN>
+struct CachedPeerScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
+    using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
+    static constexpr uint32_t nblocks = (N + BN - 1) / BN;
+    static constexpr uint32_t ngroups = (nblocks + CacheN - 1) / CacheN;
+    uint32_t local_n = CacheN, group_n = 0, block_m = 0;
+    bool first_in_group = false;
+
+    __device__ __forceinline__ CachedPeerScheduler(const int32_t* blocks, const int32_t* records)
+        : Base(blocks, records) {}
+
+    __device__ __forceinline__ bool fetch_next_work(uint32_t& m, uint32_t& n) {
+        first_in_group = local_n == CacheN || group_n + local_n == nblocks;
+        if (first_in_group) {
+            const uint32_t next = (this->current_iter++) * gridDim.x + blockIdx.x;
+            if (next >= this->num_aligned_m_blocks_ * ngroups) return false;
+            const uint32_t record_index = next / ngroups;
+            const uint4 data = __ldg(this->expert_ids_and_cumsum_ + record_index);
+            this->curr_group_idx = data.x;
+            this->curr_group_m = data.y;
+            this->cumsum_m_block_idx = record_index;
+            block_m = record_index - data.z;
+            this->curr_block_m_offset = data.w + block_m * BM;
+            this->valid_m_in_block = min(BM, data.y - block_m * BM);
+            group_n = (next % ngroups) * CacheN;
+            local_n = 0;
+        }
+        m = block_m;
+        n = group_n + local_n++;
+        return true;
+    }
+};
+
 }  // namespace deep_gemm::training

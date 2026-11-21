@@ -37,3 +37,30 @@ Logs: qwen38-ep32-bilateral-baseline-attempt0/. The collective is an auxiliary
 all-gather/reduce-scatter reference. PPU DeepEP baseline integration is pending.
 No kernel optimization or industry-baseline speedup claim is made by this run.
 
+## Iteration 1: CTA-private input cache across N tiles
+
+Direction: load peer rows into CTA-private HBM scratch inside the GEMM, reuse
+them across four N tiles, and use cache-global async copies into TSM. No separate
+dispatch kernel and no cross-CTA synchronization. Existing return fusion stays
+enabled. Scratch is bounded to two CTAs per CU, about156MiB for H8192.
+
+Correctness preparation: the new unit method passed all cache-group sizes
+2/4/8/16, six-N-tile tails, duplicates, masks and ragged chunks, against independent
+CPU FP64 outputs and all gradients. One method,122.991s including cold JIT.
+
+Performance shape/protocol matches the Qwen EP32 baseline above. Torch2.10
+native container is the iteration signal; the final DeepEP comparison will use
+the user's wlf_sgl_2.2 (Torch2.11, installed DeepEP2.2) consistently.
+Whole-phase return code: 1. Nodes: 172.17.0.225, 172.17.0.226, 172.17.0.227, 172.17.0.222.
+Logs: qwen38-ep32-bilateral-iter1-cache4-attempt0/. Failed/interfered phases are excluded from speedup claims.
+
+| Backend | dispatch | return | cache N | Step ms |
+| --- | --- | --- | --- | ---: |
+| collective | null | null | 0 | 106.8472 |
+| peer | false | false | 0 | 42.3934 |
+| peer | false | true | 0 | 40.7894 |
+| peer | true | false | 4 | 62.6312 |
+| peer | true | true | 4 | 61.5644 |
+
+This phase is not accepted for performance claims; inspect launcher/rank logs before the next iteration.
+

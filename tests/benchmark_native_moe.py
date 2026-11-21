@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--scalar-collective-copy", action="store_true")
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--weight-transpose-ablation", action="store_true")
+    parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     args = parser.parse_args()
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
@@ -171,6 +172,8 @@ def main():
                     options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
             options["fast_weight_transpose"] = args.fast_weight_transpose
             options.update(controls)
+            if backend == "peer" and options.get("fuse_dispatch", True):
+                options["dispatch_cache_n"] = args.dispatch_cache_n
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
             if isinstance(plan, ConfiguredCollectivePlan):
@@ -250,6 +253,7 @@ def main():
                     "peer_fuse_local_grad": getattr(plan, "fuse_local_grad", None) if backend == "peer" else None,
                     "peer_fuse_activation_backward": getattr(plan, "fuse_activation_backward", None) if backend == "peer" else None,
                     "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
+                    "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "fast_weight_transpose": plan.fast_weight_transpose,
