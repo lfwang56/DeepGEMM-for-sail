@@ -775,3 +775,26 @@ The future staged-return source is present but disabled in these controls. Its i
 - BestactualEP3244.459490967ms vs pairedDeepEP47.109542847ms (5.6253%less time); only0.8255% versus producercontrol. No>=3%material new win. Preserve options for final combinations and pursue producerinputstaging.
 - Strongest combined option passed EP2 independent math reference and128dynamic-route graph replays, allparents/gateclean220. Both AIU configurations already passed every-element Qwen512-token reference.
 - ActualQwen cross-domainEP64 **PASSED** after38CU/19QP correction: phaseqwen38-wlf-cross-ep64-large-reference-r3-attempt0, all64ranks*3patterns=192fullreference records and all8hostgatesclean. H8192,I2048,E8/rank=512global,K10,T19,C256, graphreplay with masks,emptyrank0,zero-score,duplicates,reverseexpertIDs. GlobalmaxRMSY.004171,DX.004491,DW1.003385,DW2.003414,dScore.006988. Token/gradientpayloadSailSHMEM8RDMAranks; CPU Gloo onlymetadata/reference sums. Artifactoutputs/qwen38/cross-ep64-reference.json. This is routed-layer correctness, not fullQwen2.4Ttraining or performance.
+
+### Cross-domainEP64 communication-CU controls — first attempt failed
+
+- ActualQwenH8192/I2048/E8,K10,T1024,C256,64ranks,CPUmetadataGloo andrealSailSHMEMpayload, MNNVLdisabled. First8CU phase exited1, so the remaining16/24/32/38CU cases were not launched. No performance result or comparison. Source is frozen during the attempt; currently includes uncommitted iteration9peer-only optional features, unused by this DeepEP baseline. _Csha256be4414a11d87e88fab554ff03e151d4a1b978ad4c0eb166f25d869c75f229c8b.
+- Preserve all64rank error tails inwork/qwen38-cross-ep64-comm8-failure.json. Rank0 andrank63 excerpts before debugging:
+
+```json
+[
+  {
+    "rank": 0,
+    "tail": [
+      "device_props.name:ZW-M890P",
+      "{\"case\": \"bounded_training_benchmark\", \"backend\": \"deepep\", \"compute\": \"bf16\", \"host\": \"e01-cn-2n550vu1t02-a0005\", \"device\": \"ZW-M890P\", \"torch\": \"2.11.0\", \"process_group_backend\": \"gloo\", \"ep_size\": 64, \"topology\": \"qwen38-wlf-cross-supernode-ep64-real-rdma\", \"graph\": true, \"instrumented\": false, \"tokens_per_rank\": 1024, \"hidden\": 8192, \"intermediate\": 2048, \"local_experts\": 8, \"topk\": 10, \"chunk_tokens\": 256, \"routing\": \"balanced\", \"gemm_configs\": {\"fc1\": [256, 64, 64, 64, 2], \"fc2\": [256, 64, 64, 64, 2], \"dhidden\": [256, 64, 64, 64, 2], \"dx\": [256, 64, 64, 64, 2]}, \"collective_m_schedule\": null, \"collective_active_pointwise\": null, \"collective_vectorized_routes\": null, \"collective_fuse_return\": null, \"collective_fuse_activation_backward\": null, \"collective_gemm_config\": null, \"fused_activation_quantization\": null, \"peer_fuse_dispatch\": null, \"peer_fuse_return\": null, \"peer_active_rows\": null, \"peer_fuse_local_grad\": null, \"peer_fuse_activation_backward\": null, \"peer_vectorized_copy\": null, \"peer_dispatch_cache_n\": null, \"peer_dispatch_cache_ctas\": null, \"peer_dispatch_producer\": null, \"peer_producer_local_aiu\": null, \"peer_producer_input_aiu\": null, \"peer_dispatch_producer_tiles\": null, \"peer_dispatch_cache_aiu\": null, \"peer_staged_return\": null, \"peer_staged_return_row_padding\": null, \"peer_reuse_packed_dy\": null, \"deepep_version\": \"2.2.0\", \"deepep_backend\": \"sailshmem\", \"deepep_rdma_ranks\": 8, \"deepep_comm_sms\": 8, \"deepep_rdma_qps\": 12, \"deepep_mnnvl_disabled\": \"1\", \"deepep_scaleup\": false, \"persistent_ctas\": null, \"persistent_resident_blocks_per_cu\": null, \"fast_weight_transpose\": true, \"warmup\": 5, \"iterations\": 20, \"repeats\": 5, \"median_max_rank_event_ms\": 125.3934326171875, \"median_max_rank_wall_ms\": 125.3963922499679, \"samples_max_rank_event_ms\": [126.74967041015626, 125.39716796875, 125.3934326171875, 125.3017822265625, 125.2912353515625], \"samples_max_rank_wall_ms\": [126.75183629617095, 125.40031920652837, 125.3963922499679, 125.30451285419986, 125.29492985922843], \"workspace_bytes\": 11214690408, \"activation_workspace_bytes\": 10409384040, \"max_rank_torch_allocated_bytes\": 16428980736, \"rank0_initial_torch_allocated_bytes\": 2449596928, \"sample_relative_rms_vs_first_backend\": {\"y\": 0.0, \"dx\": 0.0, \"dw1\": 0.0, \"dw2\": 0.0, \"dscores\": 0.0}, \"scope\": \"forward + full backward replay + FP32 wgrad zero/accumulation; no optimizer\", \"memory_scope\": \"logical workspace and PyTorch allocator; excludes driver/VMM reservations\"}"
+    ]
+  },
+  {
+    "rank": 63,
+    "tail": [
+      "device_props.name:ZW-M890P"
+    ]
+  }
+]
+```
