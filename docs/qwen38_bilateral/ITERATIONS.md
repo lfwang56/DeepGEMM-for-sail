@@ -3324,3 +3324,52 @@ Fastest accepted deepep: ('deepep', 109.02188720703126, 'qwen38-wlf-ep32-iter40-
 **Local-pointer resource screening.** GlobalE16 on one PPU, not ICN or EP32. Whole-host audit clean=True. These values do not enter distributed speedups. See iter40-local-grid-screen.json.
 
 Only a lower complete-step latency counts as a win; resource budgets, busy-loop hints and visible concurrency are hypotheses rather than wire/MMA utilization measurements.
+
+
+## Iteration 41 — additional full-width WGrad tiles and fixed-thread warp layouts
+
+The stage3 profile leaves44.16ms of local kernel spans, including16.92ms WGrad.
+Iteration37 improved GEMM staging but did not test these four additional WGrad
+geometries or the constant512-thread WM32/WN128 and WM128/WN32 mappings.
+WGrad options:256x256x64 stages3;256x256x128 stages2;
+256x128x128 stages2;128x256x128 stages2. Earlier28 used different BK64 tiles.
+The directory wgrad_luts40 retains its preliminary preflight name; these are41
+timing trials. Every WGrad geometry passed independent full-width CPU FP32,
+nonzero beta=1 accumulation and changing device K lengths under repeated graph
+replay. Four M-group warp options passed independent full-width FP32 and exact
+mutable graph comparisons. Actual32-rank FP32 checks cover both Peer and legacy
+DeepEP layouts before timing; failed or incomplete phases remain excluded.
+
+The fastest accepted installed ElasticBuffer or legacy Buffer recipe from40
+sets the communication baseline. Each compute geometry applies equally to both
+backends, with H8192/I2048/E512/top10,T4096/C4096,ring65536,BM256,BF16 and
+complete rematerialized backward/FP32 DW zero+accumulation. Source/extension are
+frozen from40; LUT hashes are recorded separately. This changes compute tiles,
+not the communication protocol or instruction-overlap claims.
+
+| Phase | Backend | Complete layer ms |
+| --- | --- | ---: |
+| qwen38-wlf-ep32-iter41-geometry-control-elastic | elastic | 107.921216 |
+| qwen38-wlf-ep32-iter41-geometry-control-peer-attempt0 | peer | 84.225812 |
+| qwen38-wlf-ep32-iter41-geometry-wg-bk128-stage2-elastic | elastic | 108.239172 |
+| qwen38-wlf-ep32-iter41-geometry-wg-bk128-stage2-peer | peer | 84.681580 |
+| qwen38-wlf-ep32-iter41-geometry-wg-m128-bk128-stage2-elastic | elastic | 120.573389 |
+| qwen38-wlf-ep32-iter41-geometry-wg-m128-bk128-stage2-peer | peer | 97.017572 |
+| qwen38-wlf-ep32-iter41-geometry-wg-n128-bk128-stage2-elastic | elastic | 120.128357 |
+| qwen38-wlf-ep32-iter41-geometry-wg-n128-bk128-stage2-peer | peer | 96.554108 |
+| qwen38-wlf-ep32-iter41-geometry-wg-stage3-elastic | elastic | 106.848181 |
+| qwen38-wlf-ep32-iter41-geometry-wg-stage3-peer | peer | 83.194653 |
+| qwen38-wlf-ep32-iter41-geometry-wm128-wn32-s2-elastic | elastic | 117.677051 |
+| qwen38-wlf-ep32-iter41-geometry-wm128-wn32-s2-peer | peer | 96.751685 |
+| qwen38-wlf-ep32-iter41-geometry-wm128-wn32-s3-elastic | elastic | 108.188721 |
+| qwen38-wlf-ep32-iter41-geometry-wm128-wn32-s3-peer | peer | 84.046893 |
+| qwen38-wlf-ep32-iter41-geometry-wm32-wn128-s2-elastic | elastic | 117.835010 |
+| qwen38-wlf-ep32-iter41-geometry-wm32-wn128-s2-peer | peer | 96.867694 |
+| qwen38-wlf-ep32-iter41-geometry-wm32-wn128-s3-elastic | elastic | 107.571790 |
+| qwen38-wlf-ep32-iter41-geometry-wm32-wn128-s3-peer | peer | 84.915588 |
+
+Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter41-geometry-wg-stage3-peer", "backend": "peer", "ms": 83.1946533203125, "gemm_configs": {"fc1": [256, 64, 64, 64, 3], "fc2": [256, 64, 64, 64, 3], "dhidden": [256, 64, 64, 64, 3], "dx": [256, 64, 64, 64, 3]}, "wgrad_lut_sha256": "0651bc1981d18a9291b4f27b53794cafec98f9b15f34280565824810dd438fad"}
+
+Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter41-geometry-wg-stage3-elastic", "backend": "elastic", "ms": 106.84818115234376, "gemm_configs": {"fc1": [256, 64, 64, 64, 3], "fc2": [256, 64, 64, 64, 3], "dhidden": [256, 64, 64, 64, 3], "dx": [256, 64, 64, 64, 3]}, "wgrad_lut_sha256": "0651bc1981d18a9291b4f27b53794cafec98f9b15f34280565824810dd438fad"}
+
+See iter41-geometry-controls.json, iter41-geometry-reference.json and iter41-baseline-selection.json.
