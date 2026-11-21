@@ -25,6 +25,7 @@ parser.add_argument('--dag-direct-return', action='store_true')
 parser.add_argument('--dag-direct-return-ablation', action='store_true')
 parser.add_argument('--input-copy-ilp-ablation', type=int, choices=(2, 4, 8))
 parser.add_argument('--wgrad-overlap-ablation', choices=('dw1','both'))
+parser.add_argument('--dy-prefetch-ablation', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
 if args.dag_backward_only:
@@ -45,7 +46,8 @@ x = (torch.randn(t, h, device='cuda') * .1).bfloat16()
 dy = (torch.randn_like(x) * .1).bfloat16()
 w1 = (torch.randn(e, 2*i, h, device='cuda') * .02).bfloat16()
 w2 = (torch.randn(e, h, i, device='cuda') * .02).bfloat16()
-if args.fc1_activation_ablation or args.dag_g8 or args.input_copy_ilp_ablation or args.wgrad_overlap_ablation:
+if (args.fc1_activation_ablation or args.dag_g8 or args.input_copy_ilp_ablation
+        or args.wgrad_overlap_ablation or args.dy_prefetch_ablation):
     w1 = to_g8_weight(w1)
 ids = torch.randn(t, e, device='cuda').topk(k, -1).indices.contiguous()
 original_ids = ids.clone()
@@ -112,6 +114,12 @@ with torch.cuda.stream(stream):
                            dispatch_producer=True, producer_input_aiu=True,
                            producer_local_aiu=True, input_copy_ilp=8,
                            wgrad_overlap=args.wgrad_overlap_ablation if cache else 'none')
+        if args.dy_prefetch_ablation:
+            options = dict(expert_local_grad=True, ring_rows=1024, block_m=256,
+                           gate_up_layout='g8', fuse_fc1_activation=True,
+                           dispatch_producer=True, producer_input_aiu=True,
+                           producer_local_aiu=True, input_copy_ilp=8,
+                           overlap_expert_dy=cache)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
@@ -162,7 +170,8 @@ with torch.cuda.stream(stream):
                            else (('dw1',2),('dw2',3))):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        case = ('wgrad_stream_graph_equivalence' if args.wgrad_overlap_ablation else
+        case = ('dy_prefetch_graph_equivalence' if args.dy_prefetch_ablation else
+                'wgrad_stream_graph_equivalence' if args.wgrad_overlap_ablation else
                 'input_copy_ilp_graph_equivalence' if args.input_copy_ilp_ablation else
                 'fc1_activation_graph_equivalence' if args.fc1_activation_ablation else
                 'dag_graph_equivalence' if args.dag_ablation or args.dag_serialization_ablation else
@@ -175,9 +184,11 @@ with torch.cuda.stream(stream):
                           'dag_shared_pool':args.dag_shared_pool,
                           'modes':[dict(forward_dag=p.dag_fusion,backward_dag=p.dag_backward,
                                         direct_return=p.dag_direct_return,input_copy_ilp=p.input_copy_ilp,
-                                        wgrad_overlap=p.wgrad_overlap) for p in plans],
+                                        wgrad_overlap=p.wgrad_overlap,
+                                        overlap_expert_dy=p.overlap_expert_dy) for p in plans],
                           'exact':exact,'wgrad_relative_rms':errors,
-                          'source':('identical tensors, GEMM tiles and accumulation order; auxiliary wgrad stream versus main stream' if args.wgrad_overlap_ablation else
+                          'source':('identical tensors, GEMM tiles and dot reduction kernel; prefetched raw DY versus direct peer DY reads' if args.dy_prefetch_ablation else
+                                    'identical tensors, GEMM tiles and accumulation order; auxiliary wgrad stream versus main stream' if args.wgrad_overlap_ablation else
                                     'identical tensors and GEMM tiles; only independent input vector loads per thread change' if args.input_copy_ilp_ablation else
                                     'identical G8 parameters and GEMM tiles; separate versus register-fused BF16-rounded FC1/SwiGLU' if args.fc1_activation_ablation else
                                     'identical tensors and GEMM tiles; DAG enabled versus producer control, or DAG serial versus parallel' if args.dag_ablation or args.dag_serialization_ablation else

@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
+    parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
@@ -111,7 +112,7 @@ def main():
     configs = {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     for backend in args.backends:
         options = dict(gemm_configs=configs, block_m=args.block_m, gate_up_layout=args.gate_up_layout,
-                       wgrad_overlap=args.wgrad_overlap)
+                       wgrad_overlap=args.wgrad_overlap, overlap_expert_dy=args.overlap_expert_dy)
         if args.ring_rows is not None:
             options["ring_rows"] = args.ring_rows
         if backend == "peer":
@@ -191,6 +192,7 @@ def main():
             dag_direct_return=args.dag_direct_return if backend == "peer" else None,
             input_copy_ilp=args.input_copy_ilp if backend == "peer" else None,
             wgrad_overlap=plan.wgrad_overlap,
+            overlap_expert_dy=plan.overlap_expert_dy,
             gate_up_layout=plan.gate_up_layout,
             fuse_fc1_activation=args.fuse_fc1_activation if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,

@@ -38,6 +38,10 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_backward=False, dag_direct_return=False,
                  input_copy_ilp=1,
                  fuse_fc1_activation=False, **kwargs):
+        if kwargs.get("overlap_expert_dy", False) and (not dispatch_producer or not expert_local_grad
+                or ring_rows is None or dag_fusion or dag_backward or ffn_fusion
+                or dispatch_pipeline or return_pipeline):
+            raise ValueError("DY prefetch requires the producer expert-gradient routed-window schedule")
         if kwargs.get("wgrad_overlap", "none") != "none" and (dag_backward or ffn_fusion):
             raise ValueError("wgrad stream overlap requires the separate backward GEMM schedule")
         if kwargs.get("wgrad_overlap") == "both" and not fuse_activation_backward:
@@ -193,6 +197,9 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and fuse_dispatch
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        if self.overlap_expert_dy:
+            self.packed_raw_dy = torch.empty_like(self.packed_dy)
+            self.buffers["packed_raw_dy"] = self.packed_raw_dy
         if self.group is not None:
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
@@ -383,7 +390,7 @@ class PeerMoEPlan(NativeMoEPlan):
                     setattr(self, name, statistics)
                     self.buffers[name] = statistics
 
-    def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True):
+    def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True, prefetch_dy=False):
         if self.dispatch_pipeline:
             if not compile_only:
                 self.pipeline_ready.zero_()
@@ -400,6 +407,10 @@ class PeerMoEPlan(NativeMoEPlan):
                             read=True, pack_input=True, role="fc1", compile_only=compile_only,
                             first_n_tile=0, num_n_tiles=produced,
                             producer_input_aiu=self.producer_input_aiu, keep_gate_up=keep_gate_up)
+            # X dispatch is complete. Move raw DY while the remaining FC1
+            # columns and FC2 replay compute, avoiding competition with X.
+            if prefetch_dy and not compile_only:
+                self._start_gradient_prefetch()
             if produced < ntiles:
                 self._peer_gemm(self.packed_x, w1, self.gate_up, self.identity_rows,
                                 role="fc1", compile_only=compile_only, first_n_tile=produced,
@@ -438,6 +449,8 @@ class PeerMoEPlan(NativeMoEPlan):
             self._dag(self.w2_t, self.w1_t, backward=True, compile_only=True)
         if self.expert_local_grad:
             self._expert_gradients(compile_only=True)
+        if self.overlap_expert_dy:
+            self._prefetch_raw_dy(compile_only=True)
         if self.ring_rows is not None:
             set_route_window(self, 0, compile_only=True)
         self._barrier(0, compile_only=True)
@@ -517,7 +530,8 @@ class PeerMoEPlan(NativeMoEPlan):
         set_route_window(self, start)
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m])
 
-    def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True):
+    def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True,
+                              prefetch_dy=False):
         if self.dag_fusion:
             self._dag(w1, w2, return_output=return_output)
             if return_output and synchronize_output:
@@ -529,7 +543,7 @@ class PeerMoEPlan(NativeMoEPlan):
             return
         if not self.fuse_dispatch:
             self._stage_input()
-        self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output)
+        self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output, prefetch_dy=prefetch_dy)
         if not self.fuse_fc1_activation:
             self._activation()
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
@@ -609,10 +623,29 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.chunk_tokens, self.h, self.k, dy.shape[0], start], compile_only)
 
     def _expert_gradients(self, compile_only=False):
-        _peer(13, [self.pointer_tables["raw_dy"], self.pointer_tables["raw_scores"],
+        tensors = [self.pointer_tables["raw_dy"], self.pointer_tables["raw_scores"],
                    self.pointer_tables["local_dscores"], self.permutation,
-                   self.packed_output, self.packed_dy, self.num_blocks, self.status],
+                   self.packed_output, self.packed_dy, self.num_blocks, self.status]
+        if self.overlap_expert_dy:
+            if not compile_only:
+                self._join_gradient_prefetch()
+            tensors.append(self.packed_raw_dy)
+        _peer(13, tensors,
               [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
+
+    def _prefetch_raw_dy(self, compile_only=False):
+        _peer(15, [self.pointer_tables["raw_dy"], self.permutation, self.packed_raw_dy,
+                   self.num_blocks, self.status],
+              [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
+
+    def _start_gradient_prefetch(self):
+        self._gradient_stream.wait_stream(torch.cuda.current_stream(self.device))
+        with torch.cuda.stream(self._gradient_stream):
+            for tensor in (self.pointer_tables["raw_dy"], self.permutation, self.packed_raw_dy,
+                           self.num_blocks, self.status):
+                tensor.record_stream(self._gradient_stream)
+            self._prefetch_raw_dy()
+        self._gradient_prefetch_pending = True
 
     def _publish_gradient_chunk(self, dy, scores, start):
         count = max(0, min(self.chunk_tokens, dy.shape[0] - start))
@@ -625,7 +658,8 @@ class PeerMoEPlan(NativeMoEPlan):
     def _backward_windows(self, dy, scores, w1, w2, dw1, dw2, dx, dscores, start):
         for window in range(0, self.full_row_capacity, self.rows):
             self._set_window(window)
-            self._chunk_forward_single(w1, w2, pack_input=True, return_output=False)
+            self._chunk_forward_single(w1, w2, pack_input=True, return_output=False,
+                                       prefetch_dy=self.overlap_expert_dy)
             if self.dag_backward:
                 self._dag(self.w2_t, self.w1_t, backward=True)
                 # The fused dHidden epilogue writes only gate/up gradients,

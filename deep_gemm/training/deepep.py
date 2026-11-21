@@ -213,9 +213,20 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 count = max(0, min(self.chunk_tokens, x.shape[0] - start))
                 self.local_dy_input.zero_()
                 self.local_dy_input[:count].copy_(dy[start:start + count])
-                rdy, _, _, _, _, event = self.deep_ep_buffer.dispatch(
-                    self.local_dy_input, handle=handle, async_finish=True)
-                event.current_stream_wait()
+                if self.overlap_expert_dy:
+                    main = torch.cuda.current_stream(self.device)
+                    self._gradient_stream.wait_stream(main)
+                    with torch.cuda.stream(self._gradient_stream):
+                        self.local_dy_input.record_stream(self._gradient_stream)
+                        rdy, _, _, _, _, event = self.deep_ep_buffer.dispatch(
+                            self.local_dy_input, handle=handle, async_finish=True)
+                        event.current_stream_wait()
+                    rdy.record_stream(main)
+                    self._gradient_prefetch_pending = True
+                else:
+                    rdy, _, _, _, _, event = self.deep_ep_buffer.dispatch(
+                        self.local_dy_input, handle=handle, async_finish=True)
+                    event.current_stream_wait()
                 self.recv_dscores.zero_()
                 if self.ring_rows is None:
                     self._expert_backward_rows(rdy, rw, dw1, dw2)
@@ -235,6 +246,9 @@ class DeepEPMoEPlan(NativeMoEPlan):
             return dx, dw1, dw2, dscores
 
     def _expert_backward_rows(self, rdy, rw, dw1, dw2):
+        # Cached DY dispatch may progress during the local forward replay.
+        # Join at its first actual consumer, after that replay has completed.
+        self._join_gradient_prefetch()
         _launch(24, [rdy, rw, self.permutation, self.packed_output,
                      self.packed_dy, self.recv_dscores, self.current_rows, self.status],
                 [self.rows, self.h, self.recv_capacity, self.k])

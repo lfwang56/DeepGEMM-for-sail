@@ -35,7 +35,8 @@ class NativeMoEPlan:
                  chunk_tokens=128, compute="bf16", group=None, device=None,
                  check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
                  active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True,
-                 packed_rows=None, block_m=128, gate_up_layout="split", wgrad_overlap="none"):
+                 packed_rows=None, block_m=128, gate_up_layout="split", wgrad_overlap="none",
+                 overlap_expert_dy=False):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
@@ -48,6 +49,12 @@ class NativeMoEPlan:
                                         or self.transport not in ("peer", "deepep")):
             raise ValueError("wgrad overlap requires a bounded BF16 peer or DeepEP plan")
         self.wgrad_overlap = wgrad_overlap
+        if not isinstance(overlap_expert_dy, bool):
+            raise TypeError("overlap_expert_dy must be bool")
+        if overlap_expert_dy and (compute != "bf16" or packed_rows is None
+                                  or self.transport not in ("peer", "deepep")):
+            raise ValueError("DY overlap requires a bounded BF16 peer or DeepEP plan")
+        self.overlap_expert_dy = overlap_expert_dy
         if type(block_m) is not int or block_m not in (128, 256) or (block_m != 128 and compute != "bf16"):
             raise ValueError("block_m must be128, or256 for BF16")
         self.block_m = block_m
@@ -109,7 +116,7 @@ class NativeMoEPlan:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout,
-                           wgrad_overlap)
+                           wgrad_overlap, overlap_expert_dy)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -120,6 +127,8 @@ class NativeMoEPlan:
         self.buffers = {}
         self._wgrad_stream = torch.cuda.Stream(device=self.device) if wgrad_overlap != "none" else None
         self._wgrad_pending = False
+        self._gradient_stream = torch.cuda.Stream(device=self.device) if overlap_expert_dy else None
+        self._gradient_prefetch_pending = False
 
         def allocate(name, shape, dtype=torch.bfloat16):
             if packed_rows is not None:
@@ -387,6 +396,11 @@ class NativeMoEPlan:
         if self._wgrad_pending:
             torch.cuda.current_stream(self.device).wait_stream(self._wgrad_stream)
             self._wgrad_pending = False
+
+    def _join_gradient_prefetch(self):
+        if self._gradient_prefetch_pending:
+            torch.cuda.current_stream(self.device).wait_stream(self._gradient_stream)
+            self._gradient_prefetch_pending = False
 
     def _activation(self, backward=False, hidden=None):
         hidden = self.hidden if hidden is None else hidden

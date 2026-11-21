@@ -21,6 +21,7 @@ enum class PeerOperation : int {
     ScatterVector,
     ExpertLocalGradients,
     SetRouteWindow,
+    PrefetchRawDy,
 };
 
 struct PeerGemmParams {

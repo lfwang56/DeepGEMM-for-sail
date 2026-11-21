@@ -47,6 +47,41 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
             peer_pointer<int32_t>(p, 7)[row] = low;
         }
+    } else if constexpr (Op == PeerOperation::PrefetchRawDy) {
+        // Raw (unweighted) DY must survive even when a valid score is zero.
+        // One warp owns a row; independent vector loads precede their stores.
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 3)[0]) * p.dim[5];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 4), 2);
+            return;
+        }
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+        const int warps = blockDim.x / 32;
+        const int64_t stride = p.dim[2] * p.dim[3], width = p.dim[1] / 8;
+        for (int64_t row = block_index * warps + warp; row < rows;
+             row += int64_t(gridDim.x) * warps) {
+            const int route = peer_pointer<int32_t>(p, 1)[row];
+            const bool valid = route >= 0 && route < p.dim[4] * stride;
+            if (route >= p.dim[4] * stride && lane == 0)
+                atomicOr(peer_pointer<int32_t>(p, 4), 2);
+            const int owner = valid ? route / stride : 0;
+            const int64_t local_route = valid ? route % stride : 0;
+            const uint4* source = valid ? reinterpret_cast<const uint4*>(peer_pointer<uint64_t>(p, 0)[owner])
+                + (local_route / p.dim[3]) * width : nullptr;
+            for (int64_t base = lane; base < width; base += 32 * 8) {
+                uint4 values[8];
+                #pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const int64_t column = base + j * 32;
+                    values[j] = valid && column < width ? source[column] : uint4{};
+                }
+                #pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const int64_t column = base + j * 32;
+                    if (column < width) peer_pointer<uint4>(p, 2)[row * width + column] = values[j];
+                }
+            }
+        }
     } else if constexpr (Op == PeerOperation::ExpertLocalGradients) {
         // Keep replayed Y at its expert. Pull raw source DY and scores once
         // here, produce the mandatory BF16 packed DY and return one FP32
@@ -65,8 +100,11 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             if (route >= p.dim[4] * stride && lane == 0) atomicOr(peer_pointer<int32_t>(p, 7), 2);
             const int owner = valid ? route / stride : 0;
             const int64_t local_route = valid ? route % stride : 0;
-            const uint4* dy = valid ? reinterpret_cast<const uint4*>(peer_pointer<uint64_t>(p, 0)[owner])
-                + (local_route / p.dim[3]) * width : nullptr;
+            // Both modes share this exact dot/weighting kernel. Only the DY
+            // address changes, preserving its FP32 accumulation order.
+            const uint4* dy = valid ? (p.ptr[8] ? peer_pointer<uint4>(p, 8) + row * width
+                : reinterpret_cast<const uint4*>(peer_pointer<uint64_t>(p, 0)[owner])
+                    + (local_route / p.dim[3]) * width) : nullptr;
             const float score = valid ? reinterpret_cast<const float*>(peer_pointer<uint64_t>(p, 1)[owner])[local_route] : 0.f;
             float dot = 0.f;
             for (int64_t column = lane; column < width; column += 32) {

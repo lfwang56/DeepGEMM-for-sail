@@ -135,6 +135,7 @@ def main():
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
+    parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
@@ -285,6 +286,7 @@ def main():
             options["block_m"] = args.block_m
             options["gate_up_layout"] = args.gate_up_layout
             options["wgrad_overlap"] = args.wgrad_overlap
+            options["overlap_expert_dy"] = args.overlap_expert_dy
             if args.ring_rows is not None:
                 options["ring_rows"] = args.ring_rows
             options.update(controls)
@@ -367,6 +369,8 @@ def main():
                     "case": "bounded_training_benchmark", "backend": backend, "compute": args.compute,
                     "host": socket.gethostname(), "device": torch.cuda.get_device_name(device),
                     "torch": torch.__version__,
+                    "extension_path": str(Path(dg._C.__file__).resolve()),
+                    "extension_sha256": hashlib.sha256(Path(dg._C.__file__).read_bytes()).hexdigest(),
                     "process_group_backend": args.process_group_backend,
                     "ep_size": size, "topology": args.topology, "graph": not args.eager,
                     "instrumented": args.profile or args.dag_trace,
@@ -409,6 +413,7 @@ def main():
                     "dag_direct_return": getattr(plan, "dag_direct_return", None) if backend == "peer" else None,
                     "input_copy_ilp": getattr(plan, "input_copy_ilp", None) if backend == "peer" else None,
                     "wgrad_overlap": plan.wgrad_overlap,
+                    "overlap_expert_dy": plan.overlap_expert_dy,
                     "wgrad_warp_map": os.environ.get("DG_BF16_WGRAD_WARP_MAP", "0"),
                     "wgrad_aiu_before_tsm": os.environ.get("DG_BF16_WGRAD_AIU_BEFORE_TSM", "1"),
                     "dag_direct_return_activity_scope": "return embedded in FC2/DX; task spans do not resolve internal overlap" if backend == "peer" and args.dag_direct_return else None,

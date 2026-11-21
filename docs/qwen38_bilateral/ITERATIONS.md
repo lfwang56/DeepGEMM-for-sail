@@ -2948,3 +2948,55 @@ Best observed geometry: `qwen38-wlf-ep32-iter31-wgrad-map2-aiu1`, peer98.496906m
 Local full-token DW1 Acu (not EP/wire timing): default map0/AIU-before216regs, stack0,25% occupancy,TSM load conflict0.69; map1/AIU-before also216/0/25%/0.69; map2 or3/AIU-after216/0/25%/0.63. Lower conflicts did not establish lower complete-step latency; inspect uninstrumented results above.
 
 Artifacts: `outputs/qwen38/iter31-wgrad-issue-controls.json`, `iter31-wgrad-issue-reference.json`, `ep32-wgrad-issue31-reference.json`; Acu logs `work/qwen38-wgrad31-map*-aiu*-dw1-acu*`.
+
+
+## Iteration 32 — low-resource raw-DY communication during rematerialization
+
+**Direction.** The observed19.4ms wgrad/GEMM concurrency in iteration30
+lengthened both compute kernels. Instead overlap a small communication
+worker with local replay. After the producer's X dispatch completes, fork
+raw DY into a bounded BF16 staging ring during FC1's remaining columns and
+FC2 replay. Join at its first consumer. Extra staging is one H-wide ring,
+independent of max_tokens/layer count. Keep raw, unweighted DY so valid zero
+routing scores retain their correct score derivative.
+
+New peer operation15 uses128 threads, warp-per-row vector16B copies and
+eight independent loads before stores; padding is zeroed. Existing operation13
+selects either staged/local or peer DY at runtime, then executes the same
+dot reduction, BF16 weighted-DY stores and FP32 score return. GPU Params ABI
+and old eight-tensor callers remain compatible; staging is an optional ninth
+tensor. Per-window joins protect all reuse. Default behavior remains off.
+
+**Strong baseline.** Installed DeepEP gets the same `overlap_expert_dy` choice:
+cached DY dispatch starts on an auxiliary stream while the main stream replays
+the experts, with a join immediately before `_expert_backward_rows` consumes
+DY. Its returned DY records its main-stream consumer lifetime. Communication
+CU counts8/16/24/38 are tested for overlap; the final ratio uses the fastest
+observed DeepEP setting, including the original serial38-CU control.
+
+**Validation.** Peer serial/prefetch graphs pass four changed-X/DY/score/route
+patterns with exact Y/DX/dScore and DW RMS below5e-7. Full Qwen FP32 masked and
+duplicate/skewed oracle passes. DeepEP's36-window EP2 graph oracle passes.
+Actual EP32 independent FP32 peer and DeepEP balanced/masked/reversed checks,
+plus full C4096 all-to-expert0 for both transports, gate every timing phase.
+Native Torch2.11 extension SHA3a9c589a13be79cbeb736adfc45c028113277859f96d31c90261e55b8df80273.
+Every benchmark record includes its extension path and SHA.
+
+**Scope.** Domain EP32, H8192/I2048/E512/top10, T4096/rank, C4096,
+ring65536, BM256, G8, producer input ILP8, serial WG. Full forward and
+rematerialized backward, including FP32 weight-gradient zero/accumulation;
+no optimizer/shared expert. Median maximum-rank event milliseconds.
+
+| Configuration | Backend | DY overlap | DeepEP CUs | Complete step ms |
+| --- | --- | --- | ---: | ---: |
+| deepep-prefetch16 | deepep | True | 16 | 123.821484 |
+| deepep-prefetch24 | deepep | True | 24 | 120.275134 |
+| deepep-prefetch8 | deepep | True | 8 | 136.804797 |
+| prefetch38 | deepep | True | 38 | 119.972473 |
+| prefetch38 | peer | True | None | 99.848474 |
+| serial38-attempt0 | deepep | False | 38 | 121.241980 |
+| serial38-attempt0 | peer | False | None | 97.358685 |
+
+Best peer: overlap=False, 97.358685ms. Strongest DeepEP: overlap=True, CUs=38, 119.972473ms. Ratio1.2323x. Peer reduction versus matched serial control97.358685ms: 0.000%. Task concurrency must still be verified with Asys; this ratio does not measure physical wire utilization.
+
+Artifacts: `outputs/qwen38/iter32-dy-prefetch-controls.json` and `ep32-dy-prefetch-reference.json`.

@@ -25,11 +25,11 @@ public:
     static std::string generate_impl(const Args& args) {
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_training.cuh>
-extern "C" __launch_bounds__(256, 1)
+extern "C" __launch_bounds__({}, 1)
 __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {{
     deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({})>(params);
 }}
-)", args.operation, args.operation);
+)", args.launch_args.block_dim.x, args.operation, args.operation);
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -38,7 +38,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::SetRouteWindow));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PrefetchRawDy));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -53,7 +53,18 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     };
     constexpr auto bf = torch::kBFloat16, i32 = torch::kInt32, i64 = torch::kInt64;
     int64_t work = 0, blocks = -1;
+    int threads = 256;
     switch (static_cast<PeerOperation>(operation)) {
+        case PeerOperation::PrefetchRawDy:
+            schema(5, 6);
+            DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[1] % 8 == 0
+                           && dims[2] > 0 && dims[3] > 0 && dims[4] > 0 && dims[4] <= 64
+                           && (dims[5] == 128 || dims[5] == 256));
+            expect(0, dims[4], i64); expect(1, dims[0], i32);
+            expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
+            threads = 128;
+            blocks = int64_t(get_num_sms()) * 2;
+            break;
         case PeerOperation::SetRouteWindow:
             schema(8, 6);
             DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[2] > 0 && dims[2] % 128 == 0
@@ -66,13 +77,14 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             break;
         case PeerOperation::ExpertLocalGradients:
             DG_HOST_ASSERT(dims.size() == 5 || dims.size() == 6);
-            schema(8, dims.size());
+            DG_HOST_ASSERT(tensors.size() == 8 || tensors.size() == 9);
             if (dims.size() == 6) DG_HOST_ASSERT(dims[5] == 128 || dims[5] == 256);
             DG_HOST_ASSERT(dims[1] > 0 && dims[1] % 8 == 0 && dims[2] > 0 && dims[3] > 0
                            && dims[4] > 0 && dims[4] <= 64);
             expect(0, dims[4], i64); expect(1, dims[4], i64); expect(2, dims[4], i64);
             expect(3, dims[0], i32); expect(4, dims[0] * dims[1], bf);
             expect(5, dims[0] * dims[1], bf); expect(6, 1, i32); expect(7, 1, i32);
+            if (tensors.size() == 9) expect(8, dims[0] * dims[1], bf);
             blocks = int64_t(get_num_sms()) * 2;
             break;
         case PeerOperation::CountRoutes:
@@ -169,7 +181,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     Params params{};
     for (size_t i = 0; i < tensors.size(); ++i) params.ptr[i] = tensors[i].data_ptr();
     for (size_t i = 0; i < dims.size(); ++i) params.dim[i] = dims[i];
-    PeerRuntime::Args args{operation, {dim3(blocks), dim3(256), 0}, params};
+    PeerRuntime::Args args{operation, {dim3(blocks), dim3(threads), 0}, params};
     const auto code = PeerRuntime::generate(args);
     const auto runtime = compiler->build(fmt::format("moe_training_peer_{}", operation), code);
     if (!compile_only) PeerRuntime::launch(runtime, args);
