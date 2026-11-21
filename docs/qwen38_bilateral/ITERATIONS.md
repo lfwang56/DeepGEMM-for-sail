@@ -3000,3 +3000,51 @@ no optimizer/shared expert. Median maximum-rank event milliseconds.
 Best peer: overlap=False, 97.358685ms. Strongest DeepEP: overlap=True, CUs=38, 119.972473ms. Ratio1.2323x. Peer reduction versus matched serial control97.358685ms: 0.000%. Task concurrency must still be verified with Asys; this ratio does not measure physical wire utilization.
 
 Artifacts: `outputs/qwen38/iter32-dy-prefetch-controls.json` and `ep32-dy-prefetch-reference.json`.
+
+
+## Iteration 33 — low-register tile assistants with inline GEMM fallback
+
+**Direction.** Remove the whole-input boundary between producer FC1 N=0
+and the remaining FC1 columns. Extend inline tile owners to the same BM256,
+G8 activation epilogue and bounded routed-window recipe as the fastest control.
+An independent128-thread copy kernel races the GEMM's N=0 owners to claim
+individual M tiles, copies raw BF16 X in ILP8 vectors and publishes each tile.
+All GEMM column consumers acquire that tile's ready flag. A GEMM owner that
+wins still performs its own input copy; it cannot rely solely on a future
+assistant CTA. Existing fully resident scheduling is retained.
+
+**Protocol.** Flag0=unclaimed,2=busy,1=ready. CAS claims each tile exactly
+once, existing device release/acquire publishes the data, and all loser CTAs
+join before reusing shared claim state. Auxiliary completion is joined after
+FC1 and before subsequent window reuse. No cross-rank protocol, GPU Params
+layout, arithmetic, FP32 accumulation order or BF16 intermediate rounding changes.
+Zero assisting CTAs exercises the inline-owner path without auxiliary work;
+8/16/32/39 CTAs test the same native copy code at different concurrency.
+Default producer remains unchanged. No NVIDIA occupancy assumptions are used.
+
+**Validation.** Full-width independent FP32 masked/skewed reference, exact
+mutable graph comparison against producer G8 ILP8 (changed X/DY/scores/routes),
+actual EP32 balanced/masked/duplicate/reversed and C4096 full all-to-expert0
+references gate timing. Every accepted phase requires all four host gates and
+all32 ranks. Strong installed DeepEP serial and early-DY settings are retained.
+Native Torch2.11 extension SHAe875fd910fc304c90ad7bbe1eb9a09caeec2ef914ce73f42ffe0efd07f08ef53.
+
+**Scope.** Domain EP32 H8192/I2048/E512/top10, T4096/rank,C4096,ring65536,
+BM256,G8,full forward plus rematerialized backward and FP32 DW zero/accumulation.
+Median maximum-rank event milliseconds; optimizer/shared expert excluded.
+
+| Configuration | Backend | Assistant CTAs | Full step ms |
+| --- | --- | ---: | ---: |
+| deepep-early-dy | deepep | None | 120.065222 |
+| inline-assist0 | peer | 0 | 100.085876 |
+| inline-assist16 | peer | 16 | 103.384839 |
+| inline-assist32 | peer | 32 | 105.023706 |
+| inline-assist39 | peer | 39 | 104.216602 |
+| inline-assist8 | peer | 8 | 104.233716 |
+| qwen38-wlf-ep32-iter33-input-producer-control-attempt0 | excluded/incomplete | — | — |
+| producer-control-attempt2 | deepep | None | 121.310986 |
+| producer-control-attempt2 | peer | 0 | 97.400525 |
+
+Best peerqwen38-wlf-ep32-iter33-input-producer-control-attempt2: 97.400525ms. Strongest DeepEPqwen38-wlf-ep32-iter33-input-deepep-early-dy: 120.065222ms. Ratio1.2327x. Reduction versus matched producer97.400525ms: 0.000%. Kernel-span concurrency alone is not wire utilization or a latency win.
+
+Artifacts: `outputs/qwen38/iter33-input-assist-controls.json`, `ep32-input-assist-reference.json`.

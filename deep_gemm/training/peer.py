@@ -36,8 +36,13 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
-                 input_copy_ilp=1,
+                 input_copy_ilp=1, dispatch_assist_ctas=0,
                  fuse_fc1_activation=False, **kwargs):
+        if type(dispatch_assist_ctas) is not int or not 0 <= dispatch_assist_ctas <= 156:
+            raise ValueError("dispatch_assist_ctas must be an integer in [0,156]")
+        self.dispatch_assist_ctas = dispatch_assist_ctas
+        if dispatch_assist_ctas:
+            inline_dispatch = True
         if kwargs.get("overlap_expert_dy", False) and (not dispatch_producer or not expert_local_grad
                 or ring_rows is None or dag_fusion or dag_backward or ffn_fusion
                 or dispatch_pipeline or return_pipeline):
@@ -48,14 +53,14 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("DW2 overlap requires the fused dHidden epilogue to preserve forward Hidden")
         if type(input_copy_ilp) is not int or input_copy_ilp not in (1, 2, 4, 8):
             raise ValueError("input_copy_ilp must be1,2,4or8")
-        if input_copy_ilp != 1 and not (dag_fusion or (dispatch_producer and producer_input_aiu)):
+        if input_copy_ilp != 1 and not (dag_fusion or inline_dispatch or (dispatch_producer and producer_input_aiu)):
             raise ValueError("input copy ILP requires the forward DAG or producer input staging")
         self.input_copy_ilp = input_copy_ilp
         if not isinstance(fuse_fc1_activation, bool):
             raise TypeError("fuse_fc1_activation must be bool")
         g8 = kwargs.get("gate_up_layout", "split") == "g8"
-        if g8 and (self.transport != "peer" or ffn_fusion or (dag_fusion and not (dag_shared_pool and fuse_fc1_activation)) or dispatch_pipeline
-                   or return_pipeline or inline_dispatch):
+        if g8 and (self.transport != "peer" or ffn_fusion or (dag_fusion and not (dag_shared_pool and fuse_fc1_activation)) or (dispatch_pipeline and not inline_dispatch)
+                   or return_pipeline):
             raise ValueError("G8 supports direct/producer peer paths or the shared task pool with FC1 activation fusion")
         if fuse_fc1_activation and (not g8 or not expert_local_grad or not fuse_dispatch or not fuse_return
                                    or dispatch_cache_n or ffn_fusion):
@@ -93,13 +98,13 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("eight-byte return stores require direct fused return without staging/resident/FFN modes")
         self.return_vector_bytes = return_vector_bytes
         block_m = kwargs.get("block_m", 128)
-        if block_m != 128 and (self.transport != "peer" or ffn_fusion or dispatch_pipeline
-                                or return_pipeline or inline_dispatch or staged_return or dispatch_cache_n):
+        if block_m != 128 and (self.transport != "peer" or ffn_fusion or (dispatch_pipeline and not inline_dispatch)
+                                or return_pipeline or staged_return or dispatch_cache_n):
             raise ValueError("BM256 currently supports direct/producer peer GEMMs without resident/cache/staging modes")
         if "packed_rows" in kwargs:
             raise ValueError("use ring_rows to enable routed-row scheduling")
         if ring_rows is not None:
-            if not expert_local_grad or ffn_fusion or dispatch_pipeline or return_pipeline or inline_dispatch:
+            if not expert_local_grad or ffn_fusion or (dispatch_pipeline and not inline_dispatch) or return_pipeline:
                 raise ValueError("routed-row windows require expert-local gradients without a resident pipeline")
         self.ring_rows = ring_rows
         if kwargs.get("compute", "bf16") != "bf16":
@@ -200,10 +205,15 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.overlap_expert_dy:
             self.packed_raw_dy = torch.empty_like(self.packed_dy)
             self.buffers["packed_raw_dy"] = self.packed_raw_dy
+        if self.dispatch_assist_ctas:
+            self._input_stream = torch.cuda.Stream(device=self.device)
+            self.input_assisted_tiles = torch.zeros((), device=self.device, dtype=torch.int32)
+            self.buffers["input_assisted_tiles"] = self.input_assisted_tiles
         if self.group is not None:
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
-                      self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp)
+                      self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
+                      self.inline_dispatch, self.dispatch_assist_ctas)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -320,7 +330,7 @@ class PeerMoEPlan(NativeMoEPlan):
             if ctas < 1:
                 raise ValueError("pipeline needs at least two CUs; occupancy is checked during preparation")
             if dispatch_pipeline:
-                self.pipeline_ready = torch.zeros(self.rows // 128 + 1, device=self.device, dtype=torch.int32)
+                self.pipeline_ready = torch.zeros(self.rows // self.block_m + 1, device=self.device, dtype=torch.int32)
                 self.buffers["pipeline_ready"] = self.pipeline_ready
             if return_pipeline:
                 minimum_bn = min(self.gemm_configs.get(role, (128,))[0] for role in ("fc2", "dx"))
@@ -377,7 +387,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.block_m,
             self.return_vector_bytes if write else 4,
             interleaved, fc1_activation, keep_gate_up if fc1_activation else True,
-            self.input_copy_ilp if producer_input_aiu else 1,
+            self.input_copy_ilp if producer_input_aiu or (dispatch_pipeline and self.inline_dispatch) else 1,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
@@ -394,8 +404,19 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.dispatch_pipeline:
             if not compile_only:
                 self.pipeline_ready.zero_()
+            if self.dispatch_assist_ctas and not compile_only:
+                self.input_assisted_tiles.zero_()
+                self._input_stream.wait_stream(torch.cuda.current_stream(self.device))
+                with torch.cuda.stream(self._input_stream):
+                    for tensor in (self.pointer_tables["local_x"], self.source_rows, self.packed_x,
+                                   self.work_info, self.num_blocks, self.pipeline_ready, self.status,
+                                   self.input_assisted_tiles):
+                        tensor.record_stream(self._input_stream)
+                    self._assist_input()
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
                             role="fc1", compile_only=compile_only, dispatch_pipeline=True, keep_gate_up=keep_gate_up)
+            if self.dispatch_assist_ctas and not compile_only:
+                torch.cuda.current_stream(self.device).wait_stream(self._input_stream)
         elif self.dispatch_producer:
             bn = self.gemm_configs.get("fc1", (128, 64, 64, 64, 3))[0]
             ntiles = (2 * self.i + bn - 1) // bn
@@ -421,6 +442,13 @@ class PeerMoEPlan(NativeMoEPlan):
                             read=self.fuse_dispatch, pack_input=pack_input and self.fuse_dispatch,
                             role="fc1", compile_only=compile_only, keep_gate_up=keep_gate_up)
 
+    def _assist_input(self, compile_only=False):
+        _peer(16, [self.pointer_tables["local_x"], self.source_rows, self.packed_x,
+                   self.work_info, self.num_blocks, self.pipeline_ready, self.status,
+                   self.input_assisted_tiles],
+              [self.rows, self.h, self.chunk_tokens, self.size, self.block_m,
+               self.dispatch_assist_ctas, self.input_copy_ilp], compile_only)
+
     @torch.no_grad()
     def prepare(self, w1, w2):
         """Compile all peer GEMM variants before entering device peer barriers."""
@@ -437,6 +465,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if torch.cuda.is_current_stream_capturing():
             raise RuntimeError("warm up PeerMoEPlan before graph capture")
         self._prepare_pointwise()
+        if self.dispatch_assist_ctas:
+            self._assist_input(compile_only=True)
         w1, w2 = w1.to(torch.bfloat16), w2.to(torch.bfloat16)
         self._prepare_weights(w1, w2, backward=True)
         if self.ffn_fusion:

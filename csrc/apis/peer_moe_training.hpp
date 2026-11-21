@@ -38,7 +38,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PrefetchRawDy));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::AssistInputTiles));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -55,6 +55,20 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     int64_t work = 0, blocks = -1;
     int threads = 256;
     switch (static_cast<PeerOperation>(operation)) {
+        case PeerOperation::AssistInputTiles:
+            schema(8, 7);
+            DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[1] % 8 == 0
+                           && dims[2] > 0 && dims[3] > 0 && dims[3] <= 64
+                           && (dims[4] == 128 || dims[4] == 256)
+                           && dims[0] % dims[4] == 0 && dims[5] > 0 && dims[5] <= 156
+                           && (dims[6] == 1 || dims[6] == 2 || dims[6] == 4 || dims[6] == 8));
+            expect(0, dims[3], i64); expect(1, dims[0], i32);
+            expect(2, dims[0] * dims[1], bf); expect(3, dims[0] / dims[4] * 4, i32);
+            expect(4, 1, i32); expect(5, dims[0] / dims[4] + 1, i32);
+            expect(6, 1, i32); expect(7, 1, i32);
+            threads = 128;
+            blocks = dims[5];
+            break;
         case PeerOperation::PrefetchRawDy:
             schema(5, 6);
             DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[1] % 8 == 0
@@ -293,11 +307,13 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true,
                       int input_copy_ilp = 1) {
     DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
-    DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu);
+    DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu
+                   || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !write_peer));
     DG_HOST_ASSERT(block_m == 128 || block_m == 256);
     DG_HOST_ASSERT(return_vector_bytes == 4 || return_vector_bytes == 8);
     DG_HOST_ASSERT(return_vector_bytes == 4 || (write_peer && !pipeline_ready.has_value() && !staged_return));
-    DG_HOST_ASSERT(!fc1_activation || (interleaved_gate_up && !write_peer && !pipeline_ready.has_value()
+    DG_HOST_ASSERT(!fc1_activation || (interleaved_gate_up && !write_peer
+                                     && (!pipeline_ready.has_value() || pipeline_comm_ctas == 0)
                                      && activation_gate_up.has_value()));
     DG_HOST_ASSERT(!interleaved_gate_up || activation_gate_up.has_value());
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
@@ -321,7 +337,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(num_blocks.numel() == 1 && num_blocks.scalar_type() == torch::kInt32);
     DG_HOST_ASSERT(source_rows_per_rank > 0 && destination_rows_per_rank > 0);
     DG_HOST_ASSERT(!pack_input || read_peer);
-    DG_HOST_ASSERT(block_m == 128 || (!pipeline_ready.has_value() && !dispatch_cache_n && !staged_return));
+    DG_HOST_ASSERT(block_m == 128 || ((!pipeline_ready.has_value() || (pipeline_comm_ctas == 0 && !write_peer))
+                                     && !dispatch_cache_n && !staged_return));
     DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
     const int ranks = source_peers.numel();
     DG_HOST_ASSERT(int64_t(ranks) * source_rows_per_rank <= INT32_MAX);
@@ -406,13 +423,13 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.keep_gate_up = keep_gate_up;
     args.input_copy_ilp = input_copy_ilp;
     if (pipeline_ready.has_value()) {
-        DG_HOST_ASSERT(!read_peer && !activation_gate_up.has_value()
+        DG_HOST_ASSERT(!read_peer && (!activation_gate_up.has_value() || fc1_activation)
                        && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
                        && !first_n_tile && !num_n_tiles && !pack_input);
         const auto& ready = pipeline_ready.value();
         DG_HOST_ASSERT(ready.device() == a.device() && ready.is_contiguous()
                        && ready.scalar_type() == torch::kInt32
-                       && ready.numel() > (m / 128) * (write_peer ? ((n + bn - 1) / bn) : 1)
+                       && ready.numel() > (m / block_m) * (write_peer ? ((n + bn - 1) / bn) : 1)
                        && ready.numel() <= INT32_MAX);
         DG_HOST_ASSERT(pipeline_status.has_value());
         const auto& status = pipeline_status.value();

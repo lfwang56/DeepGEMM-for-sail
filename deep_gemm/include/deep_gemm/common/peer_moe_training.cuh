@@ -22,6 +22,7 @@ enum class PeerOperation : int {
     ExpertLocalGradients,
     SetRouteWindow,
     PrefetchRawDy,
+    AssistInputTiles,
 };
 
 struct PeerGemmParams {

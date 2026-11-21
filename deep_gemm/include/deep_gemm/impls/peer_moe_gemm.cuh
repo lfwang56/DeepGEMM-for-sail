@@ -515,7 +515,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
     static_assert(ReturnVectorBytes == 4 || ReturnVectorBytes == 8);
     static_assert(ReturnVectorBytes == 4 || (PeerWrite && !DispatchPipeline && !StagedReturn));
-    static_assert(!Fc1Activation || (GateUpG8 && !ActivationBackward && !PeerWrite && !DispatchPipeline));
+    static_assert(!Fc1Activation || (GateUpG8 && !ActivationBackward && !PeerWrite && (!DispatchPipeline || InlineDispatch)));
     if constexpr (DispatchPipeline) {
         static_assert(!PeerRead && !ActivationBackward && DispatchCacheN == 0
                       && FirstNTile == 0 && NumNTiles == 0);
@@ -686,6 +686,11 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
       const int* blk_token_base = args.sorted_token_ids + deep_scheduler.cumsum_m_block_idx * BLOCK_M;
       if constexpr (InlineDispatch) {
           if (n_block_idx == 0) {
+              __shared__ int inline_claimed;
+              if (thread_idx == 0)
+                  inline_claimed = atomicCAS(pipeline.ready + deep_scheduler.cumsum_m_block_idx, 0u, 2u) == 0u;
+              __syncthreads();
+              if (inline_claimed) {
               __shared__ uint64_t inline_source_addresses[BLOCK_M];
               for (uint32_t row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE) {
                   const uint32_t source_row = __ldg(blk_token_base + row);
@@ -702,10 +707,25 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
               training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
                   inline_source_addresses, params, deep_scheduler.curr_block_m_offset);
               if (thread_idx == 0) {
-                  tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx, 1u);
+                  tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx, uint32_t(-1));
                   tix::red_add_rel(pipeline.ready + pipeline.signal_capacity, 1u);
               }
               __syncthreads();
+              } else {
+                  __shared__ int inline_failed;
+                  if (thread_idx == 0) {
+                      const uint64_t begin = clock64();
+                      while (tix::ld_acq(pipeline.ready + deep_scheduler.cumsum_m_block_idx) != 1u) {
+                          if ((tix::ld_acq(pipeline.status) & 8u) || clock64() - begin > pipeline.timeout_cycles) {
+                              atomicOr(pipeline.status, 8u);
+                              break;
+                          }
+                      }
+                      inline_failed = (tix::ld_acq(pipeline.status) & 8u) != 0;
+                  }
+                  __syncthreads();
+                  if (inline_failed) return;
+              }
           }
       }
       const uint64_t* source_addresses = nullptr;

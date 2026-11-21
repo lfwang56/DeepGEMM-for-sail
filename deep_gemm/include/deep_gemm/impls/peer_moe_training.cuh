@@ -47,6 +47,53 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
             peer_pointer<int32_t>(p, 7)[row] = low;
         }
+    } else if constexpr (Op == PeerOperation::AssistInputTiles) {
+        const int64_t capacity = p.dim[0], width = p.dim[1] / 8;
+        const int64_t bm = p.dim[4], blocks = peer_pointer<int32_t>(p, 4)[0];
+        if (blocks < 0 || blocks > capacity / bm) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 6), 2);
+            return;
+        }
+        auto* ready = peer_pointer<uint32_t>(p, 5);
+        __shared__ int claimed;
+        __shared__ uint64_t addresses[256];
+        for (int64_t tile = block_index; tile < blocks; tile += gridDim.x) {
+            if (threadIdx.x == 0) claimed = atomicCAS(ready + tile, 0u, 2u) == 0u;
+            __syncthreads();
+            if (!claimed) { __syncthreads(); continue; }
+            const uint4 record = reinterpret_cast<const uint4*>(p.ptr[3])[tile];
+            const int64_t base_row = record.w + (tile - record.z) * bm;
+            for (int64_t row = threadIdx.x; row < bm; row += blockDim.x) {
+                const int source = peer_pointer<int32_t>(p, 1)[base_row + row];
+                const bool valid = source >= 0 && source < p.dim[2] * p.dim[3];
+                addresses[row] = valid ? peer_pointer<uint64_t>(p, 0)[source / p.dim[2]]
+                    + uint64_t(source % p.dim[2]) * p.dim[1] * 2 : 0;
+            }
+            __syncthreads();
+            for (int64_t base = threadIdx.x; base < bm * width; base += blockDim.x * 8) {
+                uint4 values[8];
+                #pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const int64_t element = base + j * blockDim.x;
+                    const uint64_t address = element < bm * width ? addresses[element / width] : 0;
+                    values[j] = address ? reinterpret_cast<const uint4*>(address)[element % width] : uint4{};
+                }
+                #pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const int64_t element = base + j * blockDim.x;
+                    if (element < bm * width)
+                        peer_pointer<uint4>(p, 2)[base_row * width + element] = values[j];
+                }
+            }
+            __threadfence();
+            __syncthreads();
+            if (threadIdx.x == 0) {
+                tix::red_add_rel(ready + tile, uint32_t(-1)); // busy=2 -> ready=1
+                tix::red_add_rel(ready + capacity / bm, 1u);
+                atomicAdd(peer_pointer<int32_t>(p, 7), 1);
+            }
+            __syncthreads();
+        }
     } else if constexpr (Op == PeerOperation::PrefetchRawDy) {
         // Raw (unweighted) DY must survive even when a valid score is zero.
         // One warp owns a row; independent vector loads precede their stores.

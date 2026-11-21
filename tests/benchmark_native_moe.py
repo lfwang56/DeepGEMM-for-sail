@@ -134,6 +134,8 @@ def main():
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
+    parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
+    parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
@@ -249,6 +251,7 @@ def main():
                                dag_input_prefetch=args.dag_input_prefetch,
                                dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return)
                 options["input_copy_ilp"] = args.input_copy_ilp
+                options["dispatch_assist_ctas"] = args.dispatch_assist_ctas
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -256,7 +259,7 @@ def main():
                 options["pipeline_comm_ctas"] = args.pipeline_comm_ctas
                 options["pipeline_statistics"] = args.pipeline_statistics
                 options["pipeline_serialize"] = args.pipeline_serialize
-                options["inline_dispatch"] = args.inline_dispatch
+                options["inline_dispatch"] = args.inline_dispatch or args.input_inline
                 options["cache_return_addresses"] = args.cache_return_addresses
                 options["ffn_fusion"] = args.ffn_fusion
                 options["expert_local_grad"] = args.expert_local_grad
@@ -412,6 +415,8 @@ def main():
                     "dag_backward": getattr(plan, "dag_backward", None) if backend == "peer" else None,
                     "dag_direct_return": getattr(plan, "dag_direct_return", None) if backend == "peer" else None,
                     "input_copy_ilp": getattr(plan, "input_copy_ilp", None) if backend == "peer" else None,
+                    "dispatch_assist_ctas": getattr(plan, "dispatch_assist_ctas", None) if backend == "peer" else None,
+                    "last_fc1_assisted_tiles": int(plan.input_assisted_tiles) if backend == "peer" and plan.dispatch_assist_ctas else None,
                     "wgrad_overlap": plan.wgrad_overlap,
                     "overlap_expert_dy": plan.overlap_expert_dy,
                     "wgrad_warp_map": os.environ.get("DG_BF16_WGRAD_WARP_MAP", "0"),

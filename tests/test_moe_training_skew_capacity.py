@@ -50,6 +50,8 @@ def main():
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
+    parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
+    parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
@@ -116,7 +118,7 @@ def main():
         if args.ring_rows is not None:
             options["ring_rows"] = args.ring_rows
         if backend == "peer":
-            use_producer = not (args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion or args.dag_fusion)
+            use_producer = not (args.input_inline or args.dispatch_assist_ctas or args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion or args.dag_fusion)
             options.update(dispatch_producer=use_producer, dispatch_producer_tiles=1,
                            reuse_packed_dy=True,
                            producer_input_aiu=args.producer_input_aiu and use_producer,
@@ -124,7 +126,7 @@ def main():
                            fuse_activation_backward=args.fuse_activation_backward,
                            dispatch_pipeline=args.dispatch_pipeline, return_pipeline=args.return_pipeline,
                            pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize,
-                           inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses,
+                           inline_dispatch=args.inline_dispatch or args.input_inline, dispatch_assist_ctas=args.dispatch_assist_ctas, cache_return_addresses=args.cache_return_addresses,
                            ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad,
                            return_vector_bytes=args.return_vector_bytes,
                            fuse_fc1_activation=args.fuse_fc1_activation,
@@ -182,7 +184,8 @@ def main():
             return_pipeline=args.return_pipeline if backend == "peer" else None,
             pipeline_comm_ctas=args.pipeline_comm_ctas if backend == "peer" else None,
             pipeline_serialized=args.pipeline_serialize if backend == "peer" else None,
-            inline_dispatch=args.inline_dispatch if backend == "peer" else None,
+            inline_dispatch=getattr(plan, "inline_dispatch", None),
+            dispatch_assist_ctas=getattr(plan, "dispatch_assist_ctas", None),
             cache_return_addresses=args.cache_return_addresses if backend == "peer" else None,
             ffn_fusion=args.ffn_fusion if backend == "peer" else None,
             dag_fusion=args.dag_fusion if backend == "peer" else None,
