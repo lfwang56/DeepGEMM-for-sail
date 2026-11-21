@@ -27,6 +27,8 @@ public:
         int block_m, block_n, block_k;
         int warp_m, warp_n;
         int num_stages;
+        int warp_map;
+        bool aiu_before_tsm;
         std::string kernel_name;
     };
 
@@ -52,6 +54,8 @@ constexpr uint32_t BLOCK_K = {};
 constexpr uint32_t WARP_M = {};
 constexpr uint32_t WARP_N = {};
 constexpr uint32_t NUM_STAGES = {};
+constexpr uint32_t WARP_MAP = {};
+constexpr bool AIU_BEFORE_TSMLD = {};
 constexpr uint32_t BLOCK_SIZE = 32 * (BLOCK_M / WARP_M) * (BLOCK_N / WARP_N);
 
 extern "C"
@@ -60,7 +64,8 @@ __global__ void {}(const KGroupedGemmArgs args) {{
     bf16_k_grouped_gemm_impl<
         cutlass::bfloat16_t, float, GemmType::KGroupedContiguous,
         SHAPE_M, SHAPE_N, NUM_GROUPS,
-        BLOCK_M, BLOCK_N, BLOCK_K, WARP_M, WARP_N, BLOCK_SIZE, NUM_STAGES, true
+        BLOCK_M, BLOCK_N, BLOCK_K, WARP_M, WARP_N, BLOCK_SIZE, NUM_STAGES, true,
+        WARP_MAP, AIU_BEFORE_TSMLD
     >(args);
 }}
 
@@ -75,6 +80,8 @@ __global__ void {}(const KGroupedGemmArgs args) {{
             args.launch_info.warp_m,
             args.launch_info.warp_n,
             args.launch_info.num_stages,
+            args.launch_info.warp_map,
+            args.launch_info.aiu_before_tsm,
             args.launch_info.kernel_name);
     }
 
@@ -95,6 +102,13 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const auto [num_sms, block_m, block_n, block_k, warp_m, warp_n, num_stages, _smem_config] =
         deep_gemm_bf16_common::get_best_configs(m, n, max_k, num_groups, get_num_sms(),
                                                GemmType::KGroupedContiguous);
+    const int warp_map = get_env<int>("DG_BF16_WGRAD_WARP_MAP", 0);
+    const int aiu_before_tsm = get_env<int>("DG_BF16_WGRAD_AIU_BEFORE_TSM", 1);
+    DG_HOST_ASSERT(warp_map >= 0 && warp_map <= 3);
+    DG_HOST_ASSERT(aiu_before_tsm == 0 || aiu_before_tsm == 1);
+    const int warp_rows = block_m / warp_m, warp_cols = block_n / warp_n;
+    if (warp_map == 2) DG_HOST_ASSERT((warp_cols & (warp_cols - 1)) == 0);
+    if (warp_map == 3) DG_HOST_ASSERT((warp_rows & (warp_rows - 1)) == 0);
     const int block_size = 32 * (block_m / warp_m) * (block_n / warp_n);
     const int smem_size = static_cast<int>(gemm_smem_total_size(
         2, num_stages, block_m, block_n, block_k));
@@ -102,7 +116,7 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,
-                        warp_m, warp_n, num_stages, kernel_name},
+                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name},
         .launch_args = {get_grid_shape(num_sms), dim3(block_size), smem_size},
         .kernel_params = {
             .a_ptr = a.data_ptr(),
@@ -165,6 +179,7 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
         std::printf("ThreadblockShape[%d, %d, %d], WarpShape[%d, %d, %d], num_stages:%d\n",
                     block_m, block_n, block_k, warp_m, warp_n, block_k, num_stages);
         std::printf("dynamic_smem_bytes:%d, vreg:%d, local_size_bytes:%d\n", smem_size, num_regs, local_size);
+        std::printf("warp_map:%d, aiu_before_tsm:%d\n", warp_map, aiu_before_tsm);
     }
 }
 

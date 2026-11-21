@@ -2883,3 +2883,68 @@ timings to evaluate the outcome; retain the faster serial recipe if necessary.
 
 Artifacts: `outputs/qwen38/iter30-wgrad-stream-ep{16,32}-controls.json`,
 `ep32-wgrad-stream-reference.json`; local preflight logs `work/qwen38-wgrad30-*`.
+
+
+## Iteration 31 — native wgrad operand issue order and warp ownership
+
+**Stall review.** Iteration28 smaller tiles reduced registers but slowed the
+complete step;29 exposed a dependency bug;30 fixed it but legal coarse
+concurrency still slowed execution. Fresh actual EP32 Asys30 confirms13.287ms
+of wgrad/mixed-GEMM overlap plus6.137ms with other local GEMMs, while DW1 grew
+10.832→15.505ms, DW2 5.869→8.043ms and mixed kernels27.246→37.322ms. These
+are task intervals, not physical network overlap. Full-token Acu27 separately
+measured TSM load conflict0.70/0.69,216 registers and zero stack for DW1/DW2.
+No physical floor has been established.
+
+Fresh primary-source review: official T-Head blogs36 and41, including their
+public REST content, and the installed ACTLIZE v1.0.0
+`ppu_mma_aiu_multistage.hpp` AIU_BEFORE_TSMLD branches. Blog36 distinguishes
+TSM groups from banks and warns that changing tile geometry alone is
+insufficient; blog41 separates global AIU supply from TSM operand supply.
+Archives: `work/reference/t-head-blog{36,41}-iter31-live.json` and matching
+clean plaintext. No NVIDIA instruction, bank map or fixed PU placement is
+assumed.
+
+**Direction.** Keep identical WG tiles, BF16 operands, FP32 accumulation and
+K reduction order. Test identity/N-major/two bijective XOR warp ownership
+maps, applied consistently to both operands and output coordinates; physical
+AIU copy roles stay unchanged. Independently move next-fragment TSM loads
+before/after the existing kblock0 AIU refill, using the two issue orders from
+native ACTLIZE. Defaults identity+AIU-before-TSM preserve the old schedule.
+JIT code includes both constants; runtime guards check ranges and XOR grids.
+Environment controls `DG_BF16_WGRAD_WARP_MAP` and
+`DG_BF16_WGRAD_AIU_BEFORE_TSM` apply equally to DeepEP and peer WG kernels.
+Native Torch2.11 extension SHAadb6688d6ceed51fb7c787338cdc0cd9a195c8674af7b5d8fef6852a578e5c07.
+
+**Validation.** All8 combinations pass full-width independent CPU FP32 WG
+checks with empty/skewed lengths, nonzero accumulators and mutable-length
+repeated graphs:32 oracle records. Map3/AIU-after also passes full Qwen MoE
+FP32 masked/skewed checks and actual32-rank balanced/masked/reversed output
+and gradient checks; map2/AIU-after passes the independent32-rank DeepEP
+oracle. Full C4096 all-to-expert0 checks both transports before timing.
+See reference artifacts and clean host audits for exact completion evidence.
+
+**Measured scope.** Domain EP32, Qwen H8192/I2048/E512/top10, T4096/rank,
+C4096, BM256, G8, producer input ILP8, ring65536, serial WG schedule. Full
+forward and rematerialized backward with FP32 gradient zero/accumulation;
+no optimizer/shared expert. Installed DeepEP Buffer uses38 communication CUs.
+Every candidate has the same WG issue settings in its matched DeepEP control.
+
+| WG issue configuration | Peer full step ms | DeepEP full step ms | DeepEP / peer |
+| --- | ---: | ---: | ---: |
+| map0-aiu0 | 99.195062 | 121.848157 | 1.2284x |
+| qwen38-wlf-ep32-iter31-wgrad-map0-aiu1-attempt0 | incomplete/excluded | incomplete/excluded | — |
+| map0-aiu1-attempt1 | 98.714551 | 121.165234 | 1.2274x |
+| map1-aiu0 | 99.568506 | 122.260388 | 1.2279x |
+| map1-aiu1 | 98.601544 | 121.296619 | 1.2302x |
+| map2-aiu0 | 99.848297 | 122.534131 | 1.2272x |
+| map2-aiu1 | 98.496906 | 121.168225 | 1.2302x |
+| map3-aiu0 | 99.505035 | 122.018225 | 1.2263x |
+| map3-aiu1 | 98.531250 | 121.252368 | 1.2306x |
+
+Accepted clean phases: 8/9 collected; eight phases were planned.
+Best observed geometry: `qwen38-wlf-ep32-iter31-wgrad-map2-aiu1`, peer98.496906ms, paired DeepEP121.168225ms (1.2302x). Matched auto peer control98.714551ms; peer reduction0.220%. Strongest DeepEP across this group121.165234ms; best-peer/strongest-DeepEP ratio1.2301x. This is a full-step comparison; it does not establish physical network utilization or a2–3x gain.
+
+Local full-token DW1 Acu (not EP/wire timing): default map0/AIU-before216regs, stack0,25% occupancy,TSM load conflict0.69; map1/AIU-before also216/0/25%/0.69; map2 or3/AIU-after216/0/25%/0.63. Lower conflicts did not establish lower complete-step latency; inspect uninstrumented results above.
+
+Artifacts: `outputs/qwen38/iter31-wgrad-issue-controls.json`, `iter31-wgrad-issue-reference.json`, `ep32-wgrad-issue31-reference.json`; Acu logs `work/qwen38-wgrad31-map*-aiu*-dw1-acu*`.

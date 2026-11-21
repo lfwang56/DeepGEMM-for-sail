@@ -21,7 +21,8 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t SHAPE_M, uint32_t SHAPE_N, uint32_t kNumGroups,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
-          uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation>
+          uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
+          uint32_t WarpMap = 0, bool AiuBeforeTsm = true>
 __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args) {
     static_assert(is_k_grouped_contiguous(kGemmType), "K-grouped GEMM type required");
     static_assert(kWithAccumulation, "K-grouped wgrad requires beta=1");
@@ -29,6 +30,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     static_assert(kNumStages >= 2, "The multistage pipeline requires at least two stages");
     static_assert(BLOCK_K > 0 && 128 % BLOCK_K == 0,
                   "BLOCK_K must divide the 128-element K-group alignment");
+    static_assert(WarpMap <= 3, "Unknown MMA warp ownership map");
 
     constexpr uint32_t STRIDE_CM = SHAPE_N;
     constexpr uint32_t STRIDE_CG = SHAPE_M * SHAPE_N;
@@ -57,6 +59,20 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
     const uint32_t thread_idx = threadIdx.x;
     int warp_idx = cutlass::canonical_warp_idx_sync();
+    constexpr uint32_t WarpRows = BLOCK_M / WARP_M;
+    constexpr uint32_t WarpCols = BLOCK_N / WARP_N;
+    uint32_t mma_warp_idx = warp_idx;
+    if constexpr (WarpMap == 1) {
+        mma_warp_idx = (warp_idx / WarpCols) + (warp_idx % WarpCols) * WarpRows;
+    } else if constexpr (WarpMap == 2) {
+        static_assert((WarpCols & (WarpCols - 1)) == 0);
+        const uint32_t m = warp_idx % WarpRows, n = warp_idx / WarpRows;
+        mma_warp_idx = m + (n ^ (m & (WarpCols - 1))) * WarpRows;
+    } else if constexpr (WarpMap == 3) {
+        static_assert((WarpRows & (WarpRows - 1)) == 0);
+        const uint32_t m = warp_idx % WarpRows, n = warp_idx / WarpRows;
+        mma_warp_idx = (m ^ (n & (WarpRows - 1))) + n * WarpRows;
+    }
 
     // Both inputs are physically [K, M/N]. Use AIU's Trans=true descriptors
     // and hardware swizzle, paired with A/B's respective TSM-to-MMA layouts.
@@ -86,7 +102,9 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                   smem_b_size(sizeof(SrcT), kNumStages, BLOCK_N, BLOCK_K));
 
     TiledMma tiled_mma;
-    auto thr_mma = tiled_mma.get_thread_slice(thread_idx);
+    // Remap operand ownership and output coordinates together. Global AIU
+    // copies and synchronization retain the physical warp assignment above.
+    auto thr_mma = tiled_mma.get_thread_slice(mma_warp_idx * 32 + thread_idx % 32);
     Tensor tCrA = thr_mma.partition_fragment_A(sA(_,_,0));
     Tensor tCrB = thr_mma.partition_fragment_B(sB(_,_,0));
     Tensor accum = partition_fragment_C(tiled_mma, take<0,2>(TileShape{}));
@@ -96,7 +114,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
     using SmemCopyAtomA = typename GemmOperandA::SmemCopyAtom;
     auto smem_tiled_copy_A = make_tiled_copy_A(SmemCopyAtomA{}, tiled_mma);
-    auto smem_thr_copy_A = smem_tiled_copy_A.get_thread_slice(warp_idx * 32);
+    auto smem_thr_copy_A = smem_tiled_copy_A.get_thread_slice(mma_warp_idx * 32);
     Tensor tCsA = smem_thr_copy_A.partition_S(make_mix_tensor_like(sA));
     Tensor tCrA_copy_view = smem_thr_copy_A.retile_D(tCrA);
     CUTE_STATIC_ASSERT_V(size<1>(tCsA) == size<1>(tCrA_copy_view));
@@ -104,7 +122,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
     using SmemCopyAtomB = typename GemmOperandB::SmemCopyAtom;
     auto smem_tiled_copy_B = make_tiled_copy_B(SmemCopyAtomB{}, tiled_mma);
-    auto smem_thr_copy_B = smem_tiled_copy_B.get_thread_slice(warp_idx * 32);
+    auto smem_thr_copy_B = smem_tiled_copy_B.get_thread_slice(mma_warp_idx * 32);
     Tensor tCsB = smem_thr_copy_B.partition_S(make_mix_tensor_like(sB));
     Tensor tCrB_copy_view = smem_thr_copy_B.retile_D(tCrB);
     CUTE_STATIC_ASSERT_V(size<1>(tCsB) == size<1>(tCrB_copy_view));
@@ -195,6 +213,15 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                     __syncthreads();
                 }
 
+                // Both issue orders exist in the native ACTLIZE AIU
+                // multistage pipeline. They keep the same stage waits and
+                // register fragments; only independent request issue moves.
+                const auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
+                if constexpr (!AiuBeforeTsm) {
+                    copy(smem_tiled_copy_A, tCsA_p(_,_,k_block_next), tCrA_copy_view(_,_,k_block_next));
+                    copy(smem_tiled_copy_B, tCsB_p(_,_,k_block_next), tCrB_copy_view(_,_,k_block_next));
+                }
+
                 // Refill the free stage before consuming the current register fragment.
                 if (k_block == 0) {
                     if (k_tile_count > 0) {
@@ -212,9 +239,10 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
                 // actlize AIU_BEFORE_TSMLD=true for a 256x256 CTA tile.
                 // Prefetch the next register fragment, then consume this one.
-                const auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
-                copy(smem_tiled_copy_A, tCsA_p(_,_,k_block_next), tCrA_copy_view(_,_,k_block_next));
-                copy(smem_tiled_copy_B, tCsB_p(_,_,k_block_next), tCrB_copy_view(_,_,k_block_next));
+                if constexpr (AiuBeforeTsm) {
+                    copy(smem_tiled_copy_A, tCsA_p(_,_,k_block_next), tCrA_copy_view(_,_,k_block_next));
+                    copy(smem_tiled_copy_B, tCsB_p(_,_,k_block_next), tCrB_copy_view(_,_,k_block_next));
+                }
                 CUTLASS_PRAGMA_UNROLL
                 for (int k_loop = 0; k_loop < K_ATOM_PER_COPY; ++k_loop) {
                     const auto atom_idx = k_block * K_ATOM_PER_COPY + k_loop;

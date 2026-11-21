@@ -409,6 +409,8 @@ def main():
                     "dag_direct_return": getattr(plan, "dag_direct_return", None) if backend == "peer" else None,
                     "input_copy_ilp": getattr(plan, "input_copy_ilp", None) if backend == "peer" else None,
                     "wgrad_overlap": plan.wgrad_overlap,
+                    "wgrad_warp_map": os.environ.get("DG_BF16_WGRAD_WARP_MAP", "0"),
+                    "wgrad_aiu_before_tsm": os.environ.get("DG_BF16_WGRAD_AIU_BEFORE_TSM", "1"),
                     "dag_direct_return_activity_scope": "return embedded in FC2/DX; task spans do not resolve internal overlap" if backend == "peer" and args.dag_direct_return else None,
                     "dag_input_prefetch_max_inflight_ctas": args.dag_input_ctas if backend == "peer" and args.dag_input_prefetch else None,
                     "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" and not args.dag_shared_pool else None,
