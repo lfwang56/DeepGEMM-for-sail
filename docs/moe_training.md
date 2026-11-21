@@ -12,6 +12,7 @@ support.
 | Plan | Expert GEMMs | Communication | Core execution |
 | --- | --- | --- | --- |
 | `NativeMoEPlan` | BF16 or blockwise FP8 | PCCL all-gather/reduce-scatter, including cross-supernode RDMA | Several kernels per chunk |
+| `DeepEPMoEPlan` | BF16 | Installed DeepEP Buffer dispatch/combine | Several kernels per chunk, with optional routed-row windows |
 | `PeerMoEPlan` | BF16 | Direct peer reads in dispatch GEMMs and peer writes in return GEMMs | Separate metadata, GEMM and activation kernels |
 | `PersistentMoEPlan` | BF16 | Direct peer reads and writes | One forward core kernel and one backward core kernel over all chunks |
 | `CollectiveFusedMoEPlan` | BF16 | PCCL all-gather/reduce-scatter, including RDMA | Local GEMM epilogues write directly into the collective return ring |
@@ -63,12 +64,14 @@ RDMA. Such a sparse hierarchical transport is not implemented. Direct fusion
 still has synchronization and separate routing/activation kernels. Neither peer
 fusion switch means the whole MoE executes in a single kernel.
 
-The deployment baseline is optimized `NativeMoEPlan`. A controlled fusion
-baseline uses the same peer or collective-fused GEMMs with only the relevant
-fusion switch disabled. Independent Torch references verify numerical results;
-they are not performance denominators. State the baseline and GEMM configuration
-with every speedup, since changing transport, scheduling and tiles is a whole
-implementation comparison rather than an isolated fusion measurement.
+The current deployment performance baseline is tuned installed DeepEP
+dispatch/combine through `DeepEPMoEPlan`, with native grouped GEMMs. The
+PCCL all-gather/reduce-scatter `NativeMoEPlan` remains a transport reference.
+A controlled fusion baseline uses the same peer GEMMs with a fusion switch
+disabled. Independent Torch references verify numerical results; they are
+not performance denominators. State the baseline and GEMM configuration
+with every speedup: changing transport, scheduling and tiles measures a
+whole implementation comparison rather than isolated overlap.
 
 Peer plans default to GPU active-row pointwise work, fused local score/weighted
 gradients and BF16x8 copies. `active_rows=False`, `fuse_local_grad=False` and
@@ -77,13 +80,35 @@ plans accept `fuse_activation_backward=True` to put SwiGLU backward in the
 dHidden epilogue; its default is `False`, since the measured EP16 gain was small.
 See `docs/moe_training_scaling.md` for versioned baseline and controlled results.
 
-On measured M890 EP8/EP16/EP32 workloads, staging inputs and fusing the return was
-faster than fusing both directions. Select `fuse_dispatch=False,
-fuse_return=True` to use that mode. A measured large-GEMM configuration is
+Early smaller-shape M890 EP8/EP16/EP32 measurements favored staging input and
+fusing the return. They do not establish the best path at Qwen3.8 dimensions.
+The Qwen3.8 campaign instead prioritizes bilateral fusion with a producer
+input stage; see `qwen38_bilateral/ITERATIONS.md` for matched DeepEP controls,
+current shapes and experimental task pipelines. A measured GEMM configuration is
 `gemm_configs={role: (256,64,64,64,2) for role in
 ("fc1","fc2","dhidden","dx")}`: `(block_N,block_K,warp_M,warp_N,stages)`;
-block M is 128. Sweep chunk size for the workload's memory budget. These
+block M was128 in those early measurements; the Qwen3.8 BF16 recipe uses256.
+Sweep chunk size for the workload's memory budget. These
 measurements do not establish a universal best tile or a sparse-RDMA speedup.
+
+`gate_up_layout="g8"` selects persistent `[gate8,up8,...]` expert-weight
+storage for BF16 native/DeepEP/direct-peer training. Convert canonical W1
+once with `to_g8_weight`; convert checkpoint weights or DW1 back with
+`from_g8_weight`. Optimizer parameters and gradients use the same G8 order,
+so no layout conversion is hidden outside each timed training step.
+`fuse_fc1_activation=True` optionally puts SwiGLU into a peer FC1 epilogue.
+It rounds gate and up to BF16 before activation, and preserves those values
+during backward replay. G8 supports the opt-in shared task pool as well;
+it is not supported by the older persistent/whole-FFN paths.
+
+A local GEMM kernel reads local tensors; that name does not imply that the
+network is idle. Independent tile communication can overlap it. The current
+best producer path retains some serial boundaries. The experimental shared
+task pool pipelines ready dispatch/FC1/activation/FC2/return tasks; it uses
+the same pipeline for forward replay in backward. Subsequent dHidden, DX
+and weight-gradient work remains outside that pool. Report full-step times
+alongside activity overlap, since communication and computation contend for
+CU, register and memory resources.
 
 ## Calling contract
 

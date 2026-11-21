@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--dag-shared-pool", action="store_true")
+    parser.add_argument("--dag-input-prefetch", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
@@ -123,7 +124,8 @@ def main():
                            fuse_fc1_activation=args.fuse_fc1_activation,
                            dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
                            dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
-                           dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool)
+                           dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool,
+                           dag_input_prefetch=args.dag_input_prefetch)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
@@ -177,6 +179,7 @@ def main():
             ffn_fusion=args.ffn_fusion if backend == "peer" else None,
             dag_fusion=args.dag_fusion if backend == "peer" else None,
             dag_shared_pool=args.dag_shared_pool if backend == "peer" else None,
+            dag_input_prefetch=args.dag_input_prefetch if backend == "peer" else None,
             gate_up_layout=plan.gate_up_layout,
             fuse_fc1_activation=args.fuse_fc1_activation if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,

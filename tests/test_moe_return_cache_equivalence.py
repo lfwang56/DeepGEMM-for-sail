@@ -17,6 +17,8 @@ parser.add_argument('--dag-ablation', action='store_true')
 parser.add_argument('--dag-serialization-ablation', action='store_true')
 parser.add_argument('--dag-shared-pool', action='store_true')
 parser.add_argument('--dag-g8', action='store_true')
+parser.add_argument('--dag-input-prefetch', action='store_true')
+parser.add_argument('--dag-input-ctas', type=int, default=4)
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
 if args.dag_g8 and not (args.dag_shared_pool and (args.dag_ablation or args.dag_serialization_ablation)):
@@ -76,6 +78,9 @@ with torch.cuda.stream(stream):
                            fuse_fc1_activation=cache)
         if args.dag_g8:
             options.update(gate_up_layout='g8', fuse_fc1_activation=True)
+        if args.dag_input_prefetch:
+            options.update(dag_input_prefetch=bool(options.get('dag_fusion')),
+                           dag_input_ctas=args.dag_input_ctas)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)

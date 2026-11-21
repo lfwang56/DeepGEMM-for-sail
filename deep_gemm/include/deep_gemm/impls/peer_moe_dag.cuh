@@ -281,7 +281,7 @@ __device__ __forceinline__ bool dag_claim_queue(
 // Workers never claim FC1 work whose input still needs an unscheduled producer.
 template <uint32_t H, uint32_t I, uint32_t E, uint32_t BM, uint32_t BN,
           uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
-          bool Return, bool Trace, bool Fc1Activation = false>
+          bool Return, bool Trace, bool Fc1Activation = false, bool InputPrefetch = false>
 __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams p) {
     static_assert(H % BN == 0 && I % BN == 0);
     __shared__ uint32_t entry_status;
@@ -313,13 +313,29 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
                     if ((!p.serialize || tix::ld_acq(p.state + DoneFC2) == fc2tasks)
                             && dag_claim_queue(p.state, HeadReturn, TailReturn, task)) kind = 4;
                 }
+                if constexpr (InputPrefetch) {
+                    // Bound outstanding input copies without reserving CTA
+                    // identities. A worker reverts to compute after copying;
+                    // the tail therefore retains the entire resource pool.
+                    if (!kind) {
+                        const uint32_t completed = tix::ld_acq(p.state + DoneInput);
+                        const uint32_t next = tix::ld_acq(p.state + NextInput);
+                        if (next < mtiles && next >= completed && next - completed < p.input_ctas
+                                && atomicCAS(p.state + NextInput, next, next + 1) == next) {
+                            task = next;
+                            kind = 1;
+                        }
+                    }
+                }
                 if (!kind && (!p.serialize || tix::ld_acq(p.state + DoneActivation) == mtiles)
                         && dag_claim_queue(p.state, HeadFC2, TailFC2, task)) kind = 3;
                 if (!kind && (!p.serialize || tix::ld_acq(p.state + DoneInput) == mtiles)
                         && dag_claim_queue(p.state, HeadFC1, TailFC1, task)) kind = 2;
-                if (!kind && tix::ld_acq(p.state + NextInput) < mtiles) {
-                    task = atomicAdd(p.state + NextInput, 1u);
-                    if (task < mtiles) kind = 1;
+                if constexpr (!InputPrefetch) {
+                    if (!kind && tix::ld_acq(p.state + NextInput) < mtiles) {
+                        task = atomicAdd(p.state + NextInput, 1u);
+                        if (task < mtiles) kind = 1;
+                    }
                 }
                 if (!kind && clock64() - begin > p.timeout_cycles) {
                     atomicOr(p.state + DagError, 8u);

@@ -2503,3 +2503,348 @@ it is not Qwen2.4T convergence or statistical noninferiority.
 Artifacts: outputs/qwen38/iter24-g8-pool-{proxy,controls}.json,
 ep32-g8-pool-c4096-reference.json, public-text-lm-g8-iter23-paired.json.
 Internal G8 task traces are separate diagnostics, not production timings.
+
+
+## Iteration25: bounded input prefetch in the shared task pool
+
+Prioritize new input tasks ahead of ready compute when copy credits are
+available. Outstanding copies equal NextInput minus DoneInput. A leader
+claims NextInput with CAS only below the chosen bound, avoiding races that
+would oversubscribe the credit limit. Workers return to any ready job after
+copying; no fixed CTA identity or compute capacity is reserved at the tail.
+Return jobs keep highest priority. Prefetch is opt-in; the old pool is the
+control. Test1/2/4/8/16 concurrent input copies with matched G8 math/tiles.
+
+Native SHA256edcb0d7ae9860cc0201b6df1a4415f4f8d8f54f998293d56eae1ee935f28fd41.
+ZW-M890P/ppu0015,wlf_sgl_2.2 Torch2.11 runtime/Torch2.10 native build.
+Full masked/skewed FP32 checks pass with one input credit. Dynamic graphs
+with four credits match producer and stage-serial controls: exact Y/DX/
+dScore and DW RMS below5e-7 for all four changing-route patterns. Actual
+EP32 C4096/S65536 all-to-expert0 checks every output/gradient and unused-
+expert zeros on32 ranks, all host audits clean. No GPU launch structure
+changed; host API adds one default-false boolean. Metadata reports the
+actual input credit limit, separate from fixed communication CTA roles.
+
+H8192/I2048/K10, EP32 E512 or labeled EP8 proxy E128,
+T4096/C4096/S65536/BM256/BN256/BK64/WM64/WN64/S2. Complete FWD + replayed
+BWD + FP32 DW zero/accumulation, no optimizer. Warmup5,20 graph iterations,
+5 repeats, median of max-rank event timings. The forward-only phase is
+labeled separately. Strong DeepEP and best producer controls remain.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.
+
+The credit experiment must improve complete-step latency to be adopted;
+activity overlap alone is insufficient. Frozen iteration24 diagnostics on
+all32 ranks show forward communication/compute task-window intersection
+86.15–90.00% of the monitored interval, while stage-serial controls give0%.
+Backward forward-replay intersection is35.80–45.99%; this is not dHidden/
+DX/weight-gradient overlap. The monitor uses a single clock per device;
+these windows include memory waits and are neither wire nor MMA utilization.
+
+Artifacts: outputs/qwen38/iter25-prefetch-{proxy,controls}.json,
+ep32-pool-prefetch-c4096-reference.json; iteration24 all-rank summaries in
+ep32-pool24-{parallel,serial}-all-rank-summary.json. The pending original
+SN1 diagnostic has only three idle hosts; a separate frozen24 rerun on SN2
+completed cleanly. No measurements from different library versions are
+combined as if they were one candidate.
+
+If iterations23–25 fail to improve the best complete step by3%, perform
+the required stall reassessment before editing iteration26. The next
+unimplemented direction is a backward task pipeline joining DY/score
+fetch, dHidden+activation backward, DX and gradient return; DW1/DW2 still
+must be computed in full. Record its actual scope and controls explicitly.

@@ -34,7 +34,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
                  expert_local_grad=False, ring_rows=None, return_vector_bytes=4,
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
-                 dag_serialize=False, dag_trace=False, dag_shared_pool=False,
+                 dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  fuse_fc1_activation=False, **kwargs):
         if not isinstance(fuse_fc1_activation, bool):
             raise TypeError("fuse_fc1_activation must be bool")
@@ -46,7 +46,7 @@ class PeerMoEPlan(NativeMoEPlan):
                                    or dispatch_cache_n or ffn_fusion):
             raise ValueError("FC1 activation fusion requires G8, bilateral fusion and expert-local gradients")
         self.fuse_fc1_activation = fuse_fc1_activation
-        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool)):
+        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool, dag_input_prefetch)):
             raise TypeError("DAG switches must be bool")
         if any(type(value) is not int or value < 1 for value in (dag_input_ctas, dag_return_ctas)):
             raise ValueError("DAG communication CTA counts must be positive integers")
@@ -58,6 +58,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.dag_input_ctas, self.dag_return_ctas = dag_input_ctas, dag_return_ctas
         self.dag_serialize, self.dag_trace = dag_serialize, dag_trace
         self.dag_shared_pool = dag_shared_pool
+        self.dag_input_prefetch = dag_input_prefetch
+        if dag_input_prefetch and not dag_shared_pool:
+            raise ValueError("input prefetch credits require the shared DAG task pool")
         if dag_shared_pool and not dag_fusion:
             raise ValueError("shared DAG task pools require dag_fusion")
         if type(return_vector_bytes) is not int or return_vector_bytes not in (4, 8):
@@ -528,7 +531,7 @@ class PeerMoEPlan(NativeMoEPlan):
             controls, self.chunk_tokens, self.chunk_tokens * self.k, self.block_m,
             self.dag_config, self.dag_input_ctas, self.dag_return_ctas, return_output,
             self.dag_serialize, self.dag_trace, compile_only, self.dag_shared_pool,
-            self.fuse_fc1_activation)
+            self.fuse_fc1_activation, self.dag_input_prefetch)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(
