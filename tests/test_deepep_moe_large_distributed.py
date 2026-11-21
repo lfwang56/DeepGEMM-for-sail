@@ -36,6 +36,7 @@ def main():
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
     parser.add_argument("--dispatch-external", action="store_true")
+    parser.add_argument("--serialize-external-dispatch", action="store_true")
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--overlap-expert-dy", action="store_true")
@@ -93,7 +94,7 @@ def main():
                          input_copy_ilp=args.input_copy_ilp,
                          dispatch_producer=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas),
                          inline_dispatch=args.input_inline, dispatch_assist_ctas=args.dispatch_assist_ctas,
-                         dispatch_external=args.dispatch_external,
+                         dispatch_external=args.dispatch_external, dispatch_external_serial=args.serialize_external_dispatch,
                          producer_input_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas),
                          producer_local_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas)))
     plan = (DeepEPMoEPlan if args.backend == "deepep" else PeerMoEPlan)(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
@@ -174,6 +175,7 @@ def main():
             inline_dispatch=getattr(plan, "inline_dispatch", None),
             dispatch_assist_ctas=getattr(plan, "dispatch_assist_ctas", None),
             dispatch_external=getattr(plan, "dispatch_external", None),
+            dispatch_external_serial=getattr(plan, "dispatch_external_serial", None),
             wgrad_overlap=plan.wgrad_overlap,
             overlap_expert_dy=plan.overlap_expert_dy,
             payload_transport=getattr(plan, "deep_ep_backend", "verified direct peer domain"),

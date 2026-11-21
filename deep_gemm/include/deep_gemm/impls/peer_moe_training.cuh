@@ -14,7 +14,7 @@ __device__ __forceinline__ T* peer_pointer(const Params& p, int index) {
     return reinterpret_cast<T*>(p.ptr[index]);
 }
 
-template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0>
+template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
@@ -70,6 +70,30 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                     + uint64_t(source % p.dim[2]) * p.dim[1] * 2 : 0;
             }
             __syncthreads();
+            if constexpr (InputWarpRows) {
+                // Each warp reuses one row address. Keep only eight vectors
+                // live per lane; do not unroll the row/column traversal.
+                const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+                #pragma clang loop unroll(disable)
+                for (int64_t row = warp; row < bm; row += blockDim.x / 32) {
+                    const auto* source = reinterpret_cast<const uint4*>(addresses[row]);
+                    auto* output = peer_pointer<uint4>(p, 2) + (base_row + row) * width;
+                    #pragma clang loop unroll(disable)
+                    for (int64_t base = lane; base < width; base += 32 * 8) {
+                        uint4 values[8];
+                        #pragma unroll
+                        for (int j = 0; j < 8; ++j) {
+                            const int64_t column = base + j * 32;
+                            values[j] = source && column < width ? source[column] : uint4{};
+                        }
+                        #pragma unroll
+                        for (int j = 0; j < 8; ++j) {
+                            const int64_t column = base + j * 32;
+                            if (column < width) output[column] = values[j];
+                        }
+                    }
+                }
+            } else {
             for (int64_t base = threadIdx.x; base < bm * width; base += blockDim.x * 8) {
                 uint4 values[8];
                 #pragma unroll
@@ -84,6 +108,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                     if (element < bm * width)
                         peer_pointer<uint4>(p, 2)[base_row * width + element] = values[j];
                 }
+            }
             }
             __threadfence();
             __syncthreads();

@@ -25,15 +25,18 @@ public:
     static std::string generate_impl(const Args& args) {
         const int specialize = get_env<int>("DG_INPUT_ASSIST_STATIC_GEOMETRY", 1);
         DG_HOST_ASSERT(specialize == 0 || specialize == 1);
+        const int warp_rows = get_env<int>("DG_INPUT_ASSIST_WARP_ROWS", 1);
+        DG_HOST_ASSERT(warp_rows == 0 || warp_rows == 1);
         const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_training.cuh>
 extern "C" __launch_bounds__({}, 1)
 __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {{
-    deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}>(params);
+    deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}>(params);
 }}
 )", args.launch_args.block_dim.x, args.operation, args.operation,
-       assist ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0);
+       assist ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0,
+       args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));

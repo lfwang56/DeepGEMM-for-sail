@@ -3103,3 +3103,55 @@ Best peerqwen38-wlf-ep32-iter34-input-producer-control-attempt0: 97.389264ms. St
 Native extension SHA256: 5548ec2a3d31327d6f7d043cb21afb9aa19fb19d3f9ec5ce210f8df3eca711ca
 
 Artifacts: `outputs/qwen38/iter34-input-assist-controls.json`, `ep32-input-assist-reference.json`.
+
+
+## Iteration 35 — warp-row input copies and a matched serialization control
+
+**Direction.** Iteration34 had117–134ms of actual copy/mixed-GEMM intersection
+while complete latency regressed226–240ms. Overlap was real but expensive.
+Native resource records also show the static linear mover uses80registers,
+compared with56for the earlier warp-row DY mover. Source-level inference:
+reuse a row address per warp and limit live vectors to eight, without changing
+payload, padding, CAS0/2/1 ownership or release/acquire publication.
+
+New `DG_INPUT_ASSIST_WARP_ROWS=1` selects warp-row copies;0 retains the linear
+kernel. Both use the same compile-time geometry and ILP8. Explicitly disable
+outer row/column-loop unrolling to bound vector lifetimes; the eight independent
+loads and stores remain unrolled. No speculative ISA or precision change.
+
+**Counterfactual.** `dispatch_external_serial=True` joins the existing
+auxiliary dispatch before launching the identical external GEMM consumer.
+False joins only after GEMM. Data, flags, mover/consumer kernels and launch
+geometries are identical. This measures the net effect of simultaneous work;
+it is not a substitute for the fastest installed DeepEP denominator. All-rank
+recipe agreement includes the serialization mode and joins protect ring reuse.
+
+**Validation.** Exact mutable graph producer comparisons for warp-row inline,
+external parallel and external serial, full-width independent FP32, actual
+EP32 balanced/masked/duplicate/reversed and C4096 all-to-expert0 checks gate
+candidate timing. Default producer remains unchanged. All accepted phases
+require four clean host gates and32 clean ranks.
+
+**Scope.** Domain EP32 H8192/I2048/E512/top10,T4096/rank,C4096,ring65536,
+BM256,G8,full FWD+rematerialized BWD and FP32 DW zero/accumulation.
+Strong DeepEP serial/early-DY38 controls remain. Uninstrumented median
+maximum-rank device-event milliseconds.
+
+| Configuration | Backend | External | Warp rows / serial | Assist CTAs | Full step ms |
+| --- | --- | --- | --- | ---: | ---: |
+| deepep-early-dy | deepep | None | 1 / None | None | 120.096179 |
+| linear-inline8 | peer | False | 0 / False | 8 | 102.278467 |
+| linear-serial8 | peer | True | 0 / True | 8 | 124.936951 |
+| producer-control-attempt0 | deepep | None | 1 / None | None | 121.213025 |
+| producer-control-attempt0 | peer | False | 1 / False | 0 | 97.532886 |
+| warp-inline8 | peer | False | 1 / False | 8 | 100.911017 |
+| warp-parallel32 | peer | True | 1 / False | 32 | 181.066919 |
+| warp-parallel8 | peer | True | 1 / False | 8 | 162.378015 |
+| warp-serial32 | peer | True | 1 / True | 32 | 99.994977 |
+| warp-serial8 | peer | True | 1 / True | 8 | 113.376074 |
+
+Best peerqwen38-wlf-ep32-iter35-input-producer-control-attempt0: 97.532886ms. Strongest DeepEPqwen38-wlf-ep32-iter35-input-deepep-early-dy: 120.096179ms. Ratio1.2313x. Reduction versus matched producer97.532886ms: 0.000%. Kernel-span concurrency alone is not wire utilization or a latency win.
+
+Native extension SHA256: 91d45f9e6ba9465682d8f2e9fd96a657cd1d151c6d5baefed7e397a196beaed9
+
+Artifacts: `outputs/qwen38/iter35-input-assist-controls.json`, `ep32-input-assist-reference.json`.

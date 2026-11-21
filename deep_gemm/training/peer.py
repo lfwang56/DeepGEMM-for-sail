@@ -36,7 +36,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
-                 input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False,
+                 input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False, dispatch_external_serial=False,
                  fuse_fc1_activation=False, **kwargs):
         if type(dispatch_assist_ctas) is not int or not 0 <= dispatch_assist_ctas <= 156:
             raise ValueError("dispatch_assist_ctas must be an integer in [0,156]")
@@ -45,7 +45,12 @@ class PeerMoEPlan(NativeMoEPlan):
         if dispatch_external and (not dispatch_assist_ctas or inline_dispatch):
             raise ValueError("external dispatch requires positive assistants without inline owners")
         self.dispatch_assist_ctas = dispatch_assist_ctas
+        if not isinstance(dispatch_external_serial, bool):
+            raise TypeError("dispatch_external_serial must be bool")
+        if dispatch_external_serial and not dispatch_external:
+            raise ValueError("serialized external dispatch requires external input consumers")
         self.dispatch_external = dispatch_external
+        self.dispatch_external_serial = dispatch_external_serial
         if dispatch_assist_ctas:
             inline_dispatch = not dispatch_external
             dispatch_pipeline = True
@@ -219,7 +224,7 @@ class PeerMoEPlan(NativeMoEPlan):
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
                       self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
-                      self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external)
+                      self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -420,6 +425,10 @@ class PeerMoEPlan(NativeMoEPlan):
                                    self.input_assisted_tiles):
                         tensor.record_stream(self._input_stream)
                     self._assist_input()
+                if self.dispatch_external_serial:
+                    # Identical mover and consumer kernels. The only change
+                    # is joining the complete dispatch before GEMM starts.
+                    torch.cuda.current_stream(self.device).wait_stream(self._input_stream)
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
                             role="fc1", compile_only=compile_only, dispatch_pipeline=True, keep_gate_up=keep_gate_up)
             if self.dispatch_assist_ctas and not compile_only:

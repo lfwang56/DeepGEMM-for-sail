@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
     parser.add_argument("--dispatch-external", action="store_true")
+    parser.add_argument("--serialize-external-dispatch", action="store_true")
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--overlap-expert-dy", action="store_true")
@@ -134,6 +135,7 @@ def main():
         extra["input_copy_ilp"] = options.input_copy_ilp
         extra["dispatch_assist_ctas"] = options.dispatch_assist_ctas
         extra["dispatch_external"] = options.dispatch_external
+        extra["dispatch_external_serial"] = options.serialize_external_dispatch
         if options.input_inline or options.dispatch_assist_ctas:
             extra.update(inline_dispatch=not options.dispatch_external, dispatch_producer=False, producer_input_aiu=False, producer_local_aiu=False)
         extra["ffn_fusion"] = options.ffn_fusion
@@ -209,6 +211,7 @@ def main():
                               inline_dispatch=getattr(plan, "inline_dispatch", None),
                               dispatch_assist_ctas=getattr(plan, "dispatch_assist_ctas", None),
                               dispatch_external=getattr(plan, "dispatch_external", None),
+                              dispatch_external_serial=getattr(plan, "dispatch_external_serial", None),
                               cache_return_addresses=options.cache_return_addresses,
                               ffn_fusion=options.ffn_fusion,
                               expert_local_grad=options.expert_local_grad,

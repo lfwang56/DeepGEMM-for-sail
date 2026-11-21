@@ -136,6 +136,7 @@ def main():
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
     parser.add_argument("--dispatch-external", action="store_true")
+    parser.add_argument("--serialize-external-dispatch", action="store_true")
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--overlap-expert-dy", action="store_true")
@@ -254,6 +255,7 @@ def main():
                 options["input_copy_ilp"] = args.input_copy_ilp
                 options["dispatch_assist_ctas"] = args.dispatch_assist_ctas
                 options["dispatch_external"] = args.dispatch_external
+                options["dispatch_external_serial"] = args.serialize_external_dispatch
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -419,6 +421,8 @@ def main():
                     "input_copy_ilp": getattr(plan, "input_copy_ilp", None) if backend == "peer" else None,
                     "dispatch_assist_ctas": getattr(plan, "dispatch_assist_ctas", None) if backend == "peer" else None,
                     "dispatch_external": getattr(plan, "dispatch_external", None) if backend == "peer" else None,
+                    "dispatch_external_serial": getattr(plan, "dispatch_external_serial", None) if backend == "peer" else None,
+                    "input_assist_warp_rows": os.environ.get("DG_INPUT_ASSIST_WARP_ROWS", "1"),
                     "input_assist_static_geometry": os.environ.get("DG_INPUT_ASSIST_STATIC_GEOMETRY", "1"),
                     "last_fc1_assisted_tiles": int(plan.input_assisted_tiles) if backend == "peer" and plan.dispatch_assist_ctas else None,
                     "wgrad_overlap": plan.wgrad_overlap,

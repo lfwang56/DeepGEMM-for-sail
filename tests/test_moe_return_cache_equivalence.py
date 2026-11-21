@@ -28,6 +28,7 @@ parser.add_argument('--wgrad-overlap-ablation', choices=('dw1','both'))
 parser.add_argument('--dy-prefetch-ablation', action='store_true')
 parser.add_argument('--input-assist-ablation', type=int)
 parser.add_argument('--input-external', action='store_true')
+parser.add_argument('--input-external-serial', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
 if args.dag_backward_only:
@@ -127,7 +128,8 @@ with torch.cuda.stream(stream):
                            gate_up_layout='g8', fuse_fc1_activation=True, input_copy_ilp=8,
                            dispatch_producer=not cache, producer_input_aiu=not cache,
                            producer_local_aiu=not cache, inline_dispatch=cache and not args.input_external,
-                           dispatch_external=cache and args.input_external, dispatch_assist_ctas=args.input_assist_ablation if cache else 0)
+                           dispatch_external=cache and args.input_external,
+                           dispatch_external_serial=cache and args.input_external_serial, dispatch_assist_ctas=args.input_assist_ablation if cache else 0)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
@@ -195,7 +197,7 @@ with torch.cuda.stream(stream):
                                         direct_return=p.dag_direct_return,input_copy_ilp=p.input_copy_ilp,
                                         wgrad_overlap=p.wgrad_overlap,
                                         overlap_expert_dy=p.overlap_expert_dy,inline_dispatch=p.inline_dispatch,
-                                        dispatch_assist_ctas=p.dispatch_assist_ctas, dispatch_external=p.dispatch_external) for p in plans],
+                                        dispatch_assist_ctas=p.dispatch_assist_ctas, dispatch_external=p.dispatch_external, dispatch_external_serial=p.dispatch_external_serial) for p in plans],
                           'exact':exact,'wgrad_relative_rms':errors,
                           'source':('identical tensors and arithmetic; sliced producer versus inline tile owners with optional auxiliary input copy' if args.input_assist_ablation is not None else
                                     'identical tensors, GEMM tiles and dot reduction kernel; prefetched raw DY versus direct peer DY reads' if args.dy_prefetch_ablation else
