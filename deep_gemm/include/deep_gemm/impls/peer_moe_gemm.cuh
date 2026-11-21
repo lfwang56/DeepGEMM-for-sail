@@ -505,7 +505,7 @@ template <class _SrcT, GemmType kGemmType,
           bool InlineDispatch = false, bool CacheReturn = false, bool FixedMTile = false,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
-          bool ExternalInput = false>
+          bool ExternalInput = false, uint32_t PollYieldEvery = 0>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -514,6 +514,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
     static_assert(!ExternalInput || (DispatchPipeline && !InlineDispatch && !PeerRead && !PeerWrite));
+    static_assert(PollYieldEvery == 0 || (PollYieldEvery <= 1024 && (PollYieldEvery & (PollYieldEvery - 1)) == 0));
     static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
     static_assert(ReturnVectorBytes == 4 || ReturnVectorBytes == 8);
     static_assert(ReturnVectorBytes == 4 || (PeerWrite && !DispatchPipeline && !StagedReturn));
@@ -569,7 +570,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                                      FirstNTile, NumNTiles>, UnslicedScheduler>;
     using PipelineScheduler = std::conditional_t<DispatchPipeline,
         training::DispatchPipelineScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
-                                             !PeerWrite, InlineDispatch>,
+                                             !PeerWrite, InlineDispatch, PollYieldEvery>,
         SlicedScheduler>;
     using TileScheduler = std::conditional_t<FixedMTile,
         training::SelectedMTileScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
@@ -717,11 +718,14 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                   __shared__ int inline_failed;
                   if (thread_idx == 0) {
                       const uint64_t begin = clock64();
+                      uint32_t polls = 0;
                       while (tix::ld_acq(pipeline.ready + deep_scheduler.cumsum_m_block_idx) != 1u) {
                           if ((tix::ld_acq(pipeline.status) & 8u) || clock64() - begin > pipeline.timeout_cycles) {
                               atomicOr(pipeline.status, 8u);
                               break;
                           }
+                          if constexpr (PollYieldEvery != 0)
+                              if ((++polls & (PollYieldEvery - 1)) == 0) __ppu_yield();
                       }
                       inline_failed = (tix::ld_acq(pipeline.status) & 8u) != 0;
                   }

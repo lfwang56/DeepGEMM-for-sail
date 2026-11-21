@@ -233,6 +233,7 @@ public:
         bool keep_gate_up = true;
         int input_copy_ilp = 1;
         bool external_input = false;
+        int poll_yield_every = 0;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -250,6 +251,7 @@ public:
         if (args.producer_input_aiu) name += "_producer_aiu";
         if (args.pipeline.ready) name += args.write_peer ? "_return_pipeline" : "_dispatch_pipeline";
         if (args.pipeline.ready && args.pipeline.serialize) name += "_serialized";
+        if (args.poll_yield_every) name += fmt::format("_yield{}", args.poll_yield_every);
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
         if (args.cache_return_addresses) name += "_cached_return";
@@ -267,7 +269,7 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}
     >(params{});
 }}
 )", args.threads, name(args),
@@ -285,7 +287,7 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.return_vector_bytes,
        args.interleaved_gate_up ? "true" : "false",
        args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
-       args.input_copy_ilp, args.external_input ? "true" : "false",
+       args.input_copy_ilp, args.external_input ? "true" : "false", args.poll_yield_every,
        args.pipeline.ready ? ", pipeline" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -433,6 +435,9 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.input_copy_ilp = input_copy_ilp;
     args.external_input = external_input;
     if (pipeline_ready.has_value()) {
+        args.poll_yield_every = get_env<int>("DG_INPUT_READY_YIELD_EVERY", 0);
+        DG_HOST_ASSERT(args.poll_yield_every >= 0 && args.poll_yield_every <= 1024
+                       && (args.poll_yield_every == 0 || (args.poll_yield_every & (args.poll_yield_every - 1)) == 0));
         DG_HOST_ASSERT(!read_peer && (!activation_gate_up.has_value() || fc1_activation)
                        && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
                        && !first_n_tile && !num_n_tiles && !pack_input);

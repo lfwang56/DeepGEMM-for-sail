@@ -1,7 +1,7 @@
 # Qwen3.8 routed-layer communication and compute analysis
 
-Updated2026-11-21UTC, through iteration32. Iteration33 input-tile assistants
-are under validation; no performance benefit is claimed for that candidate.
+Updated2026-11-21UTC, through iteration35. Iteration36 tests the native PPU yield hint in ready
+polls; no benefit is claimed before controlled numerical and latency checks.
 
 ## Measurement contract
 
@@ -140,3 +140,55 @@ avoiding redundant dataflow, validated by complete-step latency.
 - work/analyze-moe-overlap.py and work/plot_moe_stream_overlap.py: reproducible
   analyzers; raw32SQLite files are work/qwen38-wlf-ep32-profile32-*.sqlite.
 - docs/qwen38_bilateral/ITERATIONS.md: all positive and negative experiments.
+
+
+## Input-ready consumers: measured concurrency and a serialization control
+
+Iterations33–35 keep producer97.4–97.5ms as the recommendation. Linear input
+assistants with inline fallback are100–105ms; compiling separate lower-register
+consumers did not make the operator faster. All candidate paths passed exact
+mutable graph and independent all-rank FP32 checks; all timings below have four
+clean same-domain hosts and32 ranks.
+
+Compiled-code classification matters. `_external_dispatch` has neither inline
+peer-copy code nor resident communication-CTA code: it is a **local-operand
+GEMM with input-ready waits**. Its interval includes waiting and is not active
+MMA time. `_owned_dispatch` still contains peer copies and is mixed. The
+analyzer exports `local_compute_with_ready_wait` separately, while including it
+in communication/GEMM intersections. It does not mislabel external consumers as
+payload communication merely because the kernel name contains pipeline.
+
+Iteration34 rank0 Asys producer union97.454ms; static inline8 union102.000ms.
+External8 union226.081ms: mover117.510ms, external FC1 consumer127.156ms,
+copy/consumer intersection117.500ms, rank barriers37.570ms. External32 union
+231.785ms: mover134.057ms, external FC1 consumer140.787ms, intersection
+134.004ms, barriers29.771ms. Genuine concurrent spans coexist with severe
+slowdown/imbalance. No wire bandwidth or kernel active-MMA fraction is inferred.
+
+The local-pointer resource diagnostics identify inline GEMM240regs/thread,
+external224 (both512threads); generic linear mover64regs, static linear80,
+128threads. At8CTAs, isolated local static mover improves15.957->9.416ms
+with zero stack. That does not prove a corresponding distributed gain. Two
+local Asys attempts had ownership-gate anomalies and remain excluded; clean
+r2 explicitly passes the application job tag and records PID/birth/cgroup.
+
+Iteration35 preserves the same mover/consumer code, grids, flags and data and
+moves only the auxiliary event join before or after GEMM. This supplies a
+controlled test of simultaneous work, separate from the strong DeepEP baseline:
+
+| Full step, ms | External parallel | External serialized |
+| --- | ---: | ---: |
+| Warp-row mover,8CTAs |162.378015|113.376074|
+| Warp-row mover,32CTAs |181.066919|99.994977|
+
+The warp-row mover with inline fallback is100.911017ms versus linear
+inline102.278467ms. Producer control97.532886ms remains faster than both.
+Strongest matched DeepEP120.096179ms gives1.2313x. These comparisons establish
+large concurrent-scheduling cost; they do not isolate a particular physical
+cache/queue mechanism. Native yield polling is tested next without changing
+release/acquire ordering, payload or numeric precision.
+
+Evidence: iter33/34/35-input-assist-controls.json,
+ep32-input-assist-reference.json (iteration-specific collection prefixes),
+iter34-asys-provenance.json,iter34-input-overlap-decomposition.json and
+work/stall-review-before34.md in the campaign workspace.

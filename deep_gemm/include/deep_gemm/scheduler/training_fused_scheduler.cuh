@@ -66,7 +66,7 @@ struct CoherentFusedScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
 // Resident communication CTAs publish one ready flag per packed M tile. Each
 // compute CTA waits only for its next tile, never for the whole dispatch.
 template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E,
-          bool WaitForInput = true, bool InlineOwners = false>
+          bool WaitForInput = true, bool InlineOwners = false, uint32_t PollYieldEvery = 0>
 struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
     PeerDispatchPipeline control;
@@ -118,11 +118,14 @@ struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
             const uint64_t begin = clock64();
             const uint32_t signal = control.serialize ? control.signal_capacity : record_index;
             const uint32_t target = control.serialize ? this->num_aligned_m_blocks_ : 1u;
+            uint32_t polls = 0;
             while (tix::ld_acq(control.ready + signal) != target) {
                 if ((tix::ld_acq(control.status) & 8u) || clock64() - begin > control.timeout_cycles) {
                     atomicOr(control.status, 8u);
                     break;
                 }
+                if constexpr (PollYieldEvery != 0)
+                    if ((++polls & (PollYieldEvery - 1)) == 0) __ppu_yield();
             }
             wait_cycles += clock64() - begin;
             failed = (tix::ld_acq(control.status) & 8u) != 0;

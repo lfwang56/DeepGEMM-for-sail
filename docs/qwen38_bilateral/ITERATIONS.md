@@ -3155,3 +3155,53 @@ Best peerqwen38-wlf-ep32-iter35-input-producer-control-attempt0: 97.532886ms. St
 Native extension SHA256: 91d45f9e6ba9465682d8f2e9fd96a657cd1d151c6d5baefed7e397a196beaed9
 
 Artifacts: `outputs/qwen38/iter35-input-assist-controls.json`, `ep32-input-assist-reference.json`.
+
+
+## Iteration 36 — native PPU yield hints at input-ready waits
+
+**Evidence.** Iteration35 compares identical copy and consumer kernels:
+warp-row32 parallel181.066919ms versus serialized99.994977ms. Default producer
+97.532886ms remains faster. The purpose is to test poll scheduling cost while
+preserving the same release/acquire handoff, copy payload and BF16 math.
+
+The installed SDK2.2 header `hgrt/hggc_extend_device_functions.h` defines
+`__ppu_yield(){return __ppukernel_yield_void();}`. Use this native PPU symbol;
+no NVIDIA nanosleep instruction or preemption semantics is assumed.
+
+**Change.** `DG_INPUT_READY_YIELD_EVERY`0(default) leaves polling unchanged.
+Power-of-two intervals1/8/32/128 issue the hint after that many unsuccessful
+ready polls. Apply it to the scheduler input wait and inline owner's loser
+wait. Keep `tix::ld_acq`, target/status checks, timeout, stores, fences and
+publication exactly intact. Zero is compiled out, and default producer kernels
+have no input-ready pipeline. Kernel names and benchmark metadata record the
+interval; public API/GPU Params remain compatible.
+
+**Validation.** Full-width independent FP32, exact mutable graphs for external,
+inline and serialized consumers at1/8/32/128, plus all-rank EP32 balanced and
+C4096 all-to-expert0 checks gate timing. No precision/gradient tolerance changes.
+All accepted phases require four clean host gates and32 clean ranks.
+
+**Scope.** Domain EP32 H8192/I2048/E512/top10,T4096/rank,C4096,ring65536,
+BM256,G8,full FWD+rematerialized BWD with FP32 DW zero/accumulation. Strong
+installed DeepEP serial/early-DY38 controls remain the denominator.
+Uninstrumented median maximum-rank device-event milliseconds.
+
+| Configuration | Backend | External | Yield interval / serial | Assist CTAs | Full step ms |
+| --- | --- | --- | --- | ---: | ---: |
+| deepep-early-dy | deepep | None | 0 / None | None | 119.925647 |
+| inline8-y1 | peer | False | 1 / False | 8 | 101.056158 |
+| parallel32-y0 | peer | True | 0 / False | 32 | 181.770715 |
+| parallel32-y1 | peer | True | 1 / False | 32 | 181.579590 |
+| parallel32-y128 | peer | True | 128 / False | 32 | 182.188379 |
+| parallel32-y32 | peer | True | 32 / False | 32 | 182.055884 |
+| parallel32-y8 | peer | True | 8 / False | 32 | 181.964392 |
+| parallel8-y1 | peer | True | 1 / False | 8 | 162.896313 |
+| producer-control-attempt1 | deepep | None | 0 / None | None | 121.358972 |
+| producer-control-attempt1 | peer | False | 0 / False | 0 | 97.596191 |
+| serial32-y1 | peer | True | 1 / True | 32 | 99.884131 |
+
+Best peerqwen38-wlf-ep32-iter36-yield-producer-control-attempt1: 97.596191ms. Strongest DeepEPqwen38-wlf-ep32-iter36-yield-deepep-early-dy: 119.925647ms. Ratio1.2288x. Reduction versus matched producer97.596191ms: 0.000%. Kernel-span concurrency alone is not wire utilization or a latency win.
+
+Native extension SHA256: 51c05037ef0150ef0e6e9d865eee54cf6d139627b4694480e9b722d26d72bc51
+
+Artifacts: `outputs/qwen38/iter36-yield-assist-controls.json`, `ep32-input-assist-reference.json`.
