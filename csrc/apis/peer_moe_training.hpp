@@ -38,7 +38,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::LocalGradients));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ScatterVector));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -96,19 +96,25 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             blocks = 1;
             break;
         case PeerOperation::Scatter:
+        case PeerOperation::ScatterVector:
             schema(5, 4);
             DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[3] > 0 && dims[3] <= 64);
             expect(0, dims[0] * dims[1], bf); expect(1, dims[0], i32);
             expect(2, dims[3], i64); expect(3, 1, i32);
             expect(4, 1, i32);
+            if (static_cast<PeerOperation>(operation) == PeerOperation::ScatterVector)
+                DG_HOST_ASSERT(dims[1] % 8 == 0);
             work = dims[0] * dims[1];
             blocks = std::min((work + 255) / 256, int64_t(get_num_sms()) * 2);
             break;
         case PeerOperation::PackActive:
+        case PeerOperation::PackActiveVector:
             schema(5, 5);
             DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[3] > 0 && dims[4] > 0 && dims[4] <= 64);
             expect(0, dims[4], i64); expect(1, dims[0], i32);
             expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
+            if (static_cast<PeerOperation>(operation) == PeerOperation::PackActiveVector)
+                DG_HOST_ASSERT(dims[1] % 8 == 0);
             work = dims[0] * dims[1];
             blocks = std::min((work + 255) / 256, int64_t(get_num_sms()) * 2);
             break;

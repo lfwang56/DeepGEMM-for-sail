@@ -19,7 +19,7 @@ import torch
 import torch.distributed as dist
 
 import deep_gemm as dg
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan
 from moe_distributed_utils import destroy_training_process_group
 
 
@@ -51,7 +51,8 @@ def main():
     parser.add_argument("--local-experts", type=int, default=4)
     parser.add_argument("--topk", type=int, default=2)
     parser.add_argument("--chunk-tokens", type=int, default=256)
-    parser.add_argument("--backend", choices=("collective", "peer", "persistent", "both", "all"), default="both")
+    parser.add_argument("--backend", choices=("collective", "collective_fused", "collective_both",
+                                             "peer", "persistent", "both", "all"), default="both")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--routing", choices=("balanced", "skewed", "masked"), default="balanced")
     parser.add_argument("--warmup", type=int, default=5)
@@ -75,6 +76,8 @@ def main():
     parser.add_argument("--separate-local-grad", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
     parser.add_argument("--activation-backward-ablation", action="store_true")
+    parser.add_argument("--scalar-peer-copy", action="store_true")
+    parser.add_argument("--collective-return-ablation", action="store_true")
     args = parser.parse_args()
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
@@ -84,6 +87,8 @@ def main():
         parser.error("peer ablation requires a BF16 peer backend")
     if args.activation_backward_ablation and (args.peer_ablation or args.backend not in ("peer", "both") or args.compute != "bf16"):
         parser.error("activation backward ablation requires BF16 peer/both without peer-ablation")
+    if args.collective_return_ablation and (args.backend not in ("collective_fused", "collective_both") or args.compute != "bf16"):
+        parser.error("collective return ablation requires BF16 collective_fused/collective_both")
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
         raise ValueError("dimensions and iteration counts must be positive")
@@ -111,7 +116,8 @@ def main():
     stream = torch.cuda.Stream(device)
     stream.wait_stream(torch.cuda.current_stream())
     backends = (("collective", "peer", "persistent") if args.backend == "all" else
-                ("collective", "peer") if args.backend == "both" else (args.backend,))
+                ("collective", "peer") if args.backend == "both" else
+                ("collective", "collective_fused") if args.backend == "collective_both" else (args.backend,))
     experiments = []
     for backend in backends:
         if args.fp8_ablation:
@@ -121,6 +127,8 @@ def main():
                                for dispatch, returned in ((False, False), (False, True), (True, False), (True, True)))
         elif backend == "peer" and args.activation_backward_ablation:
             experiments.extend((backend, {"fuse_activation_backward": fused}) for fused in (False, True))
+        elif backend == "collective_fused" and args.collective_return_ablation:
+            experiments.extend((backend, {"fuse_return": fused}) for fused in (False, True))
         else:
             experiments.append((backend, {}))
     reference_samples = None
@@ -131,7 +139,8 @@ def main():
             torch.cuda.synchronize(device)
             initial_memory = torch.cuda.memory_allocated(device)
             torch.cuda.reset_peak_memory_stats(device)
-            plan_class = PersistentMoEPlan if backend == "persistent" else PeerMoEPlan if backend == "peer" else NativeMoEPlan
+            plan_class = (PersistentMoEPlan if backend == "persistent" else PeerMoEPlan if backend == "peer"
+                          else CollectiveFusedMoEPlan if backend == "collective_fused" else NativeMoEPlan)
             if backend == "collective" and args.collective_gemm_config:
                 plan_class = ConfiguredCollectivePlan
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
@@ -140,12 +149,19 @@ def main():
                 options.update(fuse_dispatch=not args.no_fuse_dispatch, fuse_return=not args.no_fuse_return,
                                active_rows=not args.capacity_pointwise,
                                fuse_local_grad=not args.separate_local_grad,
-                               fuse_activation_backward=args.fuse_activation_backward)
+                               fuse_activation_backward=args.fuse_activation_backward,
+                               vectorized_copy=not args.scalar_peer_copy)
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend == "collective":
                 options = {"m_schedule": args.m_schedule,
                            "fuse_activation_quant": not args.separate_fp8_quantization,
                            "active_pointwise": not args.capacity_pointwise}
+            if backend == "collective_fused":
+                options = {"active_pointwise": not args.capacity_pointwise,
+                           "fuse_return": not args.no_fuse_return,
+                           "fuse_activation_backward": args.fuse_activation_backward}
+                if args.gemm_config:
+                    options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
             options.update(controls)
             plan = plan_class(h, i, e, k, t, chunk_tokens=args.chunk_tokens, group=group,
                               device=device, compute=args.compute, check_errors=False, **options)
@@ -212,16 +228,19 @@ def main():
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
                     "topk": k, "chunk_tokens": args.chunk_tokens, "routing": args.routing,
                     "gemm_configs": getattr(plan, "gemm_configs", None),
-                    "collective_m_schedule": plan.m_schedule if backend == "collective" else None,
-                    "collective_active_pointwise": plan.active_pointwise if backend == "collective" else None,
+                    "collective_m_schedule": plan.m_schedule if backend.startswith("collective") else None,
+                    "collective_active_pointwise": plan.active_pointwise if backend.startswith("collective") else None,
+                    "collective_fuse_return": plan.fuse_return if backend == "collective_fused" else None,
+                    "collective_fuse_activation_backward": plan.fuse_activation_backward if backend == "collective_fused" else None,
                     "collective_gemm_config": args.collective_gemm_config if backend == "collective" else None,
                     "fused_activation_quantization": (plan.fuse_activation_quant
                                                        if backend == "collective" and args.compute == "fp8" else None),
-                    "peer_fuse_dispatch": getattr(plan, "fuse_dispatch", None),
-                    "peer_fuse_return": getattr(plan, "fuse_return", None),
+                    "peer_fuse_dispatch": getattr(plan, "fuse_dispatch", None) if backend == "peer" else None,
+                    "peer_fuse_return": getattr(plan, "fuse_return", None) if backend == "peer" else None,
                     "peer_active_rows": getattr(plan, "active_rows", None) if backend == "peer" else None,
                     "peer_fuse_local_grad": getattr(plan, "fuse_local_grad", None) if backend == "peer" else None,
                     "peer_fuse_activation_backward": getattr(plan, "fuse_activation_backward", None) if backend == "peer" else None,
+                    "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,

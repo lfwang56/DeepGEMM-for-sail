@@ -18,7 +18,7 @@ import torch.distributed as dist
 from torch import nn
 from torch.nn import functional as F
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, native_moe
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan, native_moe
 
 
 DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
@@ -229,7 +229,7 @@ def evaluate(model, data, config, device, batches):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("native", "peer", "persistent", "torch"), default="native")
+    parser.add_argument("--backend", choices=("native", "peer", "persistent", "collective_fused", "torch"), default="native")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--steps", type=int, default=2000)
@@ -249,17 +249,26 @@ def main():
     parser.add_argument("--chunk-tokens", type=int, default=256)
     parser.add_argument("--no-fuse-dispatch", action="store_true")
     parser.add_argument("--no-fuse-return", action="store_true")
+    parser.add_argument("--fuse-activation-backward", action="store_true")
     options = parser.parse_args()
     checkpoint = Path(options.checkpoint)
     if options.resume and not checkpoint.is_file():
         raise FileNotFoundError(f"resume checkpoint does not exist: {checkpoint}")
-    if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend != "peer":
+    if options.no_fuse_dispatch and options.backend != "peer":
         parser.error("peer fusion switches require --backend peer")
+    if options.no_fuse_return and options.backend not in ("peer", "collective_fused"):
+        parser.error("return fusion requires a fused backend")
     backend_options = (dict(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return)
                        if options.backend == "peer" else {})
+    if options.backend == "collective_fused":
+        backend_options = dict(fuse_return=not options.no_fuse_return)
+    if options.fuse_activation_backward:
+        if options.backend not in ("peer", "collective_fused"):
+            parser.error("activation epilogue fusion requires a fused backend")
+        backend_options["fuse_activation_backward"] = True
     if options.backend == "torch" and options.compute != "bf16":
         raise ValueError("the independent Torch reference uses BF16")
-    if options.backend in ("peer", "persistent") and options.compute != "bf16":
+    if options.backend in ("peer", "persistent", "collective_fused") and options.compute != "bf16":
         raise ValueError("the peer-fused backend currently uses BF16")
     end_step = options.steps if options.stop_after is None else options.stop_after
     if not 0 < end_step <= options.steps:
@@ -272,7 +281,8 @@ def main():
     torch.cuda.set_device(device)
     torch.set_num_threads(4)
     torch.manual_seed(options.seed)
-    plan_class = PersistentMoEPlan if options.backend == "persistent" else PeerMoEPlan if options.backend == "peer" else NativeMoEPlan
+    plan_class = (PersistentMoEPlan if options.backend == "persistent" else PeerMoEPlan if options.backend == "peer"
+                  else CollectiveFusedMoEPlan if options.backend == "collective_fused" else NativeMoEPlan)
     plan = plan_class(config.hidden, config.intermediate, config.experts, config.topk,
                         config.batch * config.sequence, chunk_tokens=config.chunk_tokens,
                         compute=options.compute, device=device, check_errors=False,

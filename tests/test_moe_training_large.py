@@ -11,7 +11,7 @@ import math
 
 import torch
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, native_moe
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan, native_moe
 from test_moe_training import reference
 
 
@@ -22,7 +22,7 @@ def relative_rms(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("native", "peer", "persistent"), default="native")
+    parser.add_argument("--backend", choices=("native", "peer", "persistent", "collective_fused"), default="native")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--hidden", type=int, default=7168)
     parser.add_argument("--intermediate", type=int, default=2048)
@@ -32,7 +32,7 @@ def main():
     parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
     options = parser.parse_args()
-    if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend != "peer":
+    if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend not in ("peer", "collective_fused"):
         parser.error("peer switches require --backend peer")
     torch.cuda.set_device(0)
     torch.set_num_threads(2)
@@ -49,12 +49,16 @@ def main():
     dy = (torch.randn_like(x) * 0.1).bfloat16()
     ids = torch.randn(t, e, device="cuda").topk(k, -1).indices.contiguous()
     valid = torch.full((), max(0, t - 3), device="cuda", dtype=torch.int32)
-    classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan}
+    classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan,
+               "collective_fused": CollectiveFusedMoEPlan}
     extra = ({"gemm_configs": {role: (256, 64, 64, 64, 2)
                                for role in ("fc1", "fc2", "dhidden", "dx")}}
-             if options.backend == "peer" else {"maximize_ctas": True} if options.backend == "persistent" else {})
+             if options.backend in ("peer", "collective_fused") else {"maximize_ctas": True} if options.backend == "persistent" else {})
     if options.backend == "peer":
         extra.update(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return,
+                     fuse_activation_backward=options.fuse_activation_backward)
+    if options.backend == "collective_fused":
+        extra.update(fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
     plan = classes[options.backend](h, i, e, k, t, chunk_tokens=t, compute=options.compute, **extra)
     for pattern in ("balanced_masked", "duplicate_skewed"):
@@ -83,6 +87,7 @@ def main():
                               relative_rms=errors, every_element_compared=True,
                               fuse_dispatch=getattr(plan, "fuse_dispatch", None),
                               fuse_return=getattr(plan, "fuse_return", None),
+                              fuse_activation_backward=getattr(plan, "fuse_activation_backward", None),
                               reference="independent FP32 Torch routed experts", passed=passed)), flush=True)
         if not passed:
             raise AssertionError(errors)

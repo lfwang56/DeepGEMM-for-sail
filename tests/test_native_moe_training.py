@@ -11,7 +11,7 @@ import unittest
 import torch
 import torch.distributed as dist
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, native_moe
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan, native_moe
 from test_moe_training import reference, relative_rms
 from moe_distributed_utils import destroy_training_process_group
 
@@ -190,12 +190,13 @@ class NativeTests(unittest.TestCase):
     def test_peer_pointwise_switches(self):
         if self.plan_class is not PeerMoEPlan:
             self.skipTest("peer active-row and local-gradient controls")
-        for active, fused in ((False, False), (False, True), (True, False), (True, True)):
+        for active, fused, vectorized in ((a, f, v) for a in (False, True)
+                                         for f in (False, True) for v in (False, True)):
             x, ids, scores, w1, w2, dy = self.inputs()
             ids.fill_(1)
             ids[3].fill_(-1)
             valid = torch.full((), 5, device="cuda", dtype=torch.int32)
-            plan = self.plan(active_rows=active, fuse_local_grad=fused)
+            plan = self.plan(active_rows=active, fuse_local_grad=fused, vectorized_copy=vectorized)
             y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
             y.backward(dy)
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
@@ -306,7 +307,8 @@ class NativeTests(unittest.TestCase):
 
 
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
-              gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False):
+              gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
+              collective_fused=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -328,7 +330,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     w1 = global_w1[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     w2 = global_w2[rank * 2:(rank + 1) * 2].to(device).requires_grad_()
     dy = dys[rank].to(device)
-    plan_class = PersistentMoEPlan if persistent else PeerMoEPlan if peer else NativeMoEPlan
+    plan_class = (PersistentMoEPlan if persistent else PeerMoEPlan if peer
+                  else CollectiveFusedMoEPlan if collective_fused else NativeMoEPlan)
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
@@ -336,6 +339,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
         plan_options["fuse_activation_backward"] = fuse_activation_backward
     if peer and not persistent:
         plan_options.update(fuse_dispatch=fuse_dispatch, fuse_return=fuse_return)
+    if collective_fused:
+        plan_options.update(fuse_return=fuse_return, fuse_activation_backward=fuse_activation_backward)
     plan = plan_class(256, 128, 2, 2, max(value.shape[0] for value in xs),
                         chunk_tokens=3, group=dist.group.WORLD, compute=compute, device=device, **plan_options)
     valid = torch.tensor(x.shape[0], device=device, dtype=torch.int32)
@@ -416,25 +421,32 @@ if __name__ == "__main__":
     parser.add_argument("--no-fuse-dispatch", action="store_true")
     parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
+    parser.add_argument("--collective-fused", action="store_true")
     options, remaining = parser.parse_known_args()
-    if options.gemm_config and (not options.peer or options.persistent or options.fp8):
-        parser.error("explicit GEMM tiles require --peer with BF16 compute")
-    if (options.no_fuse_dispatch or options.no_fuse_return) and (not options.peer or options.persistent):
+    if options.collective_fused and (options.peer or options.persistent or options.fp8):
+        parser.error("collective-fused is a separate BF16 backend")
+    if options.gemm_config and (not (options.peer or options.collective_fused) or options.persistent or options.fp8):
+        parser.error("explicit GEMM tiles require a BF16 fused backend")
+    if (options.no_fuse_dispatch or options.no_fuse_return) and (not (options.peer or options.collective_fused) or options.persistent):
         parser.error("peer fusion switches require --peer")
     torch.set_num_threads(2)
     recipe = "fp8" if options.fp8 else "bf16"
     if options.ep:
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
-                  options.fuse_activation_backward)
+                  options.fuse_activation_backward, options.collective_fused)
     else:
         NativeTests.compute = recipe
-        NativeTests.plan_class = PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer else NativeMoEPlan
+        NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer
+                                  else CollectiveFusedMoEPlan if options.collective_fused else NativeMoEPlan)
         NativeTests.plan_options = {"maximize_ctas": True} if options.persistent and options.maximize_ctas else {}
         if options.gemm_config:
             NativeTests.plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer and not options.persistent:
             NativeTests.plan_options.update(fuse_dispatch=not options.no_fuse_dispatch,
                                             fuse_return=not options.no_fuse_return,
+                                            fuse_activation_backward=options.fuse_activation_backward)
+        if options.collective_fused:
+            NativeTests.plan_options.update(fuse_return=not options.no_fuse_return,
                                             fuse_activation_backward=options.fuse_activation_backward)
         unittest.main(argv=[__file__] + remaining, verbosity=2)

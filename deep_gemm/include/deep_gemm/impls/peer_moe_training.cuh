@@ -3,6 +3,7 @@
 #include <hggc_runtime.h>
 #include <hggc_bf16.h>
 #include <cutlass/numeric_types.h>
+#include <type_traits>
 #include <deep_gemm/common/peer_moe_training.cuh>
 #include <deep_gemm/tix/sys_atomics.cuh>
 
@@ -85,25 +86,29 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
         }
         peer_pointer<__ppu_bfloat16>(p, 2)[index] = __float2bfloat16(value);
-    } else if constexpr (Op == PeerOperation::PackActive) {
+    } else if constexpr (Op == PeerOperation::PackActive || Op == PeerOperation::PackActiveVector) {
         // Explicit dispatch control: stage only the current padded rows. Avoid
         // making the unfused control pay for the worst-skew ring capacity.
         // Peer pointers, permutation, output, status, work count.
         const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * 128;
+        constexpr int elements = Op == PeerOperation::PackActiveVector ? 8 : 1;
+        const int64_t width = p.dim[1] / elements;
         if (rows < 0 || rows > p.dim[0]) {
             if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
-        } else for (int64_t position = index; position < rows * p.dim[1];
+        } else for (int64_t position = index; position < rows * width;
                     position += int64_t(gridDim.x) * blockDim.x) {
-            const int route = peer_pointer<int32_t>(p, 1)[position / p.dim[1]];
-            __ppu_bfloat16 value = __float2bfloat16(0.f);
+            const int route = peer_pointer<int32_t>(p, 1)[position / width];
+            using Value = std::conditional_t<elements == 8, uint4, __ppu_bfloat16>;
+            Value value{};
             if (route >= 0) {
                 const int source_row = route / p.dim[3], owner = source_row / p.dim[2];
                 if (owner < p.dim[4]) {
                     const auto* source = reinterpret_cast<const __ppu_bfloat16*>(peer_pointer<uint64_t>(p, 0)[owner]);
-                    value = source[int64_t(source_row % p.dim[2]) * p.dim[1] + position % p.dim[1]];
+                    const auto* address = source + int64_t(source_row % p.dim[2]) * p.dim[1] + position % width * elements;
+                    value = *reinterpret_cast<const Value*>(address);
                 } else atomicOr(peer_pointer<int32_t>(p, 3), 2);
             }
-            peer_pointer<__ppu_bfloat16>(p, 2)[position] = value;
+            reinterpret_cast<Value*>(p.ptr[2])[position] = value;
         }
     } else if constexpr (Op == PeerOperation::ActivationActive || Op == PeerOperation::ActivationBackwardActive) {
         // Both matrices keep their physical worst-skew capacity. Only rows
@@ -154,15 +159,18 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             for (int delta = 16; delta; delta >>= 1) sum += __shfl_down_sync(0xffffffffu, sum, delta);
             if (lane == 0 && valid) peer_pointer<float>(p, 3)[token * p.dim[2] + route % p.dim[2]] = sum;
         }
-    } else if constexpr (Op == PeerOperation::Scatter) {
+    } else if constexpr (Op == PeerOperation::Scatter || Op == PeerOperation::ScatterVector) {
         // Packed result, permutation, destination pointers, status, work count.
         // dims: capacity, H, destination rows per rank, P.
         const int64_t rows = int64_t(peer_pointer<int32_t>(p, 4)[0]) * 128;
+        constexpr int elements = Op == PeerOperation::ScatterVector ? 8 : 1;
+        using Value = std::conditional_t<elements == 8, uint4, __ppu_bfloat16>;
+        const int64_t width = p.dim[1] / elements;
         if (rows < 0 || rows > p.dim[0]) {
             if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
-        } else for (int64_t position = index; position < rows * p.dim[1];
+        } else for (int64_t position = index; position < rows * width;
                     position += int64_t(gridDim.x) * blockDim.x) {
-            const int route = peer_pointer<int32_t>(p, 1)[position / p.dim[1]];
+            const int route = peer_pointer<int32_t>(p, 1)[position / width];
             if (route < 0) continue;
             const int owner = route / p.dim[2];
             if (owner >= p.dim[3]) {
@@ -170,7 +178,8 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                 continue;
             }
             auto* destination = reinterpret_cast<__ppu_bfloat16*>(peer_pointer<uint64_t>(p, 2)[owner]);
-            destination[int64_t(route % p.dim[2]) * p.dim[1] + position % p.dim[1]] = peer_pointer<__ppu_bfloat16>(p, 0)[position];
+            auto* address = destination + int64_t(route % p.dim[2]) * p.dim[1] + position % width * elements;
+            *reinterpret_cast<Value*>(address) = reinterpret_cast<const Value*>(p.ptr[0])[position];
         }
     } else if constexpr (Op == PeerOperation::Barrier) {
         // Peer signal pointer table, local signals, error flag.

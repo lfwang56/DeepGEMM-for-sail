@@ -14,7 +14,7 @@ from pathlib import Path
 
 import torch
 
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan
 from train_moe_lm import Configuration, LanguageModel, read_data
 
 
@@ -27,7 +27,8 @@ def evaluate_checkpoint(path, data_path):
         raise ValueError("checkpoint and validation text differ")
     device = torch.device("cuda", 0)
     backend, compute = saved["backend"], saved["compute"]
-    classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan}
+    classes = {"native": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan,
+               "collective_fused": CollectiveFusedMoEPlan}
     plan = None if backend == "torch" else classes[backend](
         config.hidden, config.intermediate, config.experts, config.topk,
         config.batch * config.sequence, chunk_tokens=config.chunk_tokens,

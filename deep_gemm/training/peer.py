@@ -24,7 +24,8 @@ class PeerMoEPlan(NativeMoEPlan):
     transport = "peer"
 
     def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
-                 active_rows=True, fuse_local_grad=True, fuse_activation_backward=False, **kwargs):
+                 active_rows=True, fuse_local_grad=True, fuse_activation_backward=False,
+                 vectorized_copy=True, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -36,6 +37,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if not isinstance(fuse_activation_backward, bool):
             raise TypeError("fuse_activation_backward must be bool")
         self.fuse_activation_backward = fuse_activation_backward
+        if not isinstance(vectorized_copy, bool):
+            raise TypeError("vectorized_copy must be bool")
+        self.vectorized_copy = vectorized_copy
         super().__init__(*args, **kwargs)
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
@@ -204,11 +208,13 @@ class PeerMoEPlan(NativeMoEPlan):
         self._barrier(1)
 
     def _scatter_peer(self, destination, compile_only=False):
-        _peer(6, [self.packed_output, self.permutation, self.pointer_tables[destination], self.status, self.num_blocks],
+        _peer(12 if self.vectorized_copy else 6,
+              [self.packed_output, self.permutation, self.pointer_tables[destination], self.status, self.num_blocks],
               [self.rows, self.h, self.chunk_tokens * self.k, self.size], compile_only)
 
     def _stage_input(self, compile_only=False):
-        _peer(7, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
+        _peer(11 if self.vectorized_copy else 7,
+              [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size], compile_only)
 
     def _activation(self, backward=False, compile_only=False):
@@ -223,7 +229,8 @@ class PeerMoEPlan(NativeMoEPlan):
         tensors = [self.pointer_tables["local_dy"], self.permutation, self.packed_dy, self.status]
         if self.active_rows:
             tensors.append(self.num_blocks)
-        _peer(7 if self.active_rows else 4, tensors,
+        operation = (11 if self.vectorized_copy else 7) if self.active_rows else 4
+        _peer(operation, tensors,
               [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size], compile_only)
 
     def _local_gradients(self, dy, scores, dscores, start, compile_only=False):

@@ -311,15 +311,22 @@ class NativeMoEPlan:
 
     def _chunk_forward(self, w1, w2):
         self._gemm(self.packed_x, w1, self.gate_up, "w1")
-        fused = self.compute == "fp8" and self.fuse_activation_quant
-        if fused:
-            _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
-        elif self.active_pointwise:
-            _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status], [self.rows, self.i, 0])
-        else:
-            _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
+        fused = self._activation()
         self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
         self._scatter_output()
+
+    def _activation(self, backward=False):
+        fused = self.compute == "fp8" and self.fuse_activation_quant
+        if fused:
+            tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
+            tensors += list(self.quantized[2 * self.i if backward else self.i])
+            _launch(15 if backward else 14, tensors, [self.rows, self.i])
+        elif self.active_pointwise:
+            _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status], [self.rows, self.i, int(backward)])
+        else:
+            tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
+            _launch(8 if backward else 7, tensors, [self.rows, self.i])
+        return fused
 
     def _scatter_output(self):
         self.route_values.zero_()
@@ -380,13 +387,7 @@ class NativeMoEPlan:
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
                 # Reuse activation buffers only after their wgrad readers.
                 self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
-                fused = self.compute == "fp8" and self.fuse_activation_quant
-                if fused:
-                    _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
-                elif self.active_pointwise:
-                    _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status], [self.rows, self.i, 1])
-                else:
-                    _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
+                fused = self._activation(backward=True)
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                 self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t", prequantized=fused)
                 self._scatter_output()

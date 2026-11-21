@@ -17,6 +17,8 @@ enum class PeerOperation : int {
     ActivationActive,
     ActivationBackwardActive,
     LocalGradients,
+    PackActiveVector,
+    ScatterVector,
 };
 
 struct PeerGemmParams {

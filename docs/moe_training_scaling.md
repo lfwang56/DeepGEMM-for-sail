@@ -71,3 +71,44 @@ pointwise optimization. A prior attempt involving .222 was rejected for
 postflight foreign-job interference despite all64 rank processes exiting0.
 Direct-peer EP64 still requires eight simultaneously idle hosts in one domain;
 cross-supernode collective capability is not a direct-peer fusion claim.
+
+## Vectorized peer copies and local collective return fusion
+
+Peer staging/scatter now uses aligned BF16x8 transfers. Scalar controls remain
+available through `vectorized_copy=False`. Large full-reference checks and the
+16-method peer suite passed, including all eight active/local-gradient/vector
+control combinations. On three available hosts (.225/.226/.227), EP24 C1024:
+
+| Path | Step / ms |
+| --- | ---: |
+| Native active-row collective | 67.158 |
+| Vector peer packed dispatch, separate return | 30.273 |
+| Vector peer packed dispatch, fused return | 29.072 |
+| Vector peer direct dispatch, separate return | 47.788 |
+| Vector peer direct dispatch, fused return | 46.957 |
+
+All24 rank processes exited0 and postflights were clean. Overall hybrid versus
+this baseline is2.31x; isolated return fusion is now only3.97% latency reduction,
+because the independent-copy control was also accelerated. Do not carry the
+older scalar control's12.15% figure over to the vector result.
+
+`CollectiveFusedMoEPlan` adds a different BF16 path: PCCL handles transport,
+including RDMA across domains, and the local GEMM epilogue writes directly into
+the collective return ring. It requires no symmetric-memory peer mappings and
+does not put RDMA inside GEMM. `fuse_return=False` provides the same-GEMM control.
+Optional dHidden/activation-backward fusion preserves its BF16 rounding.
+
+Its 16-method suite (five unrelated skips), full large-shape reference with
+activation fusion, and four-rank DDP two-step optimizer check passed. The
+Native FP8 suite also passed after factoring the activation helper. EP16 C1024
+on .225/.226, all16 rank exits0/clean:
+
+| Path | Step / ms |
+| --- | ---: |
+| Native active collective | 53.697 |
+| Collective-fused GEMMs, separate return copy | 56.022 |
+| Same GEMMs with return epilogue fusion | 53.198 |
+
+This is about5% for the controlled return contrast and about1% versus native
+auto-selected GEMMs. Cross-domain communication remains fixed-capacity; neither
+number establishes large RDMA/compute overlap gains.

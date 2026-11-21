@@ -14,6 +14,7 @@ support.
 | `NativeMoEPlan` | BF16 or blockwise FP8 | PCCL all-gather/reduce-scatter, including cross-supernode RDMA | Several kernels per chunk |
 | `PeerMoEPlan` | BF16 | Direct peer reads in dispatch GEMMs and peer writes in return GEMMs | Separate metadata, GEMM and activation kernels |
 | `PersistentMoEPlan` | BF16 | Direct peer reads and writes | One forward core kernel and one backward core kernel over all chunks |
+| `CollectiveFusedMoEPlan` | BF16 | PCCL all-gather/reduce-scatter, including RDMA | Local GEMM epilogues write directly into the collective return ring |
 
 Peer and persistent plans require an EP group inside one direct-access domain,
 which can span several hosts in a supernode. Containers need the PPU devices
@@ -26,6 +27,11 @@ Native collective EP can span supernodes over PCCL/RDMA. It exchanges fixed
 capacities, including zero-filled routes; it is not a sparse hierarchical RDMA
 dispatcher. Select groups and chunk sizes for the actual topology. The peer
 metadata's 64-rank construction limit is not a 64-rank benchmark claim.
+
+`CollectiveFusedMoEPlan` retains that collective transport and fuses the local
+return-ring scatter into GEMM. It needs no symmetric-memory mappings and does
+not perform RDMA inside the GEMM. `fuse_return=False` retains a matched local
+copy control. It accepts the same per-role `gemm_configs` as the peer plan.
 
 Persistent execution is opt-in. Its core includes GPU routing, FC1, SwiGLU,
 FC2, full backward replay and both wgrads. Weight casts/transposes, shared
@@ -40,6 +46,13 @@ GPU, rather than zero-filling the entire worst-skew ring capacity.
 The routes, peer transport, GEMM tiles, activations and FP32 wgrads stay the same.
 These switches support controlled fusion measurements and topology-specific
 staging choices. Persistent plans always fuse both directions.
+
+Peer plans default to GPU active-row pointwise work, fused local score/weighted
+gradients and BF16x8 copies. `active_rows=False`, `fuse_local_grad=False` and
+`vectorized_copy=False` retain benchmark controls. Both peer and collective-fused
+plans accept `fuse_activation_backward=True` to put SwiGLU backward in the
+dHidden epilogue; its default is `False`, since the measured EP16 gain was small.
+See `docs/moe_training_scaling.md` for versioned baseline and controlled results.
 
 On measured M890 EP8/EP16 workloads, staging inputs and fusing the return was
 faster than fusing both directions. Select `fuse_dispatch=False,
