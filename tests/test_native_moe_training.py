@@ -201,7 +201,8 @@ class NativeTests(unittest.TestCase):
             dy = (torch.randn_like(x) * .1).bfloat16()
             valid = torch.full((), 5, device="cuda", dtype=torch.int32)
             plan = PeerMoEPlan(512, 384, 3, 2, 7, chunk_tokens=3,
-                               dispatch_cache_n=group_n, fuse_dispatch=True, fuse_return=True)
+                               dispatch_cache_n=group_n, fuse_dispatch=True, fuse_return=True,
+                               reuse_packed_dy=group_n == 4)
             y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
             y.backward(dy)
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
@@ -328,7 +329,7 @@ class NativeTests(unittest.TestCase):
 
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
-              collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0):
+              collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0, reuse_packed_dy=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -356,6 +357,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     plan_options["fast_weight_transpose"] = fast_weight_transpose
     if dispatch_cache_n:
         plan_options["dispatch_cache_n"] = dispatch_cache_n
+    if reuse_packed_dy:
+        plan_options["reuse_packed_dy"] = True
     if gemm_config:
         plan_options["gemm_configs"] = {role: gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     if peer and not persistent:
@@ -447,9 +450,12 @@ if __name__ == "__main__":
     parser.add_argument("--collective-fused", action="store_true")
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
+    parser.add_argument("--reuse-packed-dy", action="store_true")
     options, remaining = parser.parse_known_args()
     if options.dispatch_cache_n and (not options.ep or not options.peer or options.persistent or options.no_fuse_dispatch):
         parser.error("--dispatch-cache-n requires --peer --ep with fused dispatch; unit tests cover cache groups automatically")
+    if options.reuse_packed_dy and (not options.ep or not options.peer or options.persistent):
+        parser.error("--reuse-packed-dy requires --peer --ep; unit tests cover reuse automatically")
     if options.collective_fused and (options.peer or options.persistent or options.fp8):
         parser.error("collective-fused is a separate BF16 backend")
     if options.gemm_config and (not (options.peer or options.collective_fused) or options.persistent or options.fp8):
@@ -462,7 +468,7 @@ if __name__ == "__main__":
         ep_checks(recipe, options.graph, options.peer, options.stress, options.persistent, options.maximize_ctas,
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
                   options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose,
-                  options.dispatch_cache_n)
+                  options.dispatch_cache_n, options.reuse_packed_dy)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer

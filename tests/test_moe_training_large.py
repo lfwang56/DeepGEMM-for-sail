@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--fuse-activation-backward", action="store_true")
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
+    parser.add_argument("--reuse-packed-dy", action="store_true")
+    parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
     if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend not in ("peer", "collective_fused"):
         parser.error("peer switches require --backend peer")
@@ -41,7 +43,9 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.manual_seed(19291)
     h, i, e, t = options.hidden, options.intermediate, options.experts, options.tokens
-    k = min(8, e)
+    if options.topk < 1:
+        parser.error("--topk must be positive")
+    k = min(options.topk, e)
     x = (torch.randn(t, h, device="cuda") * 0.1).bfloat16().requires_grad_()
     w1 = (torch.randn(e, 2 * i, h, device="cuda") * 0.02).bfloat16().float().requires_grad_()
     w2 = (torch.randn(e, h, i, device="cuda") * 0.02).bfloat16().float().requires_grad_()
@@ -63,6 +67,10 @@ def main():
         extra.update(fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
     extra["fast_weight_transpose"] = options.fast_weight_transpose
+    if options.reuse_packed_dy:
+        if options.backend != "peer":
+            parser.error("packed gradient reuse requires peer backend")
+        extra["reuse_packed_dy"] = True
     if options.dispatch_cache_n:
         if options.backend != "peer" or options.no_fuse_dispatch:
             parser.error("dispatch cache requires peer fused dispatch")
@@ -97,6 +105,7 @@ def main():
                               fuse_activation_backward=getattr(plan, "fuse_activation_backward", None),
                               fast_weight_transpose=plan.fast_weight_transpose,
                               dispatch_cache_n=getattr(plan, "dispatch_cache_n", None),
+                              reuse_packed_dy=getattr(plan, "reuse_packed_dy", None),
                               reference="independent FP32 Torch routed experts", passed=passed)), flush=True)
         if not passed:
             raise AssertionError(errors)

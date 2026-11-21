@@ -25,7 +25,7 @@ class PeerMoEPlan(NativeMoEPlan):
 
     def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
                  active_rows=True, fuse_local_grad=True, fuse_activation_backward=False,
-                 vectorized_copy=True, dispatch_cache_n=0, **kwargs):
+                 vectorized_copy=True, dispatch_cache_n=0, reuse_packed_dy=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -45,6 +45,11 @@ class PeerMoEPlan(NativeMoEPlan):
         if dispatch_cache_n and (not fuse_dispatch or self.transport != "peer"):
             raise ValueError("dispatch caching requires the peer fused-dispatch path")
         self.dispatch_cache_n = dispatch_cache_n
+        if not isinstance(reuse_packed_dy, bool):
+            raise TypeError("reuse_packed_dy must be bool")
+        if reuse_packed_dy and self.transport != "peer":
+            raise ValueError("packed gradient reuse is a peer-plan option")
+        self.reuse_packed_dy = reuse_packed_dy and fuse_dispatch
         super().__init__(*args, **kwargs)
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
@@ -177,9 +182,10 @@ class PeerMoEPlan(NativeMoEPlan):
                         read=self.fuse_dispatch, compile_only=True, role="fc1")
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                         write=self.fuse_return, compile_only=True)
+        read_dy = self.fuse_dispatch and not self.reuse_packed_dy
         self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
-                        self.permutation if self.fuse_dispatch else self.identity_rows,
-                        read=self.fuse_dispatch, source="local_dy", compile_only=True, role="dhidden")
+                        self.permutation if read_dy else self.identity_rows,
+                        read=read_dy, source="local_dy", compile_only=True, role="dhidden")
         self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
                         write=self.fuse_return, destination="local_dx", compile_only=True)
         if not self.fuse_return:
@@ -281,9 +287,12 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._barrier(start * 4 + 2)
                 self._pack_dy()
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+                # DW2 requires packed_dy above. Reuse that mandatory staging
+                # result instead of fetching the same peer gradients again.
+                read_dy = self.fuse_dispatch and not self.reuse_packed_dy
                 self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
-                                self.permutation if self.fuse_dispatch else self.identity_rows,
-                                read=self.fuse_dispatch, source="local_dy", role="dhidden")
+                                self.permutation if read_dy else self.identity_rows,
+                                read=read_dy, source="local_dy", role="dhidden")
                 if not self.fuse_activation_backward:
                     self._activation(backward=True)
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)

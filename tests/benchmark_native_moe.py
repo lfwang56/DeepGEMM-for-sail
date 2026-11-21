@@ -82,6 +82,7 @@ def main():
     parser.add_argument("--fast-weight-transpose", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--weight-transpose-ablation", action="store_true")
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
+    parser.add_argument("--reuse-packed-dy", action="store_true")
     args = parser.parse_args()
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
@@ -156,7 +157,8 @@ def main():
                                active_rows=not args.capacity_pointwise,
                                fuse_local_grad=not args.separate_local_grad,
                                fuse_activation_backward=args.fuse_activation_backward,
-                               vectorized_copy=not args.scalar_peer_copy)
+                               vectorized_copy=not args.scalar_peer_copy,
+                               reuse_packed_dy=args.reuse_packed_dy)
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend == "collective":
                 options = {"m_schedule": args.m_schedule,
@@ -254,6 +256,7 @@ def main():
                     "peer_fuse_activation_backward": getattr(plan, "fuse_activation_backward", None) if backend == "peer" else None,
                     "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
+                    "peer_reuse_packed_dy": getattr(plan, "reuse_packed_dy", None) if backend == "peer" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "fast_weight_transpose": plan.fast_weight_transpose,
