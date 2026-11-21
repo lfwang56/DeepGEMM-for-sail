@@ -70,7 +70,9 @@ struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
         __syncthreads();
         if (threadIdx.x == 0) {
             const uint64_t begin = clock64();
-            while (tix::ld_acq(control.ready + record_index) != 1u) {
+            const uint32_t signal = control.serialize ? control.signal_capacity : record_index;
+            const uint32_t target = control.serialize ? this->num_aligned_m_blocks_ : 1u;
+            while (tix::ld_acq(control.ready + signal) != target) {
                 if ((tix::ld_acq(control.status) & 8u) || clock64() - begin > control.timeout_cycles) {
                     atomicOr(control.status, 8u);
                     break;

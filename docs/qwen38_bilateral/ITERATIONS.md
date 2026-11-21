@@ -1247,3 +1247,229 @@ and host receipt. The EP32 uninstrumented serial-control rerun was contaminated
 by foreign work on227 and223 despite all32 ranks finishing; exclude its timings.
 The three clean EP32 profiler decompositions remain diagnostic evidence in
 docs/qwen38_bilateral/overlap_analysis.md, not a speedup verdict.
+
+
+## Iteration12 — fill resident pool; isolate tile overlap (negative overall)
+
+The resident grid now uses (available CUs-1)*actual kernel occupancy:76 CTAs
+for the measured256-thread/98KiB kernel, rather than38. Compile-only returns
+the actual grid; optional statistics allocate outside graph capture afterward.
+Added a same-code serialized control: payload copies, tile flags, global
+completion counters, GEMMs, role counts and buffers are identical; only waits
+switch between per-tile readiness and whole-stage completion. Counter overhead
+is present in both modes. Defaults remain the previous implementation.
+
+ZW-M890P/ppu0015, SDK2.2/nativeTorch2.10 extension in wlf_sgl_2.2/Torch2.11.
+Extension SHA25676d59f1017d03141eba17af82cc6e1c60f57f6babdfd6e63472a169656a10a4d.
+H8192/I2048/E16local/K10/T4096/C768, BF16/fullbackwardreplay/FP32DW zero and
+accumulation, no optimizer/shared expert, graph5x20 median of max-rank times.
+EP8 is a single-host local-shape proxy (128 total experts); EP32 has the actual
+512 experts and uses225/226/227/223. Every phase completed all ranks and clean
+whole-node audits. Initial pending EP32 allocation included222, which became
+busy; no phase started there. Stopped only its local waiting scheduler, then
+reused recovered227 after fresh gates, as explicitly permitted by the user.
+
+Completed timings:
+[
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-serial-control-attempt0",
+    "backend": "deepep",
+    "ms": 134.90191650390625
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-serial-control-attempt0",
+    "backend": "peer",
+    "ms": 136.29239501953126
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-producer-control",
+    "backend": "peer",
+    "ms": 138.029443359375
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-both8",
+    "backend": "peer",
+    "ms": 296.9100830078125
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-both16",
+    "backend": "peer",
+    "ms": 195.38494873046875
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-both24",
+    "backend": "peer",
+    "ms": 185.8459716796875
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-both32",
+    "backend": "peer",
+    "ms": 187.73592529296874
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-both8-serialized",
+    "backend": "peer",
+    "ms": 371.07939453125
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-both16-serialized",
+    "backend": "peer",
+    "ms": 273.27578125
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-input16",
+    "backend": "peer",
+    "ms": 170.4064453125
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter12-return16",
+    "backend": "peer",
+    "ms": 163.43189697265626
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both8-attempt0",
+    "backend": "deepep",
+    "ms": 164.6185791015625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both8-attempt0",
+    "backend": "peer",
+    "ms": 348.2681640625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both16",
+    "backend": "deepep",
+    "ms": 164.6968505859375
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both16",
+    "backend": "peer",
+    "ms": 230.349609375
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both8-serialized",
+    "backend": "deepep",
+    "ms": 164.500244140625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both8-serialized",
+    "backend": "peer",
+    "ms": 435.526025390625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both16-serialized",
+    "backend": "deepep",
+    "ms": 164.65640869140626
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-both16-serialized",
+    "backend": "peer",
+    "ms": 310.6498291015625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-producer-control",
+    "backend": "deepep",
+    "ms": 164.53916015625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-producer-control",
+    "backend": "peer",
+    "ms": 144.77237548828126
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-unfused-control",
+    "backend": "deepep",
+    "ms": 164.5994140625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter12r1-unfused-control",
+    "backend": "peer",
+    "ms": 142.646337890625
+  }
+]
+
+Isolated effective benefit of tile overlap over identical serialized roles:
+[
+  {
+    "scope": "ep8",
+    "communication_ctas": 8,
+    "pipeline_ms": 296.9100830078125,
+    "serial_ms": 371.07939453125,
+    "time_reduction_percent": 19.98745083033475,
+    "speedup_over_serial": 1.249803949977293
+  },
+  {
+    "scope": "ep8",
+    "communication_ctas": 16,
+    "pipeline_ms": 195.38494873046875,
+    "serial_ms": 273.27578125,
+    "time_reduction_percent": 28.502647458639828,
+    "speedup_over_serial": 1.3986531870834165
+  },
+  {
+    "scope": "ep32",
+    "communication_ctas": 8,
+    "pipeline_ms": 348.2681640625,
+    "serial_ms": 435.526025390625,
+    "time_reduction_percent": 20.03505100524432,
+    "speedup_over_serial": 1.25054791201778
+  },
+  {
+    "scope": "ep32",
+    "communication_ctas": 16,
+    "pipeline_ms": 230.349609375,
+    "serial_ms": 310.6498291015625,
+    "time_reduction_percent": 25.849111186959473,
+    "speedup_over_serial": 1.3486015016237207
+  }
+]
+
+Verdict: overlap is measurable, but total time still loses to tuned DeepEP and
+the preceding producer recipe. Do not promote this candidate as a performance
+winner. New communication loops repeatedly resolve route IDs, peer pointers,
+and divisions for every16-byte vector; next cache row addresses once per tile.
+Per-CTA clock deltas diagnose waiting; they are not synchronized device-wide
+timestamps or a direct union/intersection overlap percentage.
+
+Correctness: both scheduling modes passed independent H8192/I2048/E16/T768
+full-element masked/duplicate-skew Y/DX/DW1/DW2/dScore references, maxRMS0.004081,
+and each passed EP2 plus128 dynamic-route graph replays. All host audits clean.
+ActualEP32 worst-skew C768 passed32 full-element records and four clean audits,
+including the near-int32 index boundary, nonzero zero-score derivatives, and
+exactly zero unused-expert gradients. Artifact:
+outputs/qwen38/ep32-resident-pipeline-skew-reference.json, maxRMS0.003497055.
+
+Asight Compute diagnostic (separate from candidate timings) profiled one native
+DW1 kernel at actual local dimensions: all16 group reductions512; grid39,
+512threads,216registers/thread,262144B TSM,one residentCTA/CU,25% achieved warp
+occupancy. Compute37.64%,DRAM36.54%,LLC55.95%; TSM load-group conflict ratio0.71.
+The13-pass replay duration4.043ms is not an uninstrumented step measurement.
+This does not establish a physical compute floor. Tune wgrad tiles and inspect
+shared-memory group contention. Amperf was stopped/verified before collection
+and restored, exclusive node80 audit clean. Report:
+ROOT/build/campaign/qwen38-dw1-profile.acurep; local textwork/qwen38-dw1-acu-details.txt.
+
+Full timing/audit evidence: outputs/qwen38/iter12-resident-overlap-controls.json.

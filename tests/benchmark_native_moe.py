@@ -93,6 +93,7 @@ def main():
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=2)
     parser.add_argument("--pipeline-statistics", action="store_true")
+    parser.add_argument("--pipeline-serialize", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -194,6 +195,7 @@ def main():
                 options["return_pipeline"] = args.return_pipeline
                 options["pipeline_comm_ctas"] = args.pipeline_comm_ctas
                 options["pipeline_statistics"] = args.pipeline_statistics
+                options["pipeline_serialize"] = args.pipeline_serialize
                 options["dispatch_producer_tiles"] = args.dispatch_producer_tiles
                 for role in ("fc1", "fc2", "dhidden", "dx"):
                     config = getattr(args, "peer_" + role + "_config")
@@ -309,6 +311,9 @@ def main():
                     "peer_dispatch_pipeline": getattr(plan, "dispatch_pipeline", None) if backend == "peer" else None,
                     "peer_return_pipeline": getattr(plan, "return_pipeline", None) if backend == "peer" else None,
                     "pipeline_comm_ctas": getattr(plan, "pipeline_comm_ctas", None) if backend == "peer" else None,
+                    "dispatch_pipeline_grid": getattr(plan, "dispatch_pipeline_ctas", None) if backend == "peer" else None,
+                    "return_pipeline_grid": getattr(plan, "return_pipeline_ctas", None) if backend == "peer" else None,
+                    "pipeline_serialized_control": getattr(plan, "pipeline_serialize", None) if backend == "peer" else None,
                     "pipeline_statistics_last_fc1": (plan.pipeline_statistics.cpu().tolist()
                         if backend == "peer" and plan.pipeline_statistics is not None else None),
                     "pipeline_statistics_last_dx": (plan.return_pipeline_statistics.cpu().tolist()

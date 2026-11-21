@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--dispatch-pipeline", action="store_true")
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=2)
+    parser.add_argument("--pipeline-serialize", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -81,6 +82,7 @@ def main():
         extra["dispatch_pipeline"] = options.dispatch_pipeline
         extra["return_pipeline"] = options.return_pipeline
         extra["pipeline_comm_ctas"] = options.pipeline_comm_ctas
+        extra["pipeline_serialize"] = options.pipeline_serialize
         extra["dispatch_producer_tiles"] = options.dispatch_producer_tiles
         if options.peer_fc1_config:
             extra["gemm_configs"]["fc1"] = options.peer_fc1_config
@@ -134,6 +136,7 @@ def main():
                               dispatch_pipeline=options.dispatch_pipeline,
                               return_pipeline=options.return_pipeline,
                               pipeline_comm_ctas=options.pipeline_comm_ctas,
+                              pipeline_serialize=options.pipeline_serialize,
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,

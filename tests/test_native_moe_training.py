@@ -412,7 +412,7 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
               deepep=False, dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
               group_backend="nccl", dispatch_producer=False, dispatch_producer_tiles=1,
               producer_local_aiu=False, producer_input_aiu=False, dispatch_pipeline=False,
-              pipeline_comm_ctas=2, return_pipeline=False):
+              pipeline_comm_ctas=2, return_pipeline=False, pipeline_serialize=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -453,6 +453,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     if return_pipeline:
         plan_options.update(return_pipeline=True, pipeline_comm_ctas=pipeline_comm_ctas,
                             pipeline_statistics=True)
+    if dispatch_pipeline or return_pipeline:
+        plan_options["pipeline_serialize"] = pipeline_serialize
     if dispatch_cache_n:
         plan_options["dispatch_cache_n"] = dispatch_cache_n
         plan_options["dispatch_cache_ctas"] = dispatch_cache_ctas
@@ -575,6 +577,7 @@ if __name__ == "__main__":
     parser.add_argument("--dispatch-pipeline", action="store_true")
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=2)
+    parser.add_argument("--pipeline-serialize", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     options, remaining = parser.parse_known_args()
@@ -612,7 +615,7 @@ if __name__ == "__main__":
                   options.staged_return, options.dispatch_cache_ctas, options.process_group_backend,
                   options.dispatch_producer, options.dispatch_producer_tiles, options.producer_local_aiu,
                   options.producer_input_aiu, options.dispatch_pipeline, options.pipeline_comm_ctas,
-                  options.return_pipeline)
+                  options.return_pipeline, options.pipeline_serialize)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer
@@ -625,6 +628,8 @@ if __name__ == "__main__":
         if options.return_pipeline:
             NativeTests.plan_options.update(return_pipeline=True,
                 pipeline_comm_ctas=options.pipeline_comm_ctas, pipeline_statistics=True)
+        if options.dispatch_pipeline or options.return_pipeline:
+            NativeTests.plan_options["pipeline_serialize"] = options.pipeline_serialize
         if options.gemm_config:
             NativeTests.plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer and not options.persistent:

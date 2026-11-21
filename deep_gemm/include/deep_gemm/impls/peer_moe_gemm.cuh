@@ -44,7 +44,9 @@ __device__ __forceinline__ void return_pipeline_consumer(
         const uint32_t valid = min(BM, record.y - (tile - record.z) * BM);
         if (threadIdx.x == 0) {
             const uint64_t wait_begin = clock64();
-            while (tix::ld_acq(control.ready + task) != 1u) {
+            const uint32_t signal = control.serialize ? control.signal_capacity : task;
+            const uint32_t target = control.serialize ? blocks * ntiles : 1u;
+            while (tix::ld_acq(control.ready + signal) != target) {
                 if ((tix::ld_acq(control.status) & 8u) || clock64() - wait_begin > control.timeout_cycles) {
                     atomicOr(control.status, 8u);
                     break;
@@ -106,7 +108,10 @@ __device__ __forceinline__ void dispatch_pipeline_producer(
         // the tile. Consumer AIU loads use the acquired tile's local buffer.
         __threadfence();
         __syncthreads();
-        if (threadIdx.x == 0) tix::red_add_rel(control.ready + tile, 1u);
+        if (threadIdx.x == 0) {
+            tix::red_add_rel(control.ready + tile, 1u);
+            tix::red_add_rel(control.ready + control.signal_capacity, 1u);
+        }
         __syncthreads();
         produced += BM * uint64_t(K) * sizeof(cutlass::bfloat16_t);
     }
@@ -704,6 +709,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
           if (threadIdx.x == 0) {
               constexpr uint32_t ntiles = (SHAPE_N + BLOCK_N - 1) / BLOCK_N;
               tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx * ntiles + n_block_idx, 1u);
+              tix::red_add_rel(pipeline.ready + pipeline.signal_capacity, 1u);
           }
           __syncthreads();
       }

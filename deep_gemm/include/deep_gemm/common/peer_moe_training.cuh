@@ -41,6 +41,8 @@ struct PeerDispatchPipeline {
     uint64_t* statistics = nullptr;
     uint32_t communication_ctas = 0;
     uint64_t timeout_cycles = uint64_t(180) * 2'000'000'000;
+    uint32_t signal_capacity = 0;
+    bool serialize = false;
 };
 
 }  // namespace deep_gemm::training

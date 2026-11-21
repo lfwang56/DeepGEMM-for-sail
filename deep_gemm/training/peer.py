@@ -29,7 +29,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
                  dispatch_producer=False, dispatch_producer_tiles=1, producer_local_aiu=False,
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
-                 pipeline_statistics=False, return_pipeline=False, **kwargs):
+                 pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -62,6 +62,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.dispatch_pipeline = dispatch_pipeline
         self.pipeline_comm_ctas = pipeline_comm_ctas
         self.collect_pipeline_statistics = pipeline_statistics
+        if not isinstance(pipeline_serialize, bool):
+            raise TypeError("pipeline_serialize must be bool")
+        self.pipeline_serialize = pipeline_serialize
         if not isinstance(return_pipeline, bool):
             raise TypeError("return_pipeline must be bool")
         if return_pipeline and (not fuse_return or self.transport != "peer" or staged_return):
@@ -161,26 +164,20 @@ class PeerMoEPlan(NativeMoEPlan):
         self.dispatch_scratch = None
         self.pipeline_ready = self.return_pipeline_ready = self.pipeline_statistics = None
         self.return_pipeline_statistics = None
+        self.dispatch_pipeline_ctas = self.return_pipeline_ctas = 0
         if dispatch_pipeline or return_pipeline:
             ctas = dg.get_num_sms() - 1
-            if not pipeline_comm_ctas < ctas:
-                raise ValueError("communication CTAs must leave at least one resident compute CTA")
+            if ctas < 1:
+                raise ValueError("pipeline needs at least two CUs; occupancy is checked during preparation")
             if dispatch_pipeline:
-                self.pipeline_ready = torch.zeros(self.rows // 128, device=self.device, dtype=torch.int32)
+                self.pipeline_ready = torch.zeros(self.rows // 128 + 1, device=self.device, dtype=torch.int32)
                 self.buffers["pipeline_ready"] = self.pipeline_ready
             if return_pipeline:
                 minimum_bn = min(self.gemm_configs.get(role, (128,))[0] for role in ("fc2", "dx"))
                 ntiles = (self.h + minimum_bn - 1) // minimum_bn
-                self.return_pipeline_ready = torch.zeros(self.rows // 128 * ntiles,
+                self.return_pipeline_ready = torch.zeros(self.rows // 128 * ntiles + 1,
                                                         device=self.device, dtype=torch.int32)
                 self.buffers["return_pipeline_ready"] = self.return_pipeline_ready
-            if pipeline_statistics:
-                if dispatch_pipeline:
-                    self.pipeline_statistics = torch.zeros((ctas, 4), device=self.device, dtype=torch.int64)
-                    self.buffers["pipeline_statistics"] = self.pipeline_statistics
-                if return_pipeline:
-                    self.return_pipeline_statistics = torch.zeros((ctas, 4), device=self.device, dtype=torch.int64)
-                    self.buffers["return_pipeline_statistics"] = self.return_pipeline_statistics
         if self.dispatch_cache_n:
             cus = torch.cuda.get_device_properties(self.device).multi_processor_count
             self.dispatch_scratch = torch.empty((cus * self.dispatch_cache_ctas * 128, self.h),
@@ -207,7 +204,7 @@ class PeerMoEPlan(NativeMoEPlan):
         return_pipeline = write and self.return_pipeline
         if return_pipeline and not compile_only:
             self.return_pipeline_ready.zero_()
-        dg._C._moe_training_peer_gemm(
+        grid = dg._C._moe_training_peer_gemm(
             a, weight, output, self.pointer_tables[source], self.pointer_tables[destination],
             source_rows, self.permutation, self.work_info, self.num_blocks,
             source_stride, self.chunk_tokens * self.k, read, write, compile_only,
@@ -220,9 +217,21 @@ class PeerMoEPlan(NativeMoEPlan):
             first_n_tile, num_n_tiles, local_input_aiu, producer_input_aiu,
             self.return_pipeline_ready if return_pipeline else self.pipeline_ready if dispatch_pipeline else None,
             self.status if dispatch_pipeline or return_pipeline else None,
-            self.return_pipeline_statistics if return_pipeline else self.pipeline_statistics if dispatch_pipeline else None,
+            (self.return_pipeline_statistics if return_pipeline else self.pipeline_statistics if dispatch_pipeline else None)
+                if not compile_only else None,
             self.pipeline_comm_ctas,
+            self.pipeline_serialize,
         )
+        if compile_only and (dispatch_pipeline or return_pipeline):
+            grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
+            setattr(self, grid_name, max(grid, getattr(self, grid_name)))
+            if self.collect_pipeline_statistics:
+                name = "return_pipeline_statistics" if return_pipeline else "pipeline_statistics"
+                previous = getattr(self, name)
+                if previous is None or previous.size(0) < grid:
+                    statistics = torch.zeros((grid, 4), device=self.device, dtype=torch.int64)
+                    setattr(self, name, statistics)
+                    self.buffers[name] = statistics
 
     def _fc1(self, w1, *, pack_input=False, compile_only=False):
         if self.dispatch_pipeline:
