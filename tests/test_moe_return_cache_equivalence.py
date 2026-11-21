@@ -14,6 +14,7 @@ parser.add_argument('--block-m-ablation', action='store_true')
 parser.add_argument('--return-vector-ablation', action='store_true')
 parser.add_argument('--dag-ablation', action='store_true')
 parser.add_argument('--dag-serialization-ablation', action='store_true')
+parser.add_argument('--dag-shared-pool', action='store_true')
 args = parser.parse_args()
 if args.ffn_fusion_ablation and args.expert_local_grad_ablation:
     parser.error('choose one ablation')
@@ -60,6 +61,7 @@ with torch.cuda.stream(stream):
                            producer_input_aiu=False if args.dag_serialization_ablation else not cache,
                            producer_local_aiu=False if args.dag_serialization_ablation else not cache,
                            dag_serialize=cache if args.dag_serialization_ablation else False)
+            options['dag_shared_pool'] = args.dag_shared_pool and options['dag_fusion']
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
@@ -114,6 +116,7 @@ with torch.cuda.stream(stream):
                 'expert_grad_graph_equivalence' if args.expert_local_grad_ablation else
                 'ffn_graph_equivalence' if args.ffn_fusion_ablation else 'return_cache_graph_equivalence')
         print(json.dumps({'case':case,'pattern':pattern,
+                          'dag_shared_pool':args.dag_shared_pool,
                           'exact':exact,'wgrad_relative_rms':errors,
                           'source':('identical tensors and GEMM tiles; DAG enabled versus producer control, or DAG serial versus parallel' if args.dag_ablation or args.dag_serialization_ablation else
                                     'identical tensors and BM256; four-byte versus eight-byte direct peer stores' if args.return_vector_ablation else

@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--dag-return-ctas", type=int, default=4)
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
+    parser.add_argument("--dag-shared-pool", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -116,7 +117,7 @@ def main():
                            return_vector_bytes=args.return_vector_bytes,
                            dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
                            dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
-                           dag_trace=args.dag_trace)
+                           dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
@@ -168,6 +169,8 @@ def main():
             inline_dispatch=args.inline_dispatch if backend == "peer" else None,
             cache_return_addresses=args.cache_return_addresses if backend == "peer" else None,
             ffn_fusion=args.ffn_fusion if backend == "peer" else None,
+            dag_fusion=args.dag_fusion if backend == "peer" else None,
+            dag_shared_pool=args.dag_shared_pool if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,
             ring_rows=args.ring_rows, last_window_rows=int(plan.current_rows),
             block_m=plan.block_m,

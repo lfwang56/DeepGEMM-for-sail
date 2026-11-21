@@ -2332,3 +2332,63 @@ Next: test a shared pool of ready communication and compute tasks, allowing
 available CTAs to borrow copy work instead of reserving a small fixed copy
 pool. Preserve the strong tuned DeepEP/producer controls. The2–3x target
 remains unmet; this measured overlap is not yet an acceptable production win.
+
+
+## Iteration22: shared pool of ready communication and compute tasks
+
+Replace fixed communication roles with one resident task pool. Any worker CTA
+can copy an input tile, execute FC1, execute ready FC2 or return a completed
+tile. Input completion publishes FC1 jobs; paired activation publishes FC2;
+FC2 completion publishes return jobs. Only runnable compute jobs are queued,
+so no worker blocks the input producer it requires. The same stage-serial
+control uses this full resource pool. Keep the production default unchanged.
+
+Native SHA256d241e318e1549dbce1c51b2d01a61e526baa551df3a407d9cfa4a2315480e68b.
+ZW-M890P/ppu0015, wlf_sgl_2.2 Torch2.11 runtime/nativeTorch2.10 build.
+Full H8192/I2048/E16/K10 FP32 masked/skewed oracles passed. Pool-versus-producer
+and pool-serial-versus-parallel changing-route graphs have exact Y/DX/dScore
+and DW RMS~4e-7. Actual EP32 C4096/S65536 all-to-expert0 validates every output
+and gradient on32 ranks, clean host gates. The state grows to18 words and
+queues remain bounded by physical ring capacity; GPU launch ABI is unchanged.
+
+BF16 routed experts, EP32 E512 and EP8 proxyE128; T4096/C4096/S65536/BM256,
+full backward replay, FP32 DW zero/accumulation, no optimizer. Warmup5,
+20 graph iterations,5 repeats, max-rank event medians.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|pool-bm256-bn128-parallel|109.566174|128.788586|
+|ep8|pool-bm256-parallel|100.341650|109.910815|
+|ep8|pool-bm256-serial|100.206250|114.881799|
+|ep8|producer-bm256|100.234906|103.491003|
+|ep32|pool-bm256-bn128-parallel|129.673401|130.552979|
+|ep32|pool-bm256-parallel|119.954126|110.406958|
+|ep32|pool-bm256-parallel-forward|35.644846|33.875565|
+|ep32|pool-bm256-serial|120.023303|115.621350|
+|ep32|pool-bm256-serial-forward|35.698233|37.801089|
+|ep32|producer-bm256-attempt0|119.990332|104.579956|
+|ep32|producer-bm256-forward|35.654544|29.814816|
+
+The shared pool recovers much of iteration21's regression, but remains an
+intermediate experimental path. Keep the equally tuned DeepEP and best
+producer comparisons; a serial-control ratio is not a DeepEP speedup.
+Internal activity diagnostics are captured separately with all-rank output
+files, monitorCTA single-clock timestamps and full timeline capacity.
+
+A native publication litmus checked3000epochs x16384U32words across two
+resident CTAs, three repeats each: per-thread fence and block-joined leader
+fence both give zero errors/timeouts. Their~38–40ms times are similar. The
+no-fence diagnostic also happens to pass, which is not proof that ordering
+can be omitted. No production fence was removed. Official HGGC release/
+acquire and fence documentation was fetched from chapter1041's public read
+endpoint; NVIDIA descriptions are not used to establish PPU semantics.
+
+Artifacts: outputs/qwen38/iter22-shared-task-pool-controls.json,
+ep32-pool22-c4096-reference.json; raw distributed activity traces remain
+under build/campaign/qwen38-ep32-dag-activity-*-pool22*.json.gz.
+
+Iterations20–22 have not established a3% improvement over the best producer
+recipe. Before iteration23, reassess with the resource profile, these timing
+controls, official PPU references and the user's inference MegaMoE source.
+Prioritize a new dataflow/compute fusion direction; do not keep claiming that
+activity overlap alone achieves the2–3x objective.

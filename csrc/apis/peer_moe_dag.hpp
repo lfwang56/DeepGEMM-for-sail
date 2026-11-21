@@ -8,22 +8,24 @@ class PeerDagRuntime final : public LaunchRuntime<PeerDagRuntime> {
 public:
     struct Args {
         int h, i, e, bm, bn, bk, wm, wn, stages, threads;
-        bool return_output, trace;
+        bool return_output, trace, shared_pool;
         LaunchArgs launch_args;
         PeerFfnDagParams params;
     };
     static std::string name(const Args& a) {
-        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}",
-            a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn, a.stages, a.return_output, a.trace);
+        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}",
+            a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn, a.stages, a.return_output, a.trace,
+            a.shared_pool ? "_shared_pool" : "");
     }
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_dag.cuh>
 extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerFfnDagParams params) {{
-    deep_gemm::training::peer_ffn_dag_impl<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>(params);
+    deep_gemm::training::{}<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>(params);
 }}
-)", a.threads, name(a), a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn,
+)", a.threads, name(a), a.shared_pool ? "peer_ffn_shared_pool_impl" : "peer_ffn_dag_impl",
+       a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn,
        a.threads, a.stages, a.return_output ? "true" : "false", a.trace ? "true" : "false");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -36,7 +38,7 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
                         int source_rows_per_rank, int destination_rows_per_rank,
                         int block_m, const std::vector<int>& config,
                         int input_ctas, int return_ctas, bool return_output,
-                        bool serialize, bool trace, bool compile_only) {
+                        bool serialize, bool trace, bool compile_only, bool shared_pool = false) {
     DG_HOST_ASSERT(tensors.size() == 12 && controls.size() == 9 && tensors[0].is_cuda());
     const auto device = tensors[0].device();
     const c10::cuda::CUDAGuard guard(device);
@@ -77,9 +79,11 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     DG_HOST_ASSERT(h % bn == 0 && i % bn == 0 && input_ctas > 0 && return_ctas >= 0);
     DG_HOST_ASSERT(!return_output || return_ctas > 0);
     const int max_m = m / block_m, n2 = h / bn;
-    DG_HOST_ASSERT(controls[0].numel() == DagStateSize && controls[1].numel() == max_m);
+    DG_HOST_ASSERT(controls[0].numel() == DagStateSize
+                   && controls[1].numel() == max_m * (shared_pool ? (1 + 2*i/bn) : 1));
     DG_HOST_ASSERT(controls[2].numel() == max_m * (i / bn) && controls[3].numel() == max_m);
-    DG_HOST_ASSERT(controls[4].numel() == max_m * n2 && controls[5].numel() == max_m * n2);
+    DG_HOST_ASSERT(controls[4].numel() == max_m * n2
+                   && controls[5].numel() == max_m * n2 * (shared_pool ? 2 : 1));
     DG_HOST_ASSERT(controls[6].numel() == 12 && controls[8].numel() == 1);
     DG_HOST_ASSERT(controls[7].dim() == 2 && controls[7].size(1) == 6 && controls[7].size(0) > 0);
     const int threads = 32 * (block_m / wm) * (bn / wn);
@@ -117,14 +121,15 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     p.input_ctas = input_ctas;
     p.return_ctas = return_output ? return_ctas : 0;
     p.serialize = serialize;
-    PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,
+    PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,shared_pool,
         {get_grid_shape(get_num_sms()),dim3(threads),smem},p};
     const auto runtime = compiler->build(PeerDagRuntime::name(a), PeerDagRuntime::generate(a));
     int occupancy = 0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
     DG_HOST_ASSERT(occupancy > 0 && get_num_sms() > 1);
     a.launch_args.grid_dim.x = (get_num_sms() - 1) * occupancy;
-    DG_HOST_ASSERT(input_ctas + (return_output ? return_ctas : 0) + int(trace) < a.launch_args.grid_dim.x);
+    DG_HOST_ASSERT((shared_pool ? 0 : input_ctas + (return_output ? return_ctas : 0)) + int(trace)
+                   < a.launch_args.grid_dim.x);
     if (get_env<int>("show_log"))
         std::printf("[PeerDag] BM%d BN%d threads%d smem%d occupancy%d grid%u input%d return%d trace%d\n",
             block_m,bn,threads,smem,occupancy,a.launch_args.grid_dim.x,input_ctas,p.return_ctas,trace);
@@ -137,7 +142,7 @@ static void register_peer_dag_apis(pybind11::module_& m) {
         py::arg("source_rows_per_rank"), py::arg("destination_rows_per_rank"),
         py::arg("block_m"), py::arg("config"), py::arg("input_ctas"), py::arg("return_ctas"),
         py::arg("return_output"), py::arg("serialize") = false, py::arg("trace") = false,
-        py::arg("compile_only") = false);
+        py::arg("compile_only") = false, py::arg("shared_pool") = false);
 }
 
 }  // namespace deep_gemm::training

@@ -261,4 +261,189 @@ __device__ __forceinline__ void peer_ffn_dag_impl(const PeerFfnDagParams p) {
     }
 }
 
+// Called only by a CTA's leader. A successful claim may briefly precede the
+// publisher's release store; that publisher is already resident and never
+// waits for a consumer, so acquiring the claimed entry cannot form a cycle.
+__device__ __forceinline__ bool dag_claim_queue(
+        uint32_t* state, uint32_t head_index, uint32_t tail_index, uint32_t& slot) {
+    const uint32_t head = tix::ld_acq(state + head_index);
+    if (head < tix::ld_acq(state + tail_index)
+            && atomicCAS(state + head_index, head, head + 1) == head) {
+        slot = head;
+        return true;
+    }
+    return false;
+}
+
+// All worker CTAs share runnable copy and GEMM jobs. A completed input tile
+// publishes FC1 jobs; activation publishes FC2 jobs; FC2 publishes return jobs.
+// Workers never claim FC1 work whose input still needs an unscheduled producer.
+template <uint32_t H, uint32_t I, uint32_t E, uint32_t BM, uint32_t BN,
+          uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
+          bool Return, bool Trace>
+__device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams p) {
+    static_assert(H % BN == 0 && I % BN == 0);
+    __shared__ uint32_t entry_status;
+    if (threadIdx.x == 0) entry_status = tix::ld_acq(p.global_status);
+    __syncthreads();
+    if (entry_status) return;
+    constexpr uint32_t pairs = I / BN, n1 = 2 * pairs, n2 = H / BN;
+    const uint32_t mtiles = __ldg(p.ffn.first.gemm.aligned_num_m_blocks);
+    const uint32_t max_m = p.ffn.first.gemm.shape_m / BM;
+    const uint32_t fc2tasks = mtiles * n2;
+    auto* fc1_queue = p.input_ready + max_m;
+    auto* return_queue = p.output_ready + max_m * n2;
+    if constexpr (Trace) {
+        if (blockIdx.x == gridDim.x - 1) {dag_monitor<Return>(p, mtiles, fc2tasks); return;}
+    }
+    __shared__ uint64_t addresses[BM];
+    __shared__ uint32_t task, kind, last_pair;
+    const auto* records = reinterpret_cast<const uint4*>(p.ffn.first.gemm.expert_ids_and_cumsum);
+    const uint64_t begin = clock64();
+    while (true) {
+        if (threadIdx.x == 0) {
+            kind = 0;
+            const bool done = tix::ld_acq(p.state + DoneFC2) == fc2tasks
+                && tix::ld_acq(p.state + DoneInput) == mtiles
+                && (!Return || tix::ld_acq(p.state + DoneReturn) == fc2tasks);
+            if (done || tix::ld_acq(p.state + DagError)) kind = 5;
+            else {
+                if constexpr (Return) {
+                    if ((!p.serialize || tix::ld_acq(p.state + DoneFC2) == fc2tasks)
+                            && dag_claim_queue(p.state, HeadReturn, TailReturn, task)) kind = 4;
+                }
+                if (!kind && (!p.serialize || tix::ld_acq(p.state + DoneActivation) == mtiles)
+                        && dag_claim_queue(p.state, HeadFC2, TailFC2, task)) kind = 3;
+                if (!kind && (!p.serialize || tix::ld_acq(p.state + DoneInput) == mtiles)
+                        && dag_claim_queue(p.state, HeadFC1, TailFC1, task)) kind = 2;
+                if (!kind && tix::ld_acq(p.state + NextInput) < mtiles) {
+                    task = atomicAdd(p.state + NextInput, 1u);
+                    if (task < mtiles) kind = 1;
+                }
+                if (!kind && clock64() - begin > p.timeout_cycles) {
+                    atomicOr(p.state + DagError, 8u);
+                    atomicOr(p.global_status, 8u);
+                    kind = 5;
+                }
+            }
+        }
+        __syncthreads();
+        if (kind == 5) break;
+        if (kind == 1) {
+            const uint32_t tile = task;
+            dag_activity<Trace>(p.state, ActiveInput, true);
+            const uint4 record = __ldg(records + tile);
+            const uint32_t base = record.w + (tile - record.z) * BM;
+            for (uint32_t row = threadIdx.x; row < BM; row += Threads) {
+                const uint32_t source = __ldg(p.ffn.first.gemm.sorted_token_ids + base + row);
+                uint64_t address = 0;
+                if (source < uint64_t(p.ffn.first.num_ranks) * p.ffn.first.source_rows_per_rank) {
+                    const uint32_t owner = source / p.ffn.first.source_rows_per_rank;
+                    const uint32_t local = source % p.ffn.first.source_rows_per_rank;
+                    address = __ldg(p.ffn.first.source_peers + owner) + uint64_t(local) * H * 2;
+                }
+                addresses[row] = address;
+            }
+            __syncthreads();
+            pack_producer_input_rows<BM, H, Threads>(addresses, p.ffn.first, base);
+            dag_activity<Trace>(p.state, ActiveInput, false);
+            if (threadIdx.x == 0) {
+                tix::red_add_rel(p.input_ready + tile, 1u);
+                const uint32_t slot = atomicAdd(p.state + TailFC1, n1);
+                for (uint32_t n = 0; n < n1; ++n)
+                    tix::red_add_rel(fc1_queue + slot + n, tile * n1 + n + 1);
+                tix::red_add_rel(p.state + DoneInput, 1u);
+            }
+        } else if (kind == 2) {
+            if (!dag_wait(p, fc1_queue + task, 1u)) break;
+            const uint32_t item = tix::ld_acq(fc1_queue + task) - 1;
+            const uint32_t tile = item / n1, column = item % n1, pair = column % pairs;
+            dag_activity<Trace>(p.state, ActiveFC1, true);
+            dag_gemm<2*I, H, E, BM, BN, BK, WM, WN, Threads, Stages>(p.ffn.first, tile, column);
+            __threadfence();
+            __syncthreads();
+            dag_activity<Trace>(p.state, ActiveFC1, false);
+            if (threadIdx.x == 0) last_pair = atomicAdd(p.pair_done + tile * pairs + pair, 1u) == 1;
+            __syncthreads();
+            if (last_pair) {
+                if (!dag_wait(p, p.pair_done + tile * pairs + pair, 2u)) break;
+                dag_activity<Trace>(p.state, ActiveActivation, true);
+                const uint4 record = __ldg(records + tile);
+                const uint32_t base = record.w + (tile - record.z) * BM;
+                const uint32_t valid = min(BM, record.y - (tile - record.z) * BM);
+                const auto* gate = reinterpret_cast<const volatile uint16_t*>(p.ffn.first.gemm.c_ptr);
+                auto* hidden = reinterpret_cast<__ppu_bfloat16*>(const_cast<void*>(p.ffn.second.gemm.a_ptr));
+                for (uint32_t index = threadIdx.x; index < valid * BN; index += Threads) {
+                    const uint32_t row = index / BN, col = pair * BN + index % BN;
+                    const uint64_t offset = uint64_t(base + row) * 2 * I + col;
+                    union Scalar {uint16_t bits; __ppu_bfloat16 value;};
+                    const Scalar g{gate[offset]}, u{gate[offset + I]};
+                    const float gf = __bfloat162float(g.value), uf = __bfloat162float(u.value);
+                    const float sigmoid = 1.f / (1.f + expf(-gf));
+                    hidden[uint64_t(base + row) * I + col] = __float2bfloat16((gf * sigmoid) * uf);
+                }
+                __threadfence();
+                __syncthreads();
+                dag_activity<Trace>(p.state, ActiveActivation, false);
+                if (threadIdx.x == 0 && atomicAdd(p.activated_pairs + tile, 1u) == pairs - 1) {
+                    const uint32_t slot = atomicAdd(p.state + TailFC2, n2);
+                    for (uint32_t n = 0; n < n2; ++n)
+                        tix::red_add_rel(p.queue + slot + n, tile * n2 + n + 1);
+                    tix::red_add_rel(p.state + DoneActivation, 1u);
+                }
+            }
+        } else if (kind == 3) {
+            if (!dag_wait(p, p.queue + task, 1u)) break;
+            const uint32_t item = tix::ld_acq(p.queue + task) - 1;
+            dag_activity<Trace>(p.state, ActiveFC2, true);
+            dag_gemm<H, I, E, BM, BN, BK, WM, WN, Threads, Stages>(p.ffn.second, item / n2, item % n2);
+            __threadfence();
+            __syncthreads();
+            dag_activity<Trace>(p.state, ActiveFC2, false);
+            if (threadIdx.x == 0) {
+                if constexpr (Return) {
+                    tix::red_add_rel(p.output_ready + item, 1u);
+                    const uint32_t slot = atomicAdd(p.state + TailReturn, 1u);
+                    tix::red_add_rel(return_queue + slot, item + 1);
+                }
+                tix::red_add_rel(p.state + DoneFC2, 1u);
+            }
+        } else if (kind == 4) {
+            if (!dag_wait(p, return_queue + task, 1u)) break;
+            const uint32_t item = tix::ld_acq(return_queue + task) - 1;
+            const uint32_t tile = item / n2, column_base = (item % n2) * BN;
+            dag_activity<Trace>(p.state, ActiveReturn, true);
+            const uint4 record = __ldg(records + tile);
+            const uint32_t base = record.w + (tile - record.z) * BM;
+            const uint32_t valid = min(BM, record.y - (tile - record.z) * BM);
+            const auto* output = reinterpret_cast<const uint4*>(p.ffn.second.gemm.c_ptr);
+            for (uint32_t row = threadIdx.x; row < valid; row += Threads) {
+                const int route = __ldg(p.ffn.second.permutation + base + row);
+                uint64_t address = 0;
+                if (route >= 0) {
+                    const uint32_t owner = uint32_t(route) / p.ffn.second.destination_rows_per_rank;
+                    if (owner < p.ffn.second.num_ranks) {
+                        const uint32_t local = uint32_t(route) % p.ffn.second.destination_rows_per_rank;
+                        address = __ldg(p.ffn.second.destination_peers + owner)
+                            + (uint64_t(local) * H + column_base) * 2;
+                    }
+                }
+                addresses[row] = address;
+            }
+            __syncthreads();
+            for (uint32_t index = threadIdx.x; index < valid * (BN / 8); index += Threads) {
+                const uint32_t row = index / (BN / 8), col = index % (BN / 8);
+                const uint64_t address = addresses[row];
+                if (address) reinterpret_cast<uint4*>(address)[col] =
+                    output[uint64_t(base + row) * (H / 8) + column_base / 8 + col];
+            }
+            __threadfence();
+            __syncthreads();
+            dag_activity<Trace>(p.state, ActiveReturn, false);
+            if (threadIdx.x == 0) tix::red_add_rel(p.state + DoneReturn, 1u);
+        }
+        __syncthreads();
+    }
+}
+
 }  // namespace deep_gemm::training

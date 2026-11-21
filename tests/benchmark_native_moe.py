@@ -108,6 +108,7 @@ def main():
     parser.add_argument("--dag-return-ctas", type=int, default=4)
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
+    parser.add_argument("--dag-shared-pool", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -212,7 +213,7 @@ def main():
                 options["return_vector_bytes"] = args.return_vector_bytes
                 options.update(dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
                                dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
-                               dag_trace=args.dag_trace)
+                               dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool)
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -364,8 +365,9 @@ def main():
                     "peer_cached_return_addresses": getattr(plan, "cache_return_addresses", None) if backend == "peer" else None,
                     "peer_return_vector_bytes": getattr(plan, "return_vector_bytes", None) if backend == "peer" else None,
                     "dag_fusion": getattr(plan, "dag_fusion", None) if backend == "peer" else None,
-                    "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" else None,
-                    "dag_return_ctas": getattr(plan, "dag_return_ctas", None) if backend == "peer" else None,
+                    "dag_shared_pool": getattr(plan, "dag_shared_pool", None) if backend == "peer" else None,
+                    "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" and not args.dag_shared_pool else None,
+                    "dag_return_ctas": getattr(plan, "dag_return_ctas", None) if backend == "peer" and not args.dag_shared_pool else None,
                     "dag_serialized_control": getattr(plan, "dag_serialize", None) if backend == "peer" else None,
                     "dag_grid": getattr(plan, "dag_grid", None) if backend == "peer" else None,
                     "dag_activity_statistics": plan.dag_monitor.cpu().tolist() if backend == "peer" and args.dag_fusion and args.dag_trace else None,

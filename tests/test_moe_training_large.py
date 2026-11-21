@@ -58,6 +58,7 @@ def main():
     parser.add_argument("--dag-return-ctas", type=int, default=4)
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
+    parser.add_argument("--dag-shared-pool", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -112,7 +113,7 @@ def main():
         extra["return_vector_bytes"] = options.return_vector_bytes
         extra.update(dag_fusion=options.dag_fusion, dag_input_ctas=options.dag_input_ctas,
                      dag_return_ctas=options.dag_return_ctas, dag_serialize=options.dag_serialize,
-                     dag_trace=options.dag_trace)
+                     dag_trace=options.dag_trace, dag_shared_pool=options.dag_shared_pool)
         extra["ffn_fusion"] = options.ffn_fusion
         extra["expert_local_grad"] = options.expert_local_grad
         if options.ring_rows is not None:
@@ -185,6 +186,7 @@ def main():
                               block_m=plan.block_m,
                               return_vector_bytes=getattr(plan, "return_vector_bytes", None),
                               dag_fusion=getattr(plan, "dag_fusion", None),
+                              dag_shared_pool=getattr(plan, "dag_shared_pool", None),
                               dag_serialized_control=getattr(plan, "dag_serialize", None),
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,

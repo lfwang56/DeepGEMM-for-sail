@@ -34,8 +34,8 @@ class PeerMoEPlan(NativeMoEPlan):
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
                  expert_local_grad=False, ring_rows=None, return_vector_bytes=4,
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
-                 dag_serialize=False, dag_trace=False, **kwargs):
-        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace)):
+                 dag_serialize=False, dag_trace=False, dag_shared_pool=False, **kwargs):
+        if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool)):
             raise TypeError("DAG switches must be bool")
         if any(type(value) is not int or value < 1 for value in (dag_input_ctas, dag_return_ctas)):
             raise ValueError("DAG communication CTA counts must be positive integers")
@@ -46,6 +46,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.dag_fusion = dag_fusion
         self.dag_input_ctas, self.dag_return_ctas = dag_input_ctas, dag_return_ctas
         self.dag_serialize, self.dag_trace = dag_serialize, dag_trace
+        self.dag_shared_pool = dag_shared_pool
+        if dag_shared_pool and not dag_fusion:
+            raise ValueError("shared DAG task pools require dag_fusion")
         if type(return_vector_bytes) is not int or return_vector_bytes not in (4, 8):
             raise ValueError("return_vector_bytes must be 4 or 8")
         if return_vector_bytes != 4 and (not fuse_return or return_pipeline or staged_return or ffn_fusion):
@@ -248,11 +251,12 @@ class PeerMoEPlan(NativeMoEPlan):
             tiles, pairs, n2 = self.rows // self.block_m, self.i // bn, self.h // bn
             self.dag_slots = 2 * math.ceil(self.max_tokens / self.chunk_tokens) * self.route_window_count
             sample_capacity = 8192 if dag_trace else 1
-            descriptions = (("state", (13,), torch.int32), ("input_ready", (tiles,), torch.int32),
+            descriptions = (("state", (18,), torch.int32),
+                            ("input_ready", (tiles * (1 + 2*pairs if dag_shared_pool else 1),), torch.int32),
                             ("pair_done", (tiles * pairs,), torch.int32),
                             ("activated_pairs", (tiles,), torch.int32),
                             ("queue", (tiles * n2,), torch.int32),
-                            ("output_ready", (tiles * n2,), torch.int32),
+                            ("output_ready", (tiles * n2 * (2 if dag_shared_pool else 1),), torch.int32),
                             ("monitor", (self.dag_slots, 12), torch.int64),
                             ("samples", (self.dag_slots, sample_capacity, 6), torch.int64))
             self.dag_controls = []
@@ -506,7 +510,7 @@ class PeerMoEPlan(NativeMoEPlan):
              self.source_rows, self.permutation, self.work_info, self.num_blocks],
             controls, self.chunk_tokens, self.chunk_tokens * self.k, self.block_m,
             self.dag_config, self.dag_input_ctas, self.dag_return_ctas, return_output,
-            self.dag_serialize, self.dag_trace, compile_only)
+            self.dag_serialize, self.dag_trace, compile_only, self.dag_shared_pool)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(

@@ -6,6 +6,7 @@ namespace deep_gemm::training {
 enum DagState : uint32_t {
     NextFC1, HeadFC2, TailFC2, DoneFC2, DoneInput, DoneActivation, DoneReturn,
     DagError, ActiveInput, ActiveFC1, ActiveActivation, ActiveFC2, ActiveReturn,
+    NextInput, HeadFC1, TailFC1, HeadReturn, TailReturn,
     DagStateSize
 };
 
