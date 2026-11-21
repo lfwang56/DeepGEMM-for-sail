@@ -30,12 +30,18 @@ class PeerMoEPlan(NativeMoEPlan):
                  dispatch_producer=False, dispatch_producer_tiles=1, producer_local_aiu=False,
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
                  pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
-                 inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False, **kwargs):
+                 inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
+                 expert_local_grad=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
             raise TypeError("peer fusion switches must be bool")
         self.fuse_dispatch, self.fuse_return = fuse_dispatch, fuse_return
+        if not isinstance(expert_local_grad, bool):
+            raise TypeError("expert_local_grad must be bool")
+        if expert_local_grad and (ffn_fusion or not reuse_packed_dy or not fuse_local_grad):
+            raise ValueError("expert-local gradients require packed DY reuse and local-gradient fusion without whole-FFN fusion")
+        self.expert_local_grad = expert_local_grad
         if not isinstance(ffn_fusion, bool):
             raise TypeError("ffn_fusion must be bool")
         if ffn_fusion and (not fuse_dispatch or not fuse_return or not fuse_activation_backward
@@ -121,6 +127,12 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and fuse_dispatch
         super().__init__(*args, **kwargs)
+        if self.group is not None:
+            recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad)
+            recipes = [None] * self.size
+            dist.all_gather_object(recipes, recipe, group=self.group)
+            if any(other != recipe for other in recipes):
+                raise ValueError("EP ranks must agree on the peer gradient and return protocol")
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
             raise ValueError("unknown peer GEMM configuration role")
@@ -136,6 +148,10 @@ class PeerMoEPlan(NativeMoEPlan):
                         ("local_dx", (c * k, h), torch.bfloat16),
                         ("local_dy", (c * k, h), torch.bfloat16),
                         ("barrier_state", (4,), torch.int32))
+        if self.expert_local_grad:
+            descriptions += (("raw_dy", (c, h), torch.bfloat16),
+                             ("raw_scores", (c, k), torch.float32),
+                             ("local_dscores", (c, k), torch.float32))
         layout, size = {}, 0
         for name, shape, dtype in descriptions:
             size = (size + 15) // 16 * 16
@@ -304,6 +320,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.ffn_fusion:
             self._ffn(w1, w2, compile_only=True)
             self._ffn(self.w2_t, self.w1_t, backward=True, compile_only=True)
+        if self.expert_local_grad:
+            self._expert_gradients(compile_only=True)
         self._barrier(0, compile_only=True)
         _peer(0, [self.pointer_tables["local_ids"], self.counts, self.route_experts, self.route_rows, self.status],
               [self.routes, self.e, self.rank, self.size, self.chunk_tokens * self.k], True)
@@ -341,10 +359,11 @@ class PeerMoEPlan(NativeMoEPlan):
                                        torch.zeros_like(w2, dtype=torch.float32), self.lengths, self.rows)
         torch.cuda.synchronize(self.device)
 
-    def _route_chunk(self, x, ids, valid_tokens, start):
+    def _route_chunk(self, x, ids, valid_tokens, start, zero_values=True):
         _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
                 [x.shape[0], self.chunk_tokens, self.h, self.k, start])
-        self.local_values.zero_()
+        if zero_values:
+            self.local_values.zero_()
         self.local_dx.zero_()
         self._barrier(start * 4)
         self.counts.zero_()
@@ -356,7 +375,7 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.routes, self.rows, self.k])
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, 128])
 
-    def _chunk_forward(self, w1, w2, pack_input=False):
+    def _chunk_forward(self, w1, w2, pack_input=False, return_output=True):
         if self.ffn_fusion:
             self._ffn(w1, w2)
             self._barrier(1)
@@ -365,7 +384,10 @@ class PeerMoEPlan(NativeMoEPlan):
             self._stage_input()
         self._fc1(w1, pack_input=pack_input)
         self._activation()
-        self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows, write=self.fuse_return)
+        self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
+                        write=self.fuse_return and return_output)
+        if not return_output:
+            return
         if not self.fuse_return:
             self._scatter_peer("local_values")
         self._barrier(1)
@@ -410,6 +432,20 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(10, [self.local_values, dy, scores, dscores, self.local_dy],
               [self.chunk_tokens, self.h, self.k, dy.shape[0], start], compile_only)
 
+    def _expert_gradients(self, compile_only=False):
+        _peer(13, [self.pointer_tables["raw_dy"], self.pointer_tables["raw_scores"],
+                   self.pointer_tables["local_dscores"], self.permutation,
+                   self.packed_output, self.packed_dy, self.num_blocks, self.status],
+              [self.rows, self.h, self.chunk_tokens, self.k, self.size], compile_only)
+
+    def _publish_gradient_chunk(self, dy, scores, start):
+        count = max(0, min(self.chunk_tokens, dy.shape[0] - start))
+        self.raw_dy.zero_()
+        self.raw_scores.zero_()
+        self.local_dscores.zero_()
+        self.raw_dy[:count].copy_(dy[start:start + count])
+        self.raw_scores[:count].copy_(scores[start:start + count])
+
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
         with self._execution():
@@ -432,16 +468,21 @@ class PeerMoEPlan(NativeMoEPlan):
             dw1, dw2 = ((torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
                         if accumulators is None else accumulators)
             for start in range(0, self.max_tokens, self.chunk_tokens):
-                self._route_chunk(x, ids, valid_tokens, start)
-                self._chunk_forward(w1, w2, pack_input=True)
+                if self.expert_local_grad:
+                    self._publish_gradient_chunk(dy, scores, start)
+                self._route_chunk(x, ids, valid_tokens, start, zero_values=not self.expert_local_grad)
+                self._chunk_forward(w1, w2, pack_input=True, return_output=not self.expert_local_grad)
                 dims = [self.chunk_tokens, self.h, self.k, x.shape[0], start]
-                if self.fuse_local_grad:
+                if self.expert_local_grad:
+                    self._expert_gradients()
+                elif self.fuse_local_grad:
                     self._local_gradients(dy, scores, dscores, start)
                 else:
                     _launch(12, [self.local_values, dy, dscores], dims)
                     _launch(11, [dy, scores, self.local_dy], dims)
-                self._barrier(start * 4 + 2)
-                self._pack_dy()
+                if not self.expert_local_grad:
+                    self._barrier(start * 4 + 2)
+                    self._pack_dy()
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
                 if self.ffn_fusion:
                     self._ffn(self.w2_t, self.w1_t, backward=True)
@@ -464,6 +505,9 @@ class PeerMoEPlan(NativeMoEPlan):
                     self._scatter_peer("local_dx")
                 self._barrier(start * 4 + 3)
                 _launch(6, [self.local_dx, scores, dx], dims + [0])
+                if self.expert_local_grad:
+                    count = max(0, min(self.chunk_tokens, x.shape[0] - start))
+                    dscores[start:start + count].copy_(self.local_dscores[:count])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             return dx, dw1, dw2, dscores

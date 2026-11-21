@@ -2009,3 +2009,74 @@ each CU's initial-barrier timestamp, a second barrier had only312–456ticks
 spread. Raw globaltimer values must not be treated as synchronized nanoseconds.
 Any internal overlap timeline requires per-device/CU offset and rate calibration;
 CTA cycle sums alone do not establish device-wide hidden communication.
+
+
+## Iteration17: expert-side router gradients and local backward replay
+
+Hypothesis: remove the unweighted backward Y return and weighted DY roundtrip.
+Publish raw source DY and router scores before routing; keep replayed FC2 Y at
+its expert. A vectorized warp-per-row kernel reads raw peer DY/scores, writes
+mandatory BF16 packed DY and computes the FP32 score dot product, returning
+one scalar per unique route. Valid zero scores retain their derivatives.
+Backward no longer needs the Y-return and DY-publication barriers. Existing
+bilateral input/return fusion remains in the best producer/direct-DX path.
+
+New opt-in expert_local_grad and appended PeerOperation13; original ABI/defaults
+are preserved. Peer constructors now agree on protocol flags before symmetric
+allocation. The new recipe persists through trainer checkpoints and standalone
+evaluation. Whole-FFN fusion currently remains a separate incompatible option.
+
+ZW-M890P/ppu0015,wlf_sgl_2.2,Torch2.11. Native extension SHA256
+5431e80e76a327201feb3474e32eb14a7a0c574e66530920e80313c3ee86a068.
+Same BN256/BK64/WM64/WN64/S2 in both real DeepEP38/19QP and peer, five repeats
+of20 graph iterations after5warmups. Actual EP32 is512 experts/H8192/I2048/K10,
+C768,T4096 unless labeled T1024/T8192; hosts225/226/227/223. EP8 on80 is only
+a128-expert local-shape proxy. All scopes retain full backward rematerialization
+and FP32 DW zero/accumulation; no optimizer/shared expert.
+
+Independent full-element Qwen FP32 masked and duplicate-skew oracles passed.
+Changing-input graph equivalence passed balanced/ragged/duplicate-skew/masked:
+Y/DX bitwise equal to the old producer, dScore relative RMS~1.5e-7, maximum
+DW relative RMS6.90e-6. Actual EP32 near-int32 C768 worst skew passed all32
+ranks/four clean host audits (maximum relative RMS0.003497055), preserving
+valid zero-score derivatives and exact zeros for unused experts.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8|expert-backward|104.987964|106.127209|
+|ep8|expert-forward|33.081882|37.117767|
+|ep8|expert-step|137.950024|143.658936|
+|ep8|expert-unfused|138.004700|137.136853|
+|ep8|producer-control|138.112573|147.060620|
+|ep32|expert-backward|118.250049|103.174658|
+|ep32|expert-forward|46.333865|36.788474|
+|ep32|expert-step|164.535986|140.009692|
+|ep32|expert-t1024|50.557040|43.074203|
+|ep32|expert-t8192|310.484473|264.111206|
+|ep32|expert-unfused|164.558533|135.234729|
+|ep32|producer-control-attempt0|164.723267|144.818054|
+
+All12 benchmark phases completed every rank and idle-node audit cleanly.
+The new expert-side-gradient recipe improves the old bilateral producer by
+about3.3% at EP32/T4096, reaching roughly1.175x versus the current DeepEP
+control. It remains far short of2–3x, and the explicit-copy control must still
+be used to isolate the benefit of fusion from other algorithm changes.
+Evidence: outputs/qwen38/iter17-expert-gradient-controls.json and
+outputs/qwen38/ep32-expert-grad-skew-reference.json in the campaign workspace.
+
+Three full57.8M/four-layer public-text MoE models trained2000 steps with seeds
+4827/4891/6113, unfrozen routing. Seed4891's fixed-route option applies only to
+the independent gradient preflight, not training. All three training jobs and
+full111539-target held-out evaluations exited0 behind clean host audits.
+The library was copied and hash-checked before launching, so subsequent
+source edits cannot alter this quality run. Full cross-entropy mean
+1.590049869233, sample SD0.004830758970.
+Native paired control is recorded in public-text-lm-best-paired.json; these
+three seeds establish a small-model validation, not statistical noninferiority
+or Qwen2.4T convergence. Evidence: public-text-lm-expert-grad17.json.
+
+Next: separate full source-token routing metadata from a small local routed-row
+activation ring, avoiding repeated source-chunk dispatch and FP32 DW passes.
+Give DeepEP the same full-source/local-row-window contract and keep dropless
+worst-skew graph correctness. Profile the current recipe before changing its
+kernels; hidden communication must not be inferred from mixed kernel names.

@@ -19,6 +19,7 @@ enum class PeerOperation : int {
     LocalGradients,
     PackActiveVector,
     ScatterVector,
+    ExpertLocalGradients,
 };
 
 struct PeerGemmParams {

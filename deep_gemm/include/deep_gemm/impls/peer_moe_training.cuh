@@ -18,7 +18,49 @@ template <PeerOperation Op>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::CountRoutes) {
+    if constexpr (Op == PeerOperation::ExpertLocalGradients) {
+        // Keep replayed Y at its expert. Pull raw source DY and scores once
+        // here, produce the mandatory BF16 packed DY and return one FP32
+        // derivative per unique source route. Valid zero scores still have a
+        // score derivative; padded routes produce zero packed gradients.
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 6)[0]) * 128;
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 7), 2);
+            return;
+        }
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+        const int64_t stride = p.dim[2] * p.dim[3], width = p.dim[1] / 8;
+        for (int64_t row = block_index * 8 + warp; row < rows; row += int64_t(gridDim.x) * 8) {
+            const int route = peer_pointer<int32_t>(p, 3)[row];
+            const bool valid = route >= 0 && route < p.dim[4] * stride;
+            if (route >= p.dim[4] * stride && lane == 0) atomicOr(peer_pointer<int32_t>(p, 7), 2);
+            const int owner = valid ? route / stride : 0;
+            const int64_t local_route = valid ? route % stride : 0;
+            const uint4* dy = valid ? reinterpret_cast<const uint4*>(peer_pointer<uint64_t>(p, 0)[owner])
+                + (local_route / p.dim[3]) * width : nullptr;
+            const float score = valid ? reinterpret_cast<const float*>(peer_pointer<uint64_t>(p, 1)[owner])[local_route] : 0.f;
+            float dot = 0.f;
+            for (int64_t column = lane; column < width; column += 32) {
+                const uint4 raw_dy = valid ? dy[column] : uint4{};
+                const uint4 raw_y = valid ? peer_pointer<uint4>(p, 4)[row * width + column] : uint4{};
+                const auto* d = reinterpret_cast<const __ppu_bfloat16*>(&raw_dy);
+                const auto* y = reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+                uint4 raw_weighted{};
+                auto* weighted = reinterpret_cast<__ppu_bfloat16*>(&raw_weighted);
+                #pragma unroll
+                for (int j = 0; j < 8; ++j) {
+                    const float value = __bfloat162float(d[j]);
+                    weighted[j] = __float2bfloat16(value * score);
+                    dot += value * __bfloat162float(y[j]);
+                }
+                peer_pointer<uint4>(p, 5)[row * width + column] = raw_weighted;
+            }
+            #pragma unroll
+            for (int delta = 16; delta; delta >>= 1) dot += __shfl_down_sync(0xffffffffu, dot, delta);
+            if (valid && lane == 0)
+                reinterpret_cast<float*>(peer_pointer<uint64_t>(p, 2)[owner])[local_route] = dot;
+        }
+    } else if constexpr (Op == PeerOperation::CountRoutes) {
         // ID pointer table, counts, route expert, row, error flag.
         // dims: R, E_local, rank, P, routes per source rank.
         if (index >= p.dim[0]) return;

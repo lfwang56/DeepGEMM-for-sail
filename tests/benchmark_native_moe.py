@@ -99,6 +99,7 @@ def main():
     parser.add_argument("--inline-dispatch", action="store_true")
     parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--ffn-fusion", action="store_true")
+    parser.add_argument("--expert-local-grad", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -204,6 +205,7 @@ def main():
                 options["inline_dispatch"] = args.inline_dispatch
                 options["cache_return_addresses"] = args.cache_return_addresses
                 options["ffn_fusion"] = args.ffn_fusion
+                options["expert_local_grad"] = args.expert_local_grad
                 options["dispatch_producer_tiles"] = args.dispatch_producer_tiles
                 for role in ("fc1", "fc2", "dhidden", "dx"):
                     config = getattr(args, "peer_" + role + "_config")
@@ -340,6 +342,7 @@ def main():
                     "peer_inline_dispatch": getattr(plan, "inline_dispatch", None) if backend == "peer" else None,
                     "peer_cached_return_addresses": getattr(plan, "cache_return_addresses", None) if backend == "peer" else None,
                     "peer_ffn_fusion": getattr(plan, "ffn_fusion", None) if backend == "peer" else None,
+                    "peer_expert_local_grad": getattr(plan, "expert_local_grad", None) if backend == "peer" else None,
                     "pipeline_statistics_last_fc1": (plan.pipeline_statistics.cpu().tolist()
                         if backend == "peer" and plan.pipeline_statistics is not None else None),
                     "pipeline_statistics_last_dx": (plan.return_pipeline_statistics.cpu().tolist()
