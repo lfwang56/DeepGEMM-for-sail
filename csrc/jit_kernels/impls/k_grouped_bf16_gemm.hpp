@@ -140,6 +140,11 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
 #endif
     DG_HOST_ASSERT(blocks_per_cu > 0 and "K-grouped tile exceeds the device's launch resources");
     args.launch_args.grid_dim.x *= blocks_per_cu;
+    const int compute_cus = get_env<int>("DG_BF16_WGRAD_COMPUTE_CUS", 0);
+    DG_HOST_ASSERT(compute_cus >= 0 && compute_cus <= get_num_sms());
+    if (compute_cus)
+        args.launch_args.grid_dim.x = std::min(args.launch_args.grid_dim.x,
+                                              uint32_t(compute_cus * blocks_per_cu));
 
     DgProfParam dg_prof_params;
     if (deep_gemm::profiling_enabled() && !device_lengths) {

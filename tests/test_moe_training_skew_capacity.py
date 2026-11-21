@@ -55,6 +55,7 @@ def main():
     parser.add_argument("--serialize-external-dispatch", action="store_true")
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
+    parser.add_argument("--dgrad-compute-cus", type=int, default=0)
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
@@ -129,6 +130,7 @@ def main():
                            dispatch_pipeline=args.dispatch_pipeline, return_pipeline=args.return_pipeline,
                            pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize,
                            inline_dispatch=args.inline_dispatch or args.input_inline, dispatch_assist_ctas=args.dispatch_assist_ctas, dispatch_external=args.dispatch_external, dispatch_external_serial=args.serialize_external_dispatch, cache_return_addresses=args.cache_return_addresses,
+                           dgrad_compute_cus=args.dgrad_compute_cus,
                            ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad,
                            return_vector_bytes=args.return_vector_bytes,
                            fuse_fc1_activation=args.fuse_fc1_activation,

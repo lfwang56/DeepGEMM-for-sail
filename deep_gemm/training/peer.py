@@ -37,7 +37,10 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
                  input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False, dispatch_external_serial=False,
-                 fuse_fc1_activation=False, **kwargs):
+                 fuse_fc1_activation=False, dgrad_compute_cus=0, **kwargs):
+        if type(dgrad_compute_cus) is not int or dgrad_compute_cus < 0:
+            raise ValueError("dgrad_compute_cus must be a nonnegative integer")
+        self.dgrad_compute_cus = dgrad_compute_cus
         if type(dispatch_assist_ctas) is not int or not 0 <= dispatch_assist_ctas <= 156:
             raise ValueError("dispatch_assist_ctas must be an integer in [0,156]")
         if not isinstance(dispatch_external, bool):
@@ -400,6 +403,7 @@ class PeerMoEPlan(NativeMoEPlan):
             interleaved, fc1_activation, keep_gate_up if fc1_activation else True,
             self.input_copy_ilp if producer_input_aiu or (dispatch_pipeline and self.inline_dispatch) else 1,
             dispatch_pipeline and self.dispatch_external,
+            self.dgrad_compute_cus if role in ("dhidden", "dx") else 0,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"

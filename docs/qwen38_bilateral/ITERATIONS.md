@@ -3373,3 +3373,73 @@ Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter41-geometry-wg-stage3-peer"
 Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter41-geometry-wg-stage3-elastic", "backend": "elastic", "ms": 106.84818115234376, "gemm_configs": {"fc1": [256, 64, 64, 64, 3], "fc2": [256, 64, 64, 64, 3], "dhidden": [256, 64, 64, 64, 3], "dx": [256, 64, 64, 64, 3]}, "wgrad_lut_sha256": "0651bc1981d18a9291b4f27b53794cafec98f9b15f34280565824810dd438fad"}
 
 See iter41-geometry-controls.json, iter41-geometry-reference.json and iter41-baseline-selection.json.
+
+
+## Iteration 42 — coupled WGrad and input-gradient persistent CTA budgets
+
+Earlier30 exposed real DW/dX kernel intersections but regressed total latency.
+The standard persistent grids can occupy all available slots independently.
+Add DG_BF16_WGRAD_COMPUTE_CUS0(default) or1..actualCUs, capping its grid by
+requested CUs times measured per-kernel occupancy. PeerMoEPlan additionally
+accepts dgrad_compute_cus0(default) or a positive budget for dHidden/DX only.
+The internal native peer API appends a default-zero compute_cus argument;
+new Python requires the matching extension. Both schedulers stride by gridDim.x,
+so reduced grids still cover every tile. GPU Params, MMA arithmetic, accumulation,
+barriers, stream joins and buffer reuse protocols are unchanged. These budgets
+do not pin CTAs, guarantee CU partitions, or prove joint kernel residency.
+
+Six exact mutable graph cases passed. Full H8192/I2048/E16/K10 FP32 passed both
+WG4/DGrad35 and WG31/DGrad8 extremes. The first two large preflight commands
+omitted ring capacity and were rejected by constructor validation; corrected
+commands passed and initial logs remain. Actual32-rank checks passed three Peer
+budgets, Elastic WG8/both and fullC4096 skew. The selected41 compute geometry
+has an additional all-rank gate before timing. One skew launcher used an unsupported --dispatch-producer CLI flag;
+the corrected recipe passed without changing tolerances. No failed launch timing
+is included. All accepted performance phases require four clean whole-host audits.
+
+Compare each backend's best41 geometry and preserve BF16,H8192/I2048/E512/top10,
+T4096/C4096,ring65536,BM256,complete rematerialized backward,DX/DW/dScore and
+FP32 DW zero/accumulation. Controls include identical-budget serial DW, old
+uncapped overlap and installed DeepEP with early DY plus bounded DW overlap.
+Four additional small WGrad tiles passed full-width independent FP32 and mutable
+K-length graph checks: M64/N128/S2, M128/N64/S2, M64/N64/S2 and M64/N128/S3,
+all BK64 and128threads. Measured SMEM49,152/49,152/32,768/73,728bytes;
+registers144/160/104/144; per-kernel occupancy5/5/8/3 and no stack. Their
+directory wgrad_luts43 retains the initial exploratory label; all their timings
+belong to42. Each small tile has actual-domain Peer and Elastic preflights and
+serial/overlap controls. Joint residency remains a hypothesis until measured.
+
+| Phase | Backend | WG budget | dGrad budget | WG stream | Complete layer ms |
+| --- | --- | ---: | ---: | --- | ---: |
+| qwen38-wlf-ep32-iter42-wgrad-baseline-control | elastic | 0 | None | none | 106.872559 |
+| qwen38-wlf-ep32-iter42-wgrad-baseline-early-dy | elastic | 0 | None | none | 105.703552 |
+| qwen38-wlf-ep32-iter42-wgrad-baseline-w16-both-early | elastic | 16 | None | both | 117.181787 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-control-attempt0 | peer | 0 | 0 | none | 83.173517 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-uncapped-both | peer | 0 | 0 | both | 87.769409 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-w16-d0-both | peer | 16 | 0 | both | 98.685828 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-w16-d23-both | peer | 16 | 23 | both | 89.682416 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-w16-d23-dw1 | peer | 16 | 23 | dw1 | 100.819659 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-w16-d23-serial | peer | 16 | 23 | none | 116.295813 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-w31-d8-both | peer | 31 | 8 | both | 126.615649 |
+| qwen38-wlf-ep32-iter42-wgrad-peer-w4-d35-both | peer | 4 | 35 | both | 210.766260 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m128-n64-s2-baseline-w8-both | elastic | 8 | None | both | 255.854541 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m128-n64-s2-peer-w0-none | peer | 0 | 0 | none | 109.673157 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m128-n64-s2-peer-w4-both | peer | 4 | 0 | both | 327.417407 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m128-n64-s2-peer-w8-both | peer | 8 | 0 | both | 226.479419 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s2-baseline-w8-both | elastic | 8 | None | both | 239.558789 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s2-peer-w0-none | peer | 0 | 0 | none | 111.773206 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s2-peer-w4-both | peer | 4 | 0 | both | 308.135278 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s2-peer-w8-both | peer | 8 | 0 | both | 207.107715 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s3-baseline-w8-both | elastic | 8 | None | both | 203.389624 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s3-peer-w0-none | peer | 0 | 0 | none | 111.730566 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n128-s3-peer-w8-both | peer | 8 | 0 | both | 184.548010 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n64-s2-baseline-w8-both | elastic | 8 | None | both | 264.717603 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n64-s2-peer-w0-none | peer | 0 | 0 | none | 121.736230 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n64-s2-peer-w4-both | peer | 4 | 0 | both | 334.959180 |
+| qwen38-wlf-ep32-iter42-wgrad-small-m64-n64-s2-peer-w8-both | peer | 8 | 0 | both | 251.015356 |
+
+Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter42-wgrad-peer-control-attempt0", "backend": "peer", "ms": 83.17351684570312}
+
+Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter42-wgrad-baseline-early-dy", "backend": "elastic", "ms": 105.70355224609375}
+
+Only a lower complete-layer latency is an optimization win. See iter42-wgrad-controls.json, iter42-wgrad-reference.json and iter42-compute-selection.json.

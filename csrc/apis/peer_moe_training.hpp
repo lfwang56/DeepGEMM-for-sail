@@ -317,7 +317,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses,
                       int block_m = 128, int return_vector_bytes = 4,
                       bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true,
-                      int input_copy_ilp = 1, bool external_input = false) {
+                      int input_copy_ilp = 1, bool external_input = false, int compute_cus = 0) {
     DG_HOST_ASSERT(!external_input || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !read_peer && !write_peer));
     DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
     DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu
@@ -331,6 +331,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(!interleaved_gate_up || activation_gate_up.has_value());
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
+    DG_HOST_ASSERT(compute_cus >= 0 && compute_cus <= get_num_sms());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
                                permutation, work_info, num_blocks})
         DG_HOST_ASSERT(tensor.device() == a.device() && tensor.is_contiguous());
@@ -494,6 +495,14 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
             DG_HOST_ASSERT(pipeline_statistics.value().numel() >= args.launch_args.grid_dim.x * 4);
     } else
         args.launch_args.grid_dim.x *= dispatch_cache_n ? std::min(occupancy, dispatch_cache_ctas) : occupancy;
+    // The scheduler strides by gridDim.x, so reducing its persistent CTA
+    // budget preserves complete work coverage. This is not CU affinity.
+    if (compute_cus) {
+        args.launch_args.grid_dim.x = std::min(args.launch_args.grid_dim.x,
+                                              uint32_t(compute_cus * occupancy));
+        if (args.pipeline.ready)
+            DG_HOST_ASSERT(pipeline_comm_ctas < args.launch_args.grid_dim.x);
+    }
     if (get_env<int>("show_log")) {
         std::printf("[PeerTraining_BF16:]\n");
         std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
@@ -526,7 +535,7 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("block_m") = 128, py::arg("return_vector_bytes") = 4,
           py::arg("interleaved_gate_up") = false, py::arg("fc1_activation") = false,
           py::arg("keep_gate_up") = true, py::arg("input_copy_ilp") = 1,
-          py::arg("external_input") = false);
+          py::arg("external_input") = false, py::arg("compute_cus") = 0);
 }
 
 }  // namespace deep_gemm::training

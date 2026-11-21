@@ -143,6 +143,7 @@ def main():
     parser.add_argument("--serialize-external-dispatch", action="store_true")
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
+    parser.add_argument("--dgrad-compute-cus", type=int, default=0)
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
@@ -271,6 +272,7 @@ def main():
                 options["dispatch_assist_ctas"] = args.dispatch_assist_ctas
                 options["dispatch_external"] = args.dispatch_external
                 options["dispatch_external_serial"] = args.serialize_external_dispatch
+                options["dgrad_compute_cus"] = args.dgrad_compute_cus
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -455,6 +457,8 @@ def main():
                     "input_assist_static_geometry": os.environ.get("DG_INPUT_ASSIST_STATIC_GEOMETRY", "1"),
                     "last_fc1_assisted_tiles": int(plan.input_assisted_tiles) if backend == "peer" and plan.dispatch_assist_ctas else None,
                     "wgrad_overlap": plan.wgrad_overlap,
+                    "dgrad_compute_cus": getattr(plan, "dgrad_compute_cus", None),
+                    "wgrad_compute_cus": os.environ.get("DG_BF16_WGRAD_COMPUTE_CUS", "0"),
                     "overlap_expert_dy": plan.overlap_expert_dy,
                     "wgrad_warp_map": os.environ.get("DG_BF16_WGRAD_WARP_MAP", "0"),
                     "wgrad_aiu_before_tsm": os.environ.get("DG_BF16_WGRAD_AIU_BEFORE_TSM", "1"),

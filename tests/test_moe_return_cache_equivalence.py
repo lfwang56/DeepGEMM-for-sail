@@ -32,6 +32,7 @@ parser.add_argument('--input-external-serial', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 parser.add_argument('--gemm-geometry-ablation', type=int, nargs=5)
 parser.add_argument('--gemm-stages', type=int, choices=(2,3), default=2)
+parser.add_argument('--dgrad-compute-cus', type=int, default=0)
 args = parser.parse_args()
 if args.dag_backward_only:
     args.dag_ablation = args.dag_backward = True
@@ -137,6 +138,7 @@ with torch.cuda.stream(stream):
                            gate_up_layout='g8', fuse_fc1_activation=True, input_copy_ilp=8,
                            dispatch_producer=True, producer_input_aiu=True, producer_local_aiu=True)
         config = tuple(args.gemm_geometry_ablation) if cache and args.gemm_geometry_ablation else (256,64,64,64,args.gemm_stages)
+        options['dgrad_compute_cus'] = args.dgrad_compute_cus if cache else 0
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:config for role in ('fc1','fc2','dhidden','dx')}, **options)
