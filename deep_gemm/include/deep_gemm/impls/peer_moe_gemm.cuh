@@ -28,6 +28,96 @@ namespace deep_gemm {
 
 namespace training {
 
+template <uint32_t BM, uint32_t BN, uint32_t N, uint32_t Threads>
+__device__ __forceinline__ void return_pipeline_consumer(
+        const PeerGemmParams& params, PeerDispatchPipeline control) {
+    constexpr uint32_t ntiles = (N + BN - 1) / BN;
+    const uint64_t begin = clock64();
+    const uint32_t blocks = __ldg(params.gemm.aligned_num_m_blocks);
+    const auto* output = reinterpret_cast<const uint4*>(params.gemm.c_ptr);
+    uint64_t wait_cycles = 0, returned = 0;
+    __shared__ int failed;
+    for (uint32_t task = blockIdx.x; task < blocks * ntiles; task += control.communication_ctas) {
+        const uint32_t tile = task / ntiles, column_base = (task % ntiles) * BN;
+        const uint4 record = __ldg(reinterpret_cast<const uint4*>(params.gemm.expert_ids_and_cumsum) + tile);
+        const uint32_t base = record.w + (tile - record.z) * BM;
+        const uint32_t valid = min(BM, record.y - (tile - record.z) * BM);
+        if (threadIdx.x == 0) {
+            const uint64_t wait_begin = clock64();
+            while (tix::ld_acq(control.ready + task) != 1u) {
+                if ((tix::ld_acq(control.status) & 8u) || clock64() - wait_begin > control.timeout_cycles) {
+                    atomicOr(control.status, 8u);
+                    break;
+                }
+            }
+            wait_cycles += clock64() - wait_begin;
+            failed = (tix::ld_acq(control.status) & 8u) != 0;
+        }
+        __syncthreads();
+        if (failed) break;
+        for (uint32_t item = threadIdx.x; item < valid * (BN / 8); item += Threads) {
+            const uint32_t row = item / (BN / 8), column = column_base + (item % (BN / 8)) * 8;
+            if (column >= N) continue;
+            const int route = __ldg(params.permutation + base + row);
+            if (route < 0) continue;
+            const uint32_t owner = uint32_t(route) / params.destination_rows_per_rank;
+            if (owner >= params.num_ranks) continue;
+            auto* destination = reinterpret_cast<uint4*>(__ldg(params.destination_peers + owner));
+            const uint64_t local_row = uint32_t(route) % params.destination_rows_per_rank;
+            destination[local_row * (N / 8) + column / 8] = output[uint64_t(base + row) * (N / 8) + column / 8];
+        }
+        // Prevent the next tile's failure flag update racing another warp's
+        // read, and complete this CTA's stores before its kernel can return.
+        __syncthreads();
+        returned += uint64_t(valid) * BN * sizeof(cutlass::bfloat16_t);
+    }
+    if (threadIdx.x == 0 && control.statistics) {
+        control.statistics[blockIdx.x * 4] = clock64() - begin;
+        control.statistics[blockIdx.x * 4 + 1] = wait_cycles;
+        control.statistics[blockIdx.x * 4 + 2] = returned;
+        control.statistics[blockIdx.x * 4 + 3] = 2;
+    }
+}
+
+template <uint32_t BM, uint32_t K, uint32_t Threads>
+__device__ __forceinline__ void dispatch_pipeline_producer(
+        const PeerGemmParams& params, PeerDispatchPipeline control) {
+    const uint64_t begin = clock64();
+    const uint32_t blocks = __ldg(params.gemm.aligned_num_m_blocks);
+    uint64_t produced = 0;
+    auto* packed = reinterpret_cast<uint4*>(const_cast<void*>(params.gemm.a_ptr));
+    for (uint32_t tile = blockIdx.x; tile < blocks; tile += control.communication_ctas) {
+        const auto* records = reinterpret_cast<const uint4*>(params.gemm.expert_ids_and_cumsum);
+        const uint4 record = __ldg(records + tile);
+        const uint32_t base = record.w + (tile - record.z) * BM;
+        for (uint32_t element = threadIdx.x; element < BM * (K / 8); element += Threads) {
+            const uint32_t row = element / (K / 8), column = element % (K / 8);
+            const uint32_t source_row = __ldg(params.gemm.sorted_token_ids + base + row);
+            uint4 value{};
+            if (source_row < uint64_t(params.num_ranks) * params.source_rows_per_rank) {
+                const uint32_t rank = source_row / params.source_rows_per_rank;
+                const uint32_t local_row = source_row % params.source_rows_per_rank;
+                const auto* source = reinterpret_cast<const uint4*>(__ldg(params.source_peers + rank));
+                value = source[uint64_t(local_row) * (K / 8) + column];
+            }
+            packed[uint64_t(base) * (K / 8) + element] = value;
+        }
+        // Every producer thread publishes its stores before thread0 releases
+        // the tile. Consumer AIU loads use the acquired tile's local buffer.
+        __threadfence();
+        __syncthreads();
+        if (threadIdx.x == 0) tix::red_add_rel(control.ready + tile, 1u);
+        __syncthreads();
+        produced += BM * uint64_t(K) * sizeof(cutlass::bfloat16_t);
+    }
+    if (threadIdx.x == 0 && control.statistics) {
+        control.statistics[blockIdx.x * 4] = clock64() - begin;
+        control.statistics[blockIdx.x * 4 + 1] = 0;
+        control.statistics[blockIdx.x * 4 + 2] = produced;
+        control.statistics[blockIdx.x * 4 + 3] = 0;
+    }
+}
+
 // A one-N-tile producer owns every row of its M tile. Materialize the required
 // packed input in one coalesced pass, then feed this same CTA's GEMM through
 // AIU. No other CTA is waited on, and the next kernel is stream ordered.
@@ -246,9 +336,22 @@ template <class _SrcT, GemmType kGemmType,
           bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
           bool DispatchCacheAiu = false, bool StagedReturn = false,
           uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false,
-          bool ProducerInputAiu = false>
+          bool ProducerInputAiu = false, bool DispatchPipeline = false>
 __device__ __forceinline__ void
-training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
+training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
+                           const training::PeerDispatchPipeline pipeline = {}) {
+    const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
+    if constexpr (DispatchPipeline) {
+        static_assert(!PeerRead && !ActivationBackward && DispatchCacheN == 0
+                      && FirstNTile == 0 && NumNTiles == 0);
+        if (blockIdx.x < pipeline.communication_ctas) {
+            if constexpr (PeerWrite)
+                training::return_pipeline_consumer<BLOCK_M, BLOCK_N, SHAPE_N, BLOCK_SIZE>(params, pipeline);
+            else
+                training::dispatch_pipeline_producer<BLOCK_M, SHAPE_K, BLOCK_SIZE>(params, pipeline);
+            return;
+        }
+    }
     const auto& args = params.gemm;
     constexpr uint32_t STRIDE_AM = SHAPE_K;
     constexpr uint32_t STRIDE_BE = SHAPE_N * SHAPE_K;
@@ -282,9 +385,12 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     using UnslicedScheduler = std::conditional_t<DispatchCacheN != 0,
         training::CachedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
                                      DispatchCacheN == 0 ? 1 : DispatchCacheN>, OriginalScheduler>;
-    using TileScheduler = std::conditional_t<FirstNTile != 0 || NumNTiles != 0,
+    using SlicedScheduler = std::conditional_t<FirstNTile != 0 || NumNTiles != 0,
         training::SlicedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
                                      FirstNTile, NumNTiles>, UnslicedScheduler>;
+    using TileScheduler = std::conditional_t<DispatchPipeline,
+        training::DispatchPipelineScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups, !PeerWrite>,
+        SlicedScheduler>;
 
     // Shared memory
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);
@@ -304,7 +410,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
     using GatherOperandA = cutlass::gemm::config::Gemm_Hybrid_Operand<
             ArchTag, SrcT, false, Alignment, cute::Int<BLOCK_K>, BLOCK_SIZE,
             ACopyInst, cute::Int<BLOCK_M>>;
-    constexpr bool UseAiuA = DispatchCacheAiu || LocalInputAiu || ProducerInputAiu;
+    constexpr bool UseAiuA = DispatchCacheAiu || LocalInputAiu || ProducerInputAiu || DispatchPipeline;
     using GemmOperandA = std::conditional_t<UseAiuA,
         cutlass::gemm::config::DefaultGemm_AIU_Operand<
             ArchTag, SrcT, false, cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, false>, GatherOperandA>;
@@ -382,7 +488,12 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
 
     // Block scheduler
     uint32_t m_block_idx, n_block_idx;
-    TileScheduler deep_scheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum);
+    TileScheduler deep_scheduler = [&]() {
+        if constexpr (DispatchPipeline)
+            return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum, pipeline);
+        else
+            return TileScheduler(args.aligned_num_m_blocks, args.expert_ids_and_cumsum);
+    }();
 
     #pragma clang loop licm(disable)
     while (deep_scheduler.fetch_next_work(m_block_idx, n_block_idx)) {
@@ -429,7 +540,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
               // Arbitrary peer rows have already been gathered into this
               // CTA's contiguous cache. AIU is legal for this local operand;
               // its swizzled TSM layout uses the matching A load atom above.
-              const auto* cache = (LocalInputAiu || ProducerInputAiu)
+              const auto* cache = (LocalInputAiu || ProducerInputAiu || DispatchPipeline)
                   ? reinterpret_cast<const SrcT*>(args.a_ptr)
                       + uint64_t(deep_scheduler.curr_block_m_offset) * SHAPE_K
                   : reinterpret_cast<const SrcT*>(params.dispatch_scratch)
@@ -562,7 +673,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
       if constexpr (ActivationBackward) {
           training::activation_backward_epilogue<SHAPE_N>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
-      } else if constexpr (PeerWrite) {
+      } else if constexpr (PeerWrite && !DispatchPipeline) {
           if constexpr (StagedReturn) {
               static_assert(BLOCK_M * (BLOCK_N + 16) * sizeof(DstT)
                   <= kSmemASize + smem_b_size(sizeof(SrcT), kNumStages, BLOCK_N, BLOCK_K));
@@ -587,6 +698,23 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
         accum, tCcC, cC, tiled_mma, args.c_ptr, smem_buffer, thread_idx,
         deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
 #endif
+      if constexpr (DispatchPipeline && PeerWrite) {
+          __threadfence();
+          __syncthreads();
+          if (threadIdx.x == 0) {
+              constexpr uint32_t ntiles = (SHAPE_N + BLOCK_N - 1) / BLOCK_N;
+              tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx * ntiles + n_block_idx, 1u);
+          }
+          __syncthreads();
+      }
+    }
+    if constexpr (DispatchPipeline) {
+        if (threadIdx.x == 0 && pipeline.statistics) {
+            pipeline.statistics[blockIdx.x * 4] = clock64() - pipeline_begin;
+            pipeline.statistics[blockIdx.x * 4 + 1] = deep_scheduler.wait_cycles;
+            pipeline.statistics[blockIdx.x * 4 + 2] = 0;
+            pipeline.statistics[blockIdx.x * 4 + 3] = 1;
+        }
     }
 }
 

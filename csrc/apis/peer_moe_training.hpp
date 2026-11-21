@@ -163,6 +163,7 @@ public:
         bool producer_input_aiu;
         LaunchArgs launch_args;
         PeerGemmParams params;
+        PeerDispatchPipeline pipeline{};
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -178,28 +179,35 @@ public:
             name += fmt::format("_nslice{}_{}", args.first_n_tile, args.num_n_tiles);
         if (args.local_input_aiu) name += "_local_aiu";
         if (args.producer_input_aiu) name += "_producer_aiu";
+        if (args.pipeline.ready) name += args.write_peer ? "_return_pipeline" : "_dispatch_pipeline";
         return name;
     }
     static std::string generate_impl(const Args& args) {
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_gemm.cuh>
 extern "C" __launch_bounds__({}, 1)
-__global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
+__global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}
-    >(params);
+        {}, {}, {}, 128, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    >(params{});
 }}
-)", args.threads, name(args), args.n, args.k, args.groups, args.block_n, args.block_k,
+)", args.threads, name(args),
+       args.pipeline.ready ? ", const deep_gemm::training::PeerDispatchPipeline pipeline" : "",
+       args.n, args.k, args.groups, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
        args.activation_backward ? "true" : "false", args.dispatch_cache_n,
        args.dispatch_cache_aiu ? "true" : "false", args.staged_return ? "true" : "false",
        args.first_n_tile, args.num_n_tiles, args.local_input_aiu ? "true" : "false",
-       args.producer_input_aiu ? "true" : "false");
+       args.producer_input_aiu ? "true" : "false",
+       args.pipeline.ready ? "true" : "false", args.pipeline.ready ? ", pipeline" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
+        if (args.pipeline.ready)
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params, args.pipeline));
+        else
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
     }
 };
 
@@ -213,7 +221,11 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       const c10::optional<torch::Tensor>& activation_gate_up,
                       int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch,
                       bool dispatch_cache_aiu, bool staged_return, int dispatch_cache_ctas,
-                      int first_n_tile, int num_n_tiles, bool local_input_aiu, bool producer_input_aiu) {
+                      int first_n_tile, int num_n_tiles, bool local_input_aiu, bool producer_input_aiu,
+                      const c10::optional<torch::Tensor>& pipeline_ready,
+                      const c10::optional<torch::Tensor>& pipeline_status,
+                      const c10::optional<torch::Tensor>& pipeline_statistics,
+                      int pipeline_comm_ctas) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -307,12 +319,40 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                               local_input_aiu,
                               producer_input_aiu,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
+    if (pipeline_ready.has_value()) {
+        DG_HOST_ASSERT(!read_peer && !activation_gate_up.has_value()
+                       && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
+                       && !first_n_tile && !num_n_tiles && !pack_input);
+        const auto& ready = pipeline_ready.value();
+        DG_HOST_ASSERT(ready.device() == a.device() && ready.is_contiguous()
+                       && ready.scalar_type() == torch::kInt32
+                       && ready.numel() >= (m / 128) * (write_peer ? ((n + bn - 1) / bn) : 1));
+        DG_HOST_ASSERT(pipeline_status.has_value());
+        const auto& status = pipeline_status.value();
+        DG_HOST_ASSERT(status.device() == a.device() && status.is_contiguous()
+                       && status.scalar_type() == torch::kInt32 && status.numel() == 1);
+        const int ctas = get_num_sms() - 1;
+        DG_HOST_ASSERT(ctas >= 2 && pipeline_comm_ctas > 0 && pipeline_comm_ctas < ctas);
+        args.pipeline.ready = reinterpret_cast<uint32_t*>(ready.data_ptr<int32_t>());
+        args.pipeline.status = reinterpret_cast<uint32_t*>(status.data_ptr<int32_t>());
+        args.pipeline.communication_ctas = pipeline_comm_ctas;
+        args.launch_args.grid_dim.x = ctas;
+        if (pipeline_statistics.has_value()) {
+            const auto& statistics = pipeline_statistics.value();
+            DG_HOST_ASSERT(statistics.device() == a.device() && statistics.is_contiguous()
+                           && statistics.scalar_type() == torch::kInt64 && statistics.numel() == ctas * 4);
+            args.pipeline.statistics = reinterpret_cast<uint64_t*>(statistics.data_ptr<int64_t>());
+        }
+    } else {
+        DG_HOST_ASSERT(!pipeline_status.has_value() && !pipeline_statistics.has_value());
+    }
     const auto code = PeerGemmRuntime::generate(args);
     const auto runtime = compiler->build(PeerGemmRuntime::name(args), code);
     int occupancy = 0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
     DG_HOST_ASSERT(occupancy > 0);
-    args.launch_args.grid_dim.x *= dispatch_cache_n ? std::min(occupancy, dispatch_cache_ctas) : occupancy;
+    if (!args.pipeline.ready)
+        args.launch_args.grid_dim.x *= dispatch_cache_n ? std::min(occupancy, dispatch_cache_ctas) : occupancy;
     if (get_env<int>("show_log")) {
         std::printf("[PeerTraining_BF16:]\n");
         std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
@@ -337,7 +377,9 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("dispatch_scratch") = py::none(), py::arg("dispatch_cache_aiu") = false,
           py::arg("staged_return") = false, py::arg("dispatch_cache_ctas") = 2,
           py::arg("first_n_tile") = 0, py::arg("num_n_tiles") = 0,
-          py::arg("local_input_aiu") = false, py::arg("producer_input_aiu") = false);
+          py::arg("local_input_aiu") = false, py::arg("producer_input_aiu") = false,
+          py::arg("pipeline_ready") = py::none(), py::arg("pipeline_status") = py::none(),
+          py::arg("pipeline_statistics") = py::none(), py::arg("pipeline_comm_ctas") = 2);
 }
 
 }  // namespace deep_gemm::training

@@ -38,6 +38,52 @@ struct CoherentFusedScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     }
 };
 
+// Resident communication CTAs publish one ready flag per packed M tile. Each
+// compute CTA waits only for its next tile, never for the whole dispatch.
+template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E,
+          bool WaitForInput = true>
+struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
+    using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
+    PeerDispatchPipeline control;
+    uint64_t wait_cycles = 0;
+
+    __device__ __forceinline__ DispatchPipelineScheduler(
+            const int32_t* blocks, const int32_t* records, PeerDispatchPipeline state)
+        : Base(blocks, records), control(state) {}
+
+    __device__ __forceinline__ bool fetch_next_work(uint32_t& m, uint32_t& n) {
+        constexpr uint32_t nblocks = (N + BN - 1) / BN;
+        const uint32_t next = (this->current_iter++) * (gridDim.x - control.communication_ctas)
+                            + blockIdx.x - control.communication_ctas;
+        if (next >= this->num_aligned_m_blocks_ * nblocks) return false;
+        const uint32_t record_index = next / nblocks;
+        const uint4 data = __ldg(this->expert_ids_and_cumsum_ + record_index);
+        m = record_index - data.z;
+        n = next % nblocks;
+        this->curr_group_idx = data.x;
+        this->curr_group_m = data.y;
+        this->cumsum_m_block_idx = record_index;
+        this->curr_block_m_offset = data.w + m * BM;
+        this->valid_m_in_block = min(BM, data.y - m * BM);
+        if constexpr (!WaitForInput) return true;
+        __shared__ int failed;
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            const uint64_t begin = clock64();
+            while (tix::ld_acq(control.ready + record_index) != 1u) {
+                if ((tix::ld_acq(control.status) & 8u) || clock64() - begin > control.timeout_cycles) {
+                    atomicOr(control.status, 8u);
+                    break;
+                }
+            }
+            wait_cycles += clock64() - begin;
+            failed = (tix::ld_acq(control.status) & 8u) != 0;
+        }
+        __syncthreads();
+        return failed == 0;
+    }
+};
+
 // Keep a short run of N tiles on one CTA. Its private input cache is populated
 // once for that run, without cross-CTA dependencies or residency barriers.
 template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN,

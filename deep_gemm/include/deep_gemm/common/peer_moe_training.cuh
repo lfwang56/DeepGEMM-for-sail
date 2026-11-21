@@ -34,4 +34,13 @@ struct PeerGemmParams {
     void* dispatch_scratch = nullptr;
 };
 
+// Separate launch argument preserves the existing PeerGemmParams ABI.
+struct PeerDispatchPipeline {
+    uint32_t* ready = nullptr;
+    uint32_t* status = nullptr;
+    uint64_t* statistics = nullptr;
+    uint32_t communication_ctas = 0;
+    uint64_t timeout_cycles = uint64_t(180) * 2'000'000'000;
+};
+
 }  // namespace deep_gemm::training

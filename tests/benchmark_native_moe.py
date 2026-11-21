@@ -89,6 +89,10 @@ def main():
     parser.add_argument("--dispatch-producer", action="store_true")
     parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--producer-input-aiu", action="store_true")
+    parser.add_argument("--dispatch-pipeline", action="store_true")
+    parser.add_argument("--return-pipeline", action="store_true")
+    parser.add_argument("--pipeline-comm-ctas", type=int, default=2)
+    parser.add_argument("--pipeline-statistics", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -186,6 +190,10 @@ def main():
                 options["dispatch_producer"] = args.dispatch_producer
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
+                options["dispatch_pipeline"] = args.dispatch_pipeline
+                options["return_pipeline"] = args.return_pipeline
+                options["pipeline_comm_ctas"] = args.pipeline_comm_ctas
+                options["pipeline_statistics"] = args.pipeline_statistics
                 options["dispatch_producer_tiles"] = args.dispatch_producer_tiles
                 for role in ("fc1", "fc2", "dhidden", "dx"):
                     config = getattr(args, "peer_" + role + "_config")
@@ -298,6 +306,14 @@ def main():
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
                     "peer_dispatch_cache_ctas": getattr(plan, "dispatch_cache_ctas", None) if backend == "peer" else None,
                     "peer_dispatch_producer": getattr(plan, "dispatch_producer", None) if backend == "peer" else None,
+                    "peer_dispatch_pipeline": getattr(plan, "dispatch_pipeline", None) if backend == "peer" else None,
+                    "peer_return_pipeline": getattr(plan, "return_pipeline", None) if backend == "peer" else None,
+                    "pipeline_comm_ctas": getattr(plan, "pipeline_comm_ctas", None) if backend == "peer" else None,
+                    "pipeline_statistics_last_fc1": (plan.pipeline_statistics.cpu().tolist()
+                        if backend == "peer" and plan.pipeline_statistics is not None else None),
+                    "pipeline_statistics_last_dx": (plan.return_pipeline_statistics.cpu().tolist()
+                        if backend == "peer" and plan.return_pipeline_statistics is not None else None),
+                    "pipeline_statistics_columns": ["total_cycles", "wait_cycles", "copy_capacity_bytes", "role_0_input_1_compute_2_return"],
                     "peer_producer_local_aiu": getattr(plan, "producer_local_aiu", None) if backend == "peer" else None,
                     "peer_producer_input_aiu": getattr(plan, "producer_input_aiu", None) if backend == "peer" else None,
                     "peer_dispatch_producer_tiles": getattr(plan, "dispatch_producer_tiles", None) if backend == "peer" else None,

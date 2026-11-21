@@ -1172,3 +1172,78 @@ BestbaselineusesitsownbestmeasuredchunkforeachT;donotcompareonlyagainsttheweaker
 ]
 ```
 - T1024C768 is slower in absolute time for both implementations than the earlierC512controls. Its paired12.34% ratio is not a gain over the best DeepEP setting and must not be promoted as that. For4096/8192bothbestmeasuredsettingsareC768andthe~12%fusionreductionholdsagainstthebetterbaseline.
+
+
+## Iteration11 — resident communication/compute tile roles (negative proxy)
+
+Implemented opt-in dispatch_pipeline and return_pipeline. Communication CTAs
+publish/acquire per-tile flags; compute CTAs use contiguous local AIU operands.
+Return CTAs vector-copy each completed M/N output tile while other CTAs compute.
+The existing PeerGemmParams ABI remains unchanged through a separate control
+argument. Timeout/status and occupancy checks protect forward progress. Raw
+per-CTA total/wait cycles are diagnostic, not device-wide overlap percentages.
+
+Chip ZW-M890P/ppu0015, SDK2.2, nativeTorch2.10 extension build exercised in
+wlf_sgl_2.2/Torch2.11, extension SHA256
+ec982a2b7ffcde2c5ac47c0d1e24f4cb10176c70ec0fec9f9c88588f1a78e018.
+H8192/I2048/E16 local/K10/T4096/C768; BF16/full-backward-replay/FP32DW/no
+optimizer/shared expert, graph5x20 median-max-rank. EP8 on219 is only a tuning
+proxy (128 total experts), not an actual Qwen512 EP32 performance result.
+
+Independent full-element H8192/I2048/E16/T768 masked/duplicate-skew references
+passed on80, maximum RMS0.00408018, clean gate. EP2 independent gradients and
+128 dynamic-route graph replays passed on219, both ranks0 and clean gate.
+Single-GPU20-test run had two CLI recipe conflicts in explicit legacy-mode
+controls; fixed those controls to select compatible pipeline switches. Both
+failed controls reran successfully (2 tests, clean220). Remaining applicable
+tests passed; three unrelated tests were skipped. Initial unit invocation
+rejected --reuse-packed-dy without --ep; rerun used its documented unit mode.
+Initial large-reference attempt on215 was blocked by two foreign PIDs; moved80.
+
+Measured completed control matrix (all8 parents0/clean audit for each):
+[
+  {
+    "phase": "qwen38-wlf-ep8-iter11-serial-control-attempt0",
+    "backend": "deepep",
+    "ms": 134.80830078125
+  },
+  {
+    "phase": "qwen38-wlf-ep8-iter11-serial-control-attempt0",
+    "backend": "peer",
+    "ms": 136.170263671875
+  },
+  {
+    "phase": "qwen38-wlf-ep8-iter11-producer-control",
+    "backend": "peer",
+    "ms": 137.8072265625
+  },
+  {
+    "phase": "qwen38-wlf-ep8-iter11-input4",
+    "backend": "peer",
+    "ms": 280.5714599609375
+  },
+  {
+    "phase": "qwen38-wlf-ep8-iter11-return4",
+    "backend": "peer",
+    "ms": 242.2955078125
+  },
+  {
+    "phase": "qwen38-wlf-ep8-iter11-both2",
+    "backend": "peer",
+    "ms": 702.7490234375
+  }
+]
+
+Verdict: reject this candidate as a speed winner. Input4 compute-CTA wait/total
+cycles were0.518–0.699 (median~0.682) in the last FC1. The launch used38 CTAs,
+whereas the preceding GEMM's measured launch was78 (occupancy2). The initial
+resident grid underfilled available GEMM concurrency; four copy CTAs also
+exposed substantial dispatch stalls. Deferred unrun both4/8/12 variants after
+completing the active both2 phase; no GPU jobs were killed. Next direction:
+size the resident grid from actual occupancy and retune communication roles.
+
+Evidence: outputs/qwen38/iter11-role-pipeline-proxy.json includes every metric
+and host receipt. The EP32 uninstrumented serial-control rerun was contaminated
+by foreign work on227 and223 despite all32 ranks finishing; exclude its timings.
+The three clean EP32 profiler decompositions remain diagnostic evidence in
+docs/qwen38_bilateral/overlap_analysis.md, not a speedup verdict.
