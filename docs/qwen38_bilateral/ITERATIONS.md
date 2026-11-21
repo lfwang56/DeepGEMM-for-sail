@@ -2445,3 +2445,61 @@ Artifacts: outputs/qwen38/iter23-g8-fc1-{proxy,controls}.json;
 full graph/oracle logs are in the campaign workspace. The G8 design is
 adapted from the user-provided PPU inference MegaMoE fragment pairing,
 with the additional BF16 intermediate-rounding and replay-storage contract.
+
+
+## Iteration24: G8 FC1/SwiGLU inside the shared ready-task pool
+
+Integrate the BF16-rounded G8 FC1 activation epilogue into the resident shared
+pool. FC1 directly writes each compact hidden slice. The last FC1 N tile for
+an M tile publishes FC2 jobs, removing paired gate/up waits and the separate
+activation task. Backward replay preserves G8 gate/up; forward discards it.
+Only opt-in shared-pool G8 uses this path. Fixed-role/canonical DAG defaults
+remain unchanged. The GPU argument structure is unchanged; host API adds an
+optional boolean. Activity metadata says FC1 now includes SwiGLU.
+
+Native SHA2568f4ed938182e86fd9e841880ca4a557c522c5a623b7d0371fb48a6c5abf3d6b0,
+ZW-M890P/ppu0015, wlf_sgl_2.2 Torch2.11 runtime/Torch2.10 native build.
+Full H8192/I2048/E16/K10 masked/skewed FP32 checks pass. G8 shared-pool versus
+producer and G8 shared-pool serial versus parallel changing-route graphs
+have exact Y/DX/dScore, DW RMS below5e-7. Actual EP32 C4096/S65536 all-to-
+expert0 validates every output/gradient and unused-expert zeros on32 ranks,
+with clean four-host audits. One initial oracle CLI mistakenly passed an
+unsupported --chunk-tokens option and exited before GPU work; corrected
+invocation passed on219.
+
+H8192/I2048/K10, EP32 E512 or explicitly labeled EP8 proxy E128,
+T4096/C4096/S65536/BM256/BN256/BK64/WM64/WN64/S2. Complete FWD + replayed
+BWD + FP32 DW zero/accumulation, no optimizer. Warmup5,20 graph iterations,
+5 repeats; max-rank event medians. Serial controls change stage dependencies
+on the same pool, but their ratio is not a DeepEP speedup.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8 proxy E128|pool-g8|101.354065|106.644177|
+|ep8 proxy E128|pool-g8-serial|101.421783|112.517712|
+|ep8 proxy E128|producer-g8|101.441827|102.599609|
+|ep32 E512|pool-g8-attempt0|121.082349|107.088501|
+|ep32 E512|pool-g8-forward|36.069968|32.057455|
+|ep32 E512|pool-g8-serial|121.232251|114.100830|
+|ep32 E512|pool-g8-serial-forward|36.106345|36.670197|
+|ep32 E512|pool-split|120.231641|110.570361|
+|ep32 E512|producer-g8|121.291089|103.751599|
+
+The matched producer and equally tuned DeepEP controls remain necessary:
+sharing a launch or observing task overlap does not by itself make the
+complete step faster. This group has not established a2–3x gain. Next test
+bounded input prefetch, since the current pool puts new input below all
+ready compute work and may restrict sustained lookahead. Do not claim that
+source-level scheduling observation is a measured physical bandwidth cause.
+
+Iteration23 paired full57.8M public-text LM validation is complete:
+three2000-step seeds per backend, dynamic training routing, frozen libraries,
+matched canonical initial hashes, full111539-target held-out evaluations,
+all training/evaluation audits clean. Native G8 loss mean1.5901788364
+(SD.0042897528), producer G8 fusion1.5869032975(SD.0011653200), relative
+mean difference-.205986%. This verifies small-model training behavior;
+it is not Qwen2.4T convergence or statistical noninferiority.
+
+Artifacts: outputs/qwen38/iter24-g8-pool-{proxy,controls}.json,
+ep32-g8-pool-c4096-reference.json, public-text-lm-g8-iter23-paired.json.
+Internal G8 task traces are separate diagnostics, not production timings.

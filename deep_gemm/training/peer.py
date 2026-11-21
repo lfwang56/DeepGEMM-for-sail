@@ -39,11 +39,11 @@ class PeerMoEPlan(NativeMoEPlan):
         if not isinstance(fuse_fc1_activation, bool):
             raise TypeError("fuse_fc1_activation must be bool")
         g8 = kwargs.get("gate_up_layout", "split") == "g8"
-        if g8 and (self.transport != "peer" or ffn_fusion or dag_fusion or dispatch_pipeline
+        if g8 and (self.transport != "peer" or ffn_fusion or (dag_fusion and not (dag_shared_pool and fuse_fc1_activation)) or dispatch_pipeline
                    or return_pipeline or inline_dispatch):
-            raise ValueError("G8 currently supports direct/producer peer paths without resident/FFN/DAG modes")
+            raise ValueError("G8 supports direct/producer peer paths or the shared task pool with FC1 activation fusion")
         if fuse_fc1_activation and (not g8 or not expert_local_grad or not fuse_dispatch or not fuse_return
-                                   or dispatch_cache_n or ffn_fusion or dag_fusion):
+                                   or dispatch_cache_n or ffn_fusion):
             raise ValueError("FC1 activation fusion requires G8, bilateral fusion and expert-local gradients")
         self.fuse_fc1_activation = fuse_fc1_activation
         if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool)):
@@ -527,7 +527,8 @@ class PeerMoEPlan(NativeMoEPlan):
              self.source_rows, self.permutation, self.work_info, self.num_blocks],
             controls, self.chunk_tokens, self.chunk_tokens * self.k, self.block_m,
             self.dag_config, self.dag_input_ctas, self.dag_return_ctas, return_output,
-            self.dag_serialize, self.dag_trace, compile_only, self.dag_shared_pool)
+            self.dag_serialize, self.dag_trace, compile_only, self.dag_shared_pool,
+            self.fuse_fc1_activation)
 
     def _ffn(self, first_weight, second_weight, backward=False, compile_only=False):
         return dg._C._moe_training_peer_ffn(

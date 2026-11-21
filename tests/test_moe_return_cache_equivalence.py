@@ -16,8 +16,11 @@ parser.add_argument('--return-vector-ablation', action='store_true')
 parser.add_argument('--dag-ablation', action='store_true')
 parser.add_argument('--dag-serialization-ablation', action='store_true')
 parser.add_argument('--dag-shared-pool', action='store_true')
+parser.add_argument('--dag-g8', action='store_true')
 parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
+if args.dag_g8 and not (args.dag_shared_pool and (args.dag_ablation or args.dag_serialization_ablation)):
+    parser.error('G8 DAG comparison requires shared-pool DAG ablation')
 if args.ffn_fusion_ablation and args.expert_local_grad_ablation:
     parser.error('choose one ablation')
 torch.cuda.set_device(0)
@@ -28,7 +31,7 @@ x = (torch.randn(t, h, device='cuda') * .1).bfloat16()
 dy = (torch.randn_like(x) * .1).bfloat16()
 w1 = (torch.randn(e, 2*i, h, device='cuda') * .02).bfloat16()
 w2 = (torch.randn(e, h, i, device='cuda') * .02).bfloat16()
-if args.fc1_activation_ablation:
+if args.fc1_activation_ablation or args.dag_g8:
     w1 = to_g8_weight(w1)
 ids = torch.randn(t, e, device='cuda').topk(k, -1).indices.contiguous()
 original_ids = ids.clone()
@@ -71,6 +74,8 @@ with torch.cuda.stream(stream):
                            producer_input_aiu=True, producer_local_aiu=True,
                            ring_rows=1024, block_m=256, gate_up_layout='g8',
                            fuse_fc1_activation=cache)
+        if args.dag_g8:
+            options.update(gate_up_layout='g8', fuse_fc1_activation=True)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)

@@ -29,12 +29,13 @@ __device__ __forceinline__ bool dag_wait(
 }
 
 template <uint32_t N, uint32_t K, uint32_t E, uint32_t BM, uint32_t BN,
-          uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages>
+          uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
+          bool Fc1Activation = false, bool KeepGateUp = true>
 __device__ __forceinline__ void dag_gemm(const PeerGemmParams& p, uint32_t m, uint32_t n) {
     training_bf16_peer_gemm_impl<cutlass::bfloat16_t, GemmType::MGroupedFused,
         N, K, E, BM, BN, BK, WM, WN, Threads, Stages, false, false,
         false, false, 0, false, false, 0, 0, true, false,
-        false, false, false, true>(p, {}, m, n);
+        false, false, false, true, 4, Fc1Activation, Fc1Activation, KeepGateUp>(p, {}, m, n);
 }
 
 // One CTA records all time samples using its own clock. The samples describe
@@ -280,7 +281,7 @@ __device__ __forceinline__ bool dag_claim_queue(
 // Workers never claim FC1 work whose input still needs an unscheduled producer.
 template <uint32_t H, uint32_t I, uint32_t E, uint32_t BM, uint32_t BN,
           uint32_t BK, uint32_t WM, uint32_t WN, uint32_t Threads, uint32_t Stages,
-          bool Return, bool Trace>
+          bool Return, bool Trace, bool Fc1Activation = false>
 __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams p) {
     static_assert(H % BN == 0 && I % BN == 0);
     __shared__ uint32_t entry_status;
@@ -359,37 +360,50 @@ __device__ __forceinline__ void peer_ffn_shared_pool_impl(const PeerFfnDagParams
             const uint32_t item = tix::ld_acq(fc1_queue + task) - 1;
             const uint32_t tile = item / n1, column = item % n1, pair = column % pairs;
             dag_activity<Trace>(p.state, ActiveFC1, true);
-            dag_gemm<2*I, H, E, BM, BN, BK, WM, WN, Threads, Stages>(p.ffn.first, tile, column);
+            dag_gemm<2*I, H, E, BM, BN, BK, WM, WN, Threads, Stages,
+                     Fc1Activation, !Return>(p.ffn.first, tile, column);
             __threadfence();
             __syncthreads();
             dag_activity<Trace>(p.state, ActiveFC1, false);
-            if (threadIdx.x == 0) last_pair = atomicAdd(p.pair_done + tile * pairs + pair, 1u) == 1;
-            __syncthreads();
-            if (last_pair) {
-                if (!dag_wait(p, p.pair_done + tile * pairs + pair, 2u)) break;
-                dag_activity<Trace>(p.state, ActiveActivation, true);
-                const uint4 record = __ldg(records + tile);
-                const uint32_t base = record.w + (tile - record.z) * BM;
-                const uint32_t valid = min(BM, record.y - (tile - record.z) * BM);
-                const auto* gate = reinterpret_cast<const volatile uint16_t*>(p.ffn.first.gemm.c_ptr);
-                auto* hidden = reinterpret_cast<__ppu_bfloat16*>(const_cast<void*>(p.ffn.second.gemm.a_ptr));
-                for (uint32_t index = threadIdx.x; index < valid * BN; index += Threads) {
-                    const uint32_t row = index / BN, col = pair * BN + index % BN;
-                    const uint64_t offset = uint64_t(base + row) * 2 * I + col;
-                    union Scalar {uint16_t bits; __ppu_bfloat16 value;};
-                    const Scalar g{gate[offset]}, u{gate[offset + I]};
-                    const float gf = __bfloat162float(g.value), uf = __bfloat162float(u.value);
-                    const float sigmoid = 1.f / (1.f + expf(-gf));
-                    hidden[uint64_t(base + row) * I + col] = __float2bfloat16((gf * sigmoid) * uf);
-                }
-                __threadfence();
-                __syncthreads();
-                dag_activity<Trace>(p.state, ActiveActivation, false);
-                if (threadIdx.x == 0 && atomicAdd(p.activated_pairs + tile, 1u) == pairs - 1) {
+            if constexpr (Fc1Activation) {
+                // Every G8 FC1 tile already writes its compact hidden slice.
+                // Publish FC2 only after all slices are visible. Replay keeps
+                // BF16 gate/up as well, for the later activation gradient.
+                if (threadIdx.x == 0 && atomicAdd(p.activated_pairs + tile, 1u) == n1 - 1) {
                     const uint32_t slot = atomicAdd(p.state + TailFC2, n2);
                     for (uint32_t n = 0; n < n2; ++n)
                         tix::red_add_rel(p.queue + slot + n, tile * n2 + n + 1);
                     tix::red_add_rel(p.state + DoneActivation, 1u);
+                }
+            } else {
+                if (threadIdx.x == 0) last_pair = atomicAdd(p.pair_done + tile * pairs + pair, 1u) == 1;
+                __syncthreads();
+                if (last_pair) {
+                    if (!dag_wait(p, p.pair_done + tile * pairs + pair, 2u)) break;
+                    dag_activity<Trace>(p.state, ActiveActivation, true);
+                    const uint4 record = __ldg(records + tile);
+                    const uint32_t base = record.w + (tile - record.z) * BM;
+                    const uint32_t valid = min(BM, record.y - (tile - record.z) * BM);
+                    const auto* gate = reinterpret_cast<const volatile uint16_t*>(p.ffn.first.gemm.c_ptr);
+                    auto* hidden = reinterpret_cast<__ppu_bfloat16*>(const_cast<void*>(p.ffn.second.gemm.a_ptr));
+                    for (uint32_t index = threadIdx.x; index < valid * BN; index += Threads) {
+                        const uint32_t row = index / BN, col = pair * BN + index % BN;
+                        const uint64_t offset = uint64_t(base + row) * 2 * I + col;
+                        union Scalar {uint16_t bits; __ppu_bfloat16 value;};
+                        const Scalar g{gate[offset]}, u{gate[offset + I]};
+                        const float gf = __bfloat162float(g.value), uf = __bfloat162float(u.value);
+                        const float sigmoid = 1.f / (1.f + expf(-gf));
+                        hidden[uint64_t(base + row) * I + col] = __float2bfloat16((gf * sigmoid) * uf);
+                    }
+                    __threadfence();
+                    __syncthreads();
+                    dag_activity<Trace>(p.state, ActiveActivation, false);
+                    if (threadIdx.x == 0 && atomicAdd(p.activated_pairs + tile, 1u) == pairs - 1) {
+                        const uint32_t slot = atomicAdd(p.state + TailFC2, n2);
+                        for (uint32_t n = 0; n < n2; ++n)
+                            tix::red_add_rel(p.queue + slot + n, tile * n2 + n + 1);
+                        tix::red_add_rel(p.state + DoneActivation, 1u);
+                    }
                 }
             }
         } else if (kind == 3) {

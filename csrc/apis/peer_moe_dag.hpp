@@ -8,25 +8,26 @@ class PeerDagRuntime final : public LaunchRuntime<PeerDagRuntime> {
 public:
     struct Args {
         int h, i, e, bm, bn, bk, wm, wn, stages, threads;
-        bool return_output, trace, shared_pool;
+        bool return_output, trace, shared_pool, fc1_activation;
         LaunchArgs launch_args;
         PeerFfnDagParams params;
     };
     static std::string name(const Args& a) {
-        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}",
+        return fmt::format("bf16_peer_dag_h{}_i{}_e{}_bm{}_bn{}_bk{}_wm{}_wn{}_s{}_r{}_t{}{}{}",
             a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn, a.stages, a.return_output, a.trace,
-            a.shared_pool ? "_shared_pool" : "");
+            a.shared_pool ? "_shared_pool" : "", a.fc1_activation ? "_g8_swiglu" : "");
     }
     static std::string generate_impl(const Args& a) {
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_dag.cuh>
 extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerFfnDagParams params) {{
-    deep_gemm::training::{}<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>(params);
+    deep_gemm::training::{}<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}{}>(params);
 }}
 )", a.threads, name(a), a.shared_pool ? "peer_ffn_shared_pool_impl" : "peer_ffn_dag_impl",
        a.h, a.i, a.e, a.bm, a.bn, a.bk, a.wm, a.wn,
-       a.threads, a.stages, a.return_output ? "true" : "false", a.trace ? "true" : "false");
+       a.threads, a.stages, a.return_output ? "true" : "false", a.trace ? "true" : "false",
+       a.shared_pool ? (a.fc1_activation ? ", true" : ", false") : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -38,7 +39,9 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
                         int source_rows_per_rank, int destination_rows_per_rank,
                         int block_m, const std::vector<int>& config,
                         int input_ctas, int return_ctas, bool return_output,
-                        bool serialize, bool trace, bool compile_only, bool shared_pool = false) {
+                        bool serialize, bool trace, bool compile_only, bool shared_pool = false,
+                        bool fc1_activation = false) {
+    DG_HOST_ASSERT(!fc1_activation || shared_pool);
     DG_HOST_ASSERT(tensors.size() == 12 && controls.size() == 9 && tensors[0].is_cuda());
     const auto device = tensors[0].device();
     const c10::cuda::CUDAGuard guard(device);
@@ -98,6 +101,7 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     first.gemm.sorted_token_ids = tensors[8].data_ptr<int32_t>();
     first.gemm.aligned_num_m_blocks = tensors[11].data_ptr<int32_t>();
     first.gemm.shape_m = m;
+    if (fc1_activation) first.activation_gate_up = hidden.data_ptr();
     first.source_peers = reinterpret_cast<const uint64_t*>(tensors[6].data_ptr<int64_t>());
     first.destination_peers = reinterpret_cast<const uint64_t*>(tensors[7].data_ptr<int64_t>());
     first.permutation = tensors[9].data_ptr<int32_t>();
@@ -121,7 +125,7 @@ static int peer_ffn_dag(const std::vector<torch::Tensor>& tensors,
     p.input_ctas = input_ctas;
     p.return_ctas = return_output ? return_ctas : 0;
     p.serialize = serialize;
-    PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,shared_pool,
+    PeerDagRuntime::Args a{h,i,e,block_m,bn,bk,wm,wn,stages,threads,return_output,trace,shared_pool,fc1_activation,
         {get_grid_shape(get_num_sms()),dim3(threads),smem},p};
     const auto runtime = compiler->build(PeerDagRuntime::name(a), PeerDagRuntime::generate(a));
     int occupancy = 0;
@@ -142,7 +146,8 @@ static void register_peer_dag_apis(pybind11::module_& m) {
         py::arg("source_rows_per_rank"), py::arg("destination_rows_per_rank"),
         py::arg("block_m"), py::arg("config"), py::arg("input_ctas"), py::arg("return_ctas"),
         py::arg("return_output"), py::arg("serialize") = false, py::arg("trace") = false,
-        py::arg("compile_only") = false, py::arg("shared_pool") = false);
+        py::arg("compile_only") = false, py::arg("shared_pool") = false,
+        py::arg("fc1_activation") = false);
 }
 
 }  // namespace deep_gemm::training
