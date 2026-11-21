@@ -687,3 +687,91 @@ The future staged-return source is present but disabled in these controls. Its i
 ]
 ```
 - Best signal44.252700806ms; relative reduction0.8869%. Keep the controls explicit; do not extrapolate this delta to cross-hostEP32.
+
+### Iteration8 actualQwen EP32 validation
+
+- All3cases use exactly the same SN2.225/.226/.227/.223, with paired actual installed DeepEP Buffer38CU. Every32rankparent0, everyownershipgateclean. Actual512routedexperts,H8192/I2048/E16/K10,T1024,C512,BF16,FP32DW,256/64/64/64/S2,5x20graphs, sharedexpert/optimizerexcluded.
+- Only flags shown below differ; all producer1+packedDYreuse. NativeSDK2.10-built extension in wlfTorch2.11, hash6cf1dd... preserved. DeepEPauto19QP setup verified; within-domain RDMA rank count1.
+
+```json
+[
+  {
+    "run": "qwen38-wlf-ep32-iter8-control-attempt0",
+    "aiu": false,
+    "activation": false,
+    "peer_ms": 44.829550170898436,
+    "deepep_ms": 47.029782104492185,
+    "samples": [
+      44.79281921386719,
+      44.845150756835935,
+      44.819766235351565,
+      44.829550170898436,
+      44.84882507324219
+    ],
+    "reduction_vs_deepep_percent": 4.678380028861728,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.631126676533313e-07,
+      "dw2": 2.7146441539116495e-07,
+      "dscores": 1.4615960708397324e-07
+    },
+    "rdma_ranks": 1,
+    "rdma_qps": 19,
+    "reduction_vs_peer_control_percent": 0.0
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter8-local-aiu",
+    "aiu": true,
+    "activation": false,
+    "peer_ms": 44.690188598632815,
+    "deepep_ms": 47.073370361328124,
+    "samples": [
+      44.59389953613281,
+      44.70243530273437,
+      44.7089111328125,
+      44.67789001464844,
+      44.690188598632815
+    ],
+    "reduction_vs_deepep_percent": 5.062696264156063,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.5237204681616277e-07,
+      "dw2": 2.659586471054354e-07,
+      "dscores": 1.4615960708397324e-07
+    },
+    "rdma_ranks": 1,
+    "rdma_qps": 19,
+    "reduction_vs_peer_control_percent": 0.31086988768423973
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter8-local-aiu-activation",
+    "aiu": true,
+    "activation": true,
+    "peer_ms": 44.45949096679688,
+    "deepep_ms": 47.10954284667969,
+    "samples": [
+      44.414852905273435,
+      44.493002319335936,
+      44.45949096679688,
+      44.4608642578125,
+      44.457540893554686
+    ],
+    "reduction_vs_deepep_percent": 5.625297380846028,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.6259294827468693e-07,
+      "dw2": 2.660789846231637e-07,
+      "dscores": 1.4615960708397324e-07
+    },
+    "rdma_ranks": 1,
+    "rdma_qps": 19,
+    "reduction_vs_peer_control_percent": 0.8254805205290316
+  }
+]
+```
+- BestactualEP3244.459490967ms vs pairedDeepEP47.109542847ms (5.6253%less time); only0.8255% versus producercontrol. No>=3%material new win. Preserve options for final combinations and pursue producerinputstaging.
+- Strongest combined option passed EP2 independent math reference and128dynamic-route graph replays, allparents/gateclean220. Both AIU configurations already passed every-element Qwen512-token reference.
+- ActualQwen cross-domainEP64 **PASSED** after38CU/19QP correction: phaseqwen38-wlf-cross-ep64-large-reference-r3-attempt0, all64ranks*3patterns=192fullreference records and all8hostgatesclean. H8192,I2048,E8/rank=512global,K10,T19,C256, graphreplay with masks,emptyrank0,zero-score,duplicates,reverseexpertIDs. GlobalmaxRMSY.004171,DX.004491,DW1.003385,DW2.003414,dScore.006988. Token/gradientpayloadSailSHMEM8RDMAranks; CPU Gloo onlymetadata/reference sums. Artifactoutputs/qwen38/cross-ep64-reference.json. This is routed-layer correctness, not fullQwen2.4Ttraining or performance.
