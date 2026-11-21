@@ -3,9 +3,18 @@
 `deep_gemm.training.native_moe` provides first-order autograd for routed SwiGLU
 experts with BF16 inputs, BF16 or FP32 master weights, FP32 routing scores and
 FP32 weight-gradient accumulation. It uses native PPU Tensor Cell GEMMs and a
-reusable activation ring. Validation uses native PyTorch 2.10 and SAIL SDK 2.2.0
-on M890 (PPU0015). CUDA-compatible API names do not imply NVIDIA instruction
-support.
+reusable activation ring. Validation uses native PyTorch 2.10 and the
+CUDA-compatible PPU PyTorch 2.11 container with SAIL SDK 2.2.0 on M890
+(PPU0015). CUDA-compatible API names do not imply NVIDIA instruction support.
+
+The host extension builds against each container's installed Torch. The build
+loads the native SDK half/BF16 types before Torch's CUDA compatibility headers,
+and the acBLASLt wrapper converts Torch dtypes explicitly to native SDK enums.
+It owns a native acBLASLt handle by default. The optional
+`DG_USE_PYTORCH_ACBLASLT_HANDLE=1` mode requires a compatible native handle type;
+the CUDA-compatible Torch 2.11 wrapper handle is rejected instead of being cast
+to an unrelated opaque pointer. Both versions pass native BLAS dtype/layout
+checks; native BF16/FP8 training and graph checks cover the build boundary.
 
 ## Backends and topology
 

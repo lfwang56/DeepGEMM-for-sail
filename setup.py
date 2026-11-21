@@ -171,7 +171,9 @@ def get_package_version(ppu_sdk_version):
 
 
 if __name__ == '__main__':
-    extra_cxx_args = ["-O3", "-std=c++17", "-DUSE_HGGC"]
+    extra_cxx_args = ["-O3", "-std=c++17", "-DUSE_HGGC",
+                      "-include", current_dir + "/csrc/utils/torch_ppu_host_compat.hpp"]
+    build_include_dirs.append(os.path.join(ppu_sdk, "CUDA_SDK", "targets", "x86_64-linux", "include"))
     extra_hgcc_args = ["-O3", "-std=c++17", "--use_fast_math", "-DUSE_HGGC"]
 
     ppu_sdk_version = get_ppu_sdk_version()
