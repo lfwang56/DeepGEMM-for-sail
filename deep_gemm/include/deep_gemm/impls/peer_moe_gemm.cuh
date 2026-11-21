@@ -37,6 +37,7 @@ __device__ __forceinline__ void return_pipeline_consumer(
     const auto* output = reinterpret_cast<const uint4*>(params.gemm.c_ptr);
     uint64_t wait_cycles = 0, returned = 0;
     __shared__ int failed;
+    __shared__ uint64_t destination_addresses[BM];
     for (uint32_t task = blockIdx.x; task < blocks * ntiles; task += control.communication_ctas) {
         const uint32_t tile = task / ntiles, column_base = (task % ntiles) * BN;
         const uint4 record = __ldg(reinterpret_cast<const uint4*>(params.gemm.expert_ids_and_cumsum) + tile);
@@ -57,16 +58,31 @@ __device__ __forceinline__ void return_pipeline_consumer(
         }
         __syncthreads();
         if (failed) break;
+        // Resolve ownership once per row. Repeating the permutation load,
+        // peer-table dependency and division for every BF16x8 vector stalls
+        // the payload loop, especially when only a few communication CTAs
+        // share the device with GEMM consumers.
+        for (uint32_t row = threadIdx.x; row < valid; row += Threads) {
+            const int route = __ldg(params.permutation + base + row);
+            uint64_t address = 0;
+            if (route >= 0) {
+                const uint32_t owner = uint32_t(route) / params.destination_rows_per_rank;
+                if (owner < params.num_ranks) {
+                    const uint64_t local_row = uint32_t(route) % params.destination_rows_per_rank;
+                    address = __ldg(params.destination_peers + owner)
+                              + (local_row * N + column_base) * sizeof(cutlass::bfloat16_t);
+                }
+            }
+            destination_addresses[row] = address;
+        }
+        __syncthreads();
         for (uint32_t item = threadIdx.x; item < valid * (BN / 8); item += Threads) {
             const uint32_t row = item / (BN / 8), column = column_base + (item % (BN / 8)) * 8;
             if (column >= N) continue;
-            const int route = __ldg(params.permutation + base + row);
-            if (route < 0) continue;
-            const uint32_t owner = uint32_t(route) / params.destination_rows_per_rank;
-            if (owner >= params.num_ranks) continue;
-            auto* destination = reinterpret_cast<uint4*>(__ldg(params.destination_peers + owner));
-            const uint64_t local_row = uint32_t(route) % params.destination_rows_per_rank;
-            destination[local_row * (N / 8) + column / 8] = output[uint64_t(base + row) * (N / 8) + column / 8];
+            const uint64_t address = destination_addresses[row];
+            if (address)
+                reinterpret_cast<uint4*>(address)[item % (BN / 8)] =
+                    output[uint64_t(base + row) * (N / 8) + column / 8];
         }
         // Prevent the next tile's failure flag update racing another warp's
         // read, and complete this CTA's stores before its kernel can return.
@@ -87,21 +103,28 @@ __device__ __forceinline__ void dispatch_pipeline_producer(
     const uint64_t begin = clock64();
     const uint32_t blocks = __ldg(params.gemm.aligned_num_m_blocks);
     uint64_t produced = 0;
+    __shared__ uint64_t source_addresses[BM];
     auto* packed = reinterpret_cast<uint4*>(const_cast<void*>(params.gemm.a_ptr));
     for (uint32_t tile = blockIdx.x; tile < blocks; tile += control.communication_ctas) {
         const auto* records = reinterpret_cast<const uint4*>(params.gemm.expert_ids_and_cumsum);
         const uint4 record = __ldg(records + tile);
         const uint32_t base = record.w + (tile - record.z) * BM;
-        for (uint32_t element = threadIdx.x; element < BM * (K / 8); element += Threads) {
-            const uint32_t row = element / (K / 8), column = element % (K / 8);
+        for (uint32_t row = threadIdx.x; row < BM; row += Threads) {
             const uint32_t source_row = __ldg(params.gemm.sorted_token_ids + base + row);
-            uint4 value{};
+            uint64_t address = 0;
             if (source_row < uint64_t(params.num_ranks) * params.source_rows_per_rank) {
                 const uint32_t rank = source_row / params.source_rows_per_rank;
                 const uint32_t local_row = source_row % params.source_rows_per_rank;
-                const auto* source = reinterpret_cast<const uint4*>(__ldg(params.source_peers + rank));
-                value = source[uint64_t(local_row) * (K / 8) + column];
+                address = __ldg(params.source_peers + rank)
+                          + uint64_t(local_row) * K * sizeof(cutlass::bfloat16_t);
             }
+            source_addresses[row] = address;
+        }
+        __syncthreads();
+        for (uint32_t element = threadIdx.x; element < BM * (K / 8); element += Threads) {
+            const uint32_t row = element / (K / 8), column = element % (K / 8);
+            const uint64_t address = source_addresses[row];
+            const uint4 value = address ? reinterpret_cast<const uint4*>(address)[column] : uint4{};
             packed[uint64_t(base) * (K / 8) + element] = value;
         }
         // Every producer thread publishes its stores before thread0 releases

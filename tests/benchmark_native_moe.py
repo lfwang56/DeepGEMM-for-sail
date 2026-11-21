@@ -60,6 +60,8 @@ def main():
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--eager", action="store_true")
     parser.add_argument("--profile", action="store_true", help="Profiler API brackets only timed iterations")
+    parser.add_argument("--scope", choices=("step", "forward", "backward"), default="step",
+                        help="Backward retains full replay and FP32 gradient zero/accumulation")
     parser.add_argument("--topology", default="unspecified")
     parser.add_argument("--gemm-config", type=int, nargs=5, metavar=("BN", "BK", "WM", "WN", "STAGES"))
     parser.add_argument("--collective-gemm-config", type=int, nargs=5,
@@ -235,6 +237,16 @@ def main():
                 dx, dw1, dw2, ds = plan.backward(dy, x, ids, scores, w1, w2, valid, accumulators)
                 return output, dx, dw1, dw2, ds
 
+            def timed_step():
+                if args.scope == "step":
+                    return step()
+                plan.reset_errors()
+                if args.scope == "forward":
+                    return (plan.forward(x, ids, scores, w1, w2, valid),)
+                for gradient in accumulators:
+                    gradient.zero_()
+                return plan.backward(dy, x, ids, scores, w1, w2, valid, accumulators)
+
             for _ in range(args.warmup):
                 results = step()
             torch.cuda.synchronize(device)
@@ -250,7 +262,7 @@ def main():
             if not args.eager:
                 graph = torch.cuda.CUDAGraph()
                 with torch.cuda.graph(graph, stream=stream):
-                    results = step()
+                    results = timed_step()
                 for _ in range(args.warmup): graph.replay()
                 torch.cuda.synchronize(device)
                 plan.check()
@@ -263,7 +275,7 @@ def main():
                 wall_begin = time.perf_counter()
                 begin.record(stream)
                 for _ in range(args.iterations):
-                    if graph is None: results = step()
+                    if graph is None: results = timed_step()
                     else: graph.replay()
                 end.record(stream)
                 end.synchronize()
@@ -277,6 +289,11 @@ def main():
                 elapsed_wall.append(wall_ms)
             if args.profile: torch.cuda.profiler.stop()
             plan.check()
+            timed_indices = range(5) if args.scope == "step" else (0,) if args.scope == "forward" else range(1, 5)
+            timed_errors = [relative_rms(a, reference_samples[index])
+                            for a, index in zip(sample_outputs(results), timed_indices)]
+            if not all(value < 0.05 for value in timed_errors):
+                raise AssertionError((backend, args.scope, timed_errors))
             metrics_device = "cpu" if args.process_group_backend == "gloo" else device
             peak = torch.tensor(torch.cuda.max_memory_allocated(device), device=metrics_device, dtype=torch.int64)
             if group is not None: dist.all_reduce(peak, op=dist.ReduceOp.MAX, group=group)
@@ -345,7 +362,12 @@ def main():
                     "max_rank_torch_allocated_bytes": int(peak),
                     "rank0_initial_torch_allocated_bytes": initial_memory,
                     "sample_relative_rms_vs_first_backend": sample_errors,
-                    "scope": "forward + full backward replay + FP32 wgrad zero/accumulation; no optimizer",
+                    "timed_sample_relative_rms_vs_first_backend": timed_errors,
+                    "timing_scope": args.scope,
+                    "scope": ("forward; no backward, optimizer or shared expert" if args.scope == "forward"
+                              else "full backward replay + FP32 wgrad zero/accumulation; no optimizer or shared expert"
+                              if args.scope == "backward" else
+                              "forward + full backward replay + FP32 wgrad zero/accumulation; no optimizer"),
                     "memory_scope": "logical workspace and PyTorch allocator; excludes driver/VMM reservations",
                 }), flush=True)
             # Release graph references before releasing PCCL/symmetric storage.

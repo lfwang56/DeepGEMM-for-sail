@@ -1473,3 +1473,206 @@ and restored, exclusive node80 audit clean. Report:
 ROOT/build/campaign/qwen38-dw1-profile.acurep; local textwork/qwen38-dw1-acu-details.txt.
 
 Full timing/audit evidence: outputs/qwen38/iter12-resident-overlap-controls.json.
+
+
+## Iteration13 — cache communication row addresses (negative overall)
+
+Precompute128 source/destination byte addresses in shared memory once per
+M input tile or M/N return tile. Payload BF16x8 loops now avoid repeated route
+loads, dependent peer-table loads and divisions for every16bytes. All payloads,
+BF16 rounding, gradient arithmetic, barriers, timeouts and flags are preserved.
+Static shared memory increases by1024bytes; actual occupancy remains queried.
+Native extension76d59f1017d03141eba17af82cc6e1c60f57f6babdfd6e63472a169656a10a4d
+is unchanged; JIT source changes select fresh kernels.
+
+Added explicit benchmark --scope step/forward/backward, defaultstep unchanged.
+All five outputs first receive the existing complete-reference comparison;
+after timed graph replay the selected scope's outputs are compared again.
+Backward retains full replay and FP32 gradient zero/accumulation; it is not
+MoK's saved-context backward. No optimizer/shared expert is timed.
+
+H8192/I2048/E16local/K10/T4096/C768,BF16,BN256/BK64/WM64/WN64/S2,graph5x20,
+ZW-M890P/ppu0015,SDK2.2/nativeTorch2.10 extension in wlf_sgl_2.2/Torch2.11.
+EP8 is the local-shape proxy with128totalexperts; actualEP32 has512experts on
+225/226/227/223. All14phases completed all ranks and clean whole-node audits.
+
+Completed controls:
+[
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both4-attempt0",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 380.2087646484375
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both8",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 236.5939697265625
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both12",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 193.885791015625
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both16",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 175.43841552734375
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both8-serialized",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 291.29326171875
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both8-forward",
+    "backend": "deepep",
+    "timing_scope": "forward",
+    "ms": 32.95517272949219
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both8-forward",
+    "backend": "peer",
+    "timing_scope": "forward",
+    "ms": 77.57359619140625
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both8-backward",
+    "backend": "deepep",
+    "timing_scope": "backward",
+    "ms": 101.86609497070313
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-both8-backward",
+    "backend": "peer",
+    "timing_scope": "backward",
+    "ms": 158.7691162109375
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-producer-control",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 134.85760498046875
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter13-producer-control",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 137.8761962890625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-attempt0",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.603125
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-attempt0",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 275.1183837890625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both16",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.64869384765626
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both16",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 198.4080322265625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-serialized",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 330.8304443359375
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-forward",
+    "backend": "deepep",
+    "timing_scope": "forward",
+    "ms": 46.38267822265625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-forward",
+    "backend": "peer",
+    "timing_scope": "forward",
+    "ms": 95.48218994140625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-backward",
+    "backend": "deepep",
+    "timing_scope": "backward",
+    "ms": 118.12615966796875
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-both8-backward",
+    "backend": "peer",
+    "timing_scope": "backward",
+    "ms": 179.7521728515625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-producer-control",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.5527587890625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter13-producer-control",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 144.67276611328126
+  }
+]
+
+Verdict: cached addresses substantially improve the slow role-pipeline
+implementation, but it still loses to tuned DeepEP and the preceding producer
+recipe. Keep it opt-in. The FWD/BWD scope checks pass, so the regression is
+not hidden by combined-step reporting. Existing fastest validated producer
+recipe and stronger explicit-copy peer control remain available.
+
+Correctness: both scheduling modes passed independent H8192/I2048/E16/T768
+masked/duplicate-skew all-element Y/DX/DW1/DW2/dScore checks, maxRMS0.004081;
+EP2 each passed128dynamic-route graph replays, both ranks0 and clean gates.
+Unique full timing/audit/EP2 records are archived at
+outputs/qwen38/iter13-cached-address-controls.json. Earlier EP2 helper used
+fixed rank-log paths; its initial iteration12 parent/mode/gate receipts remain
+valid, and the helper now derives unique directories from each job tag.
+
+Stall reassessment: iterations11–13 did not improve the global best. Re-read
+measured kernel traces and DW1 Asight Compute evidence (37.64%compute,71%TSM
+load-group conflict ratio, one resident512-thread CTA using256KiB). Re-check
+primary PPU and MoK guidance before the next kernel candidate. The current
+role design reserves full GEMM registers/TSM for communication CTAs and writes
+intermediate output before copying it; pursue work-conserving input owners
+and direct cached return addresses to remove those costs. Test wgrad layouts
+and a ring over received routed rows to reduce repeated FP32DW traffic.
