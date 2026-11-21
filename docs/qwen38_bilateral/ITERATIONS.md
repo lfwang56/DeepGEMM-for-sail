@@ -813,3 +813,89 @@ The future staged-return source is present but disabled in these controls. Its i
 {"case": "distributed_master_port_unavailable", "node": "172.17.0.220", "port": 30621, "error": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\nOSError: [Errno 98] Address already in use\n"}
 
 ```
+
+### Cross-domainEP64 communication-CU sweep — clean retry
+
+- Actual512experts,H8192/I2048/E8,K10,T1024,C256,64GPUs acrossSN2fourhosts+SN0threehosts+SN1onehost. Same8hosts acrossall5cases:225/226/227/223/63/87/80/219. All64rankparents0andall8ownershipgatesclean in every case.213wasexcludedafterthepriorinterference.
+- Real installedDeepEPBuffer2.2,SailSHMEM8RDMA-ranks,CPU/Gloometadata, MNNVLdisabled. This is a host-group/RDMA fallback control, not an optimally sized supernode hierarchy. NativeBF16NoPadGEMMs,FP32DW,fullbackwardreplay,256/64/64/64/S2,5x20graphs,nooptimizer/sharedexpert. _Csha256be4414a11d87e88fab554ff03e151d4a1b978ad4c0eb166f25d869c75f229c8b.
+
+```json
+[
+  {
+    "run": "qwen38-wlf-cross-ep64-comm8-r1-attempt0",
+    "communication_cus": 8,
+    "rdma_qps": 12,
+    "rdma_ranks": 8,
+    "mnnvl_disabled": "1",
+    "ms": 125.01475830078125,
+    "samples": [
+      125.42451171875,
+      124.8778564453125,
+      125.02181396484374,
+      124.7277099609375,
+      125.01475830078125
+    ]
+  },
+  {
+    "run": "qwen38-wlf-cross-ep64-comm16-r1",
+    "communication_cus": 16,
+    "rdma_qps": 12,
+    "rdma_ranks": 8,
+    "mnnvl_disabled": "1",
+    "ms": 107.7940185546875,
+    "samples": [
+      107.84200439453124,
+      107.7910400390625,
+      107.509521484375,
+      107.84984130859375,
+      107.7940185546875
+    ]
+  },
+  {
+    "run": "qwen38-wlf-cross-ep64-comm24-r1",
+    "communication_cus": 24,
+    "rdma_qps": 12,
+    "rdma_ranks": 8,
+    "mnnvl_disabled": "1",
+    "ms": 95.46548461914062,
+    "samples": [
+      95.43392333984374,
+      95.46548461914062,
+      95.44957885742187,
+      95.52686767578125,
+      95.52781982421875
+    ]
+  },
+  {
+    "run": "qwen38-wlf-cross-ep64-comm32-r1",
+    "communication_cus": 32,
+    "rdma_qps": 16,
+    "rdma_ranks": 8,
+    "mnnvl_disabled": "1",
+    "ms": 90.10323486328124,
+    "samples": [
+      90.12725830078125,
+      90.27642822265625,
+      90.10323486328124,
+      90.07439575195312,
+      90.044580078125
+    ]
+  },
+  {
+    "run": "qwen38-wlf-cross-ep64-comm38-r1",
+    "communication_cus": 38,
+    "rdma_qps": 19,
+    "rdma_ranks": 8,
+    "mnnvl_disabled": "1",
+    "ms": 87.66292724609374,
+    "samples": [
+      87.60396728515624,
+      87.6944091796875,
+      87.66292724609374,
+      87.63072509765625,
+      87.76297607421876
+    ]
+  }
+]
+```
+- Bestobserved38CU/19QP: 87.662927246ms. Use this instead of the initial8CUcontrol for subsequent same-topology large-T comparisons. DomainEP32fusion cannot be directly extended across supernodes via peer pointers. Cross64largeshapecorrectness has already passed.
