@@ -1,5 +1,31 @@
 # Qwen3.8 bilateral MoE optimization iterations
 
+## Post-iteration-10 quality and capacity validation
+
+The strongest BF16 producer-input/consumer-AIU/activation-backward recipe and a
+fresh Native BF16 control each trained the complete 57.8M-parameter four-layer
+MoE language model for 2,000 steps on public TinyShakespeare, with unfrozen
+routing, using seeds 4827, 4891 and 6113. All six training runs and six full
+held-out evaluations completed with clean exclusive-node audits. Full validation
+mean cross-entropy: peer 1.590015169244, Native 1.590561401184 (-0.0343421%);
+sample standard deviations 0.0034741320 and 0.0062784261. This is a small-model
+convergence check, not evidence of a quality improvement or Qwen2.4T convergence.
+Evidence: outputs/qwen38/public-text-lm-best-paired.json in the campaign workspace.
+
+The near-int32-boundary EP32 C768 all-to-expert-zero capacity test passed all
+elements of Y, DX, DW1, DW2 and routing-score gradients for both DeepEP and peer
+on all 32 ranks. It explicitly checks nonzero derivatives at valid zero scores
+and exactly zero gradients for unused experts. Maximum relative RMS 0.00349705;
+all four host audits clean. Evidence: outputs/qwen38/ep32-c768-skew-capacity.json.
+The trainer/evaluator now persist and reconstruct activation-backward fusion.
+
+The latest user request raises the optimization target to MoK-like 2–3x and
+prioritizes measured communication/computation fractions and actual overlap.
+Iteration10's ~12% time reduction remains an intermediate result. Current
+producer/consumer launches have a full kernel boundary; they are not equivalent
+to MoK's persistent communication/compute role pipeline. Collect DeepEP,
+unfused-peer and fused-peer traces before the next architectural candidate.
+
 ## Objective and baseline
 
 Optimize bilateral dispatch/return fusion at the pinned Qwen3.8-2.4T-A95B

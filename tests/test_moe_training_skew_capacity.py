@@ -124,9 +124,10 @@ def main():
         else:
             errors.update(dw1=0., dw2=0.)
         active_rows = int(plan.current_rows)
+        zero_score_derivative_preserved = rank != 0 or float(ds[0, 0]) != 0
         expected_rows = ((size * c * k + plan.alignment - 1) // plan.alignment * plan.alignment
                          if rank == 0 else 0)
-        passed = (unused_zero and active_rows == expected_rows
+        passed = (unused_zero and zero_score_derivative_preserved and active_rows == expected_rows
                   and all(math.isfinite(error) and error < .04 for error in errors.values()))
         print(json.dumps(dict(case="skew_capacity_reference", rank=rank, ranks=size,
             backend=backend, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
@@ -134,6 +135,7 @@ def main():
             capacity_rows=plan.rows, alignment=plan.alignment, active_rows=active_rows,
             largest_active_element_offset=max(0, active_rows * h - 1),
             relative_rms=errors, unused_expert_gradients_exactly_zero=unused_zero,
+            zero_score_derivative_preserved=zero_score_derivative_preserved,
             every_element_compared=True, reference="independent FP32 expert with summed duplicate weights",
             passed=passed)), flush=True)
         result = torch.tensor(int(passed))

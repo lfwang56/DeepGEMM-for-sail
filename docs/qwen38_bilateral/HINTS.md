@@ -1,5 +1,13 @@
 # Qwen3.8 bilateral MoE optimization requirements
 
+Latest user steering: the measured ~12% reduction is insufficient. Target the
+2–3x range associated with MoK, measure communication and computation time
+separately, and quantify actual overlap and exposed synchronization. Prioritize
+real fine-grained communication/computation pipelining over isolated small
+fusion changes. Align precision, FWD/BWD scope, shared-expert inclusion and
+baseline before interpreting the target; do not manufacture a larger ratio by
+weakening DeepEP or changing the timed work.
+
 User steering on 2026-11-21 prioritizes the bilateral fusion path
 (`fuse_dispatch=True`, `fuse_return=True`) and the actual Qwen3.8-2.4T model
 dimensions. The hybrid path is a comparison, not the optimization objective.
