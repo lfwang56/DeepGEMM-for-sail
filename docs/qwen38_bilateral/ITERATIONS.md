@@ -64,3 +64,25 @@ Logs: qwen38-ep32-bilateral-iter1-cache4-attempt0/. Failed/interfered phases are
 
 This phase is not accepted for performance claims; inspect launcher/rank logs before the next iteration.
 
+### Iteration1 retry in the user container
+
+`wlf_sgl_2.2`, Torch2.11.0 runtime with installed DeepEP2.2.0. The existing
+native extension compiled against Torch2.10 imports here and passed3 GPU
+reference/updated-parameter graph methods before this run; an independent
+Torch2.11 rebuild is still being resolved. Do not claim that rebuild passed.
+
+Same Qwen EP32 dimensions and5x20graph protocol; .219/.220/.213/.215.
+All32 rank parents exited0 and all periodic availability gates exited0.
+Logs: qwen38-wlf-ep32-cache4-attempt0/. Routed experts only; shared expert excluded.
+
+| Backend | dispatch | return | cache N | Step ms |
+| --- | --- | --- | --- | ---: |
+| collective | null | null | 0 | 106.7633 |
+| peer | false | false | 0 | 41.8626 |
+| peer | false | true | 0 | 40.2097 |
+| peer | true | false | 4 | 58.9652 |
+| peer | true | true | 4 | 57.4816 |
+
+These are accepted same-runtime measurements. The noncached bilateral
+control and installed DeepEP baseline still need measurement in this environment.
+
