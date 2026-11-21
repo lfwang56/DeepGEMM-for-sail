@@ -36,6 +36,8 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
+    parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
+    parser.add_argument("--peer-fc1-config", type=int, nargs=5)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
     if (options.no_fuse_dispatch or options.no_fuse_return) and options.backend not in ("peer", "collective_fused"):
@@ -65,6 +67,9 @@ def main():
     if options.backend == "peer":
         extra.update(fuse_dispatch=not options.no_fuse_dispatch, fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
+        extra["dispatch_cache_ctas"] = options.dispatch_cache_ctas
+        if options.peer_fc1_config:
+            extra["gemm_configs"]["fc1"] = options.peer_fc1_config
     if options.backend == "collective_fused":
         extra.update(fuse_return=not options.no_fuse_return,
                      fuse_activation_backward=options.fuse_activation_backward)
@@ -110,6 +115,7 @@ def main():
                               compute=options.compute, hidden=h, intermediate=i, experts=e, topk=k,
                               dispatch_cache_aiu=options.dispatch_cache_aiu,
                               staged_return=options.staged_return,
+                              dispatch_cache_ctas=options.dispatch_cache_ctas,
                               tokens=t, valid_tokens=max(0, t - 3), pattern=pattern,
                               relative_rms=errors, every_element_compared=True,
                               fuse_dispatch=getattr(plan, "fuse_dispatch", None),

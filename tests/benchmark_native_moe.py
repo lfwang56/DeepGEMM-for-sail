@@ -85,10 +85,17 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
+    parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
+    for role in ("fc1", "fc2", "dhidden", "dx"):
+        parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
     parser.add_argument("--deepep-comm-sms", type=int, default=8)
     parser.add_argument("--deepep-scaleup", action="store_true",
                         help="Use DeepEP fabric intranode path across one verified supernode")
+    parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl",
+                        help="Gloo carries CPU metadata for DeepEP; payload remains in DeepEP")
     args = parser.parse_args()
+    if args.process_group_backend == "gloo" and args.backend != "deepep":
+        parser.error("Gloo metadata groups currently support only --backend deepep")
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
     if args.fp8_ablation and (args.backend != "collective" or args.compute != "fp8"):
@@ -107,7 +114,9 @@ def main():
     torch.cuda.set_device(device)
     torch.set_num_threads(2)
     if size > 1:
-        dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=600))
+        dist.init_process_group(args.process_group_backend,
+            device_id=device if args.process_group_backend == "nccl" else None,
+            timeout=timedelta(seconds=600))
     group = dist.group.WORLD if size > 1 else None
     torch.manual_seed(98231 + rank)
     h, i, e, k, t = args.hidden, args.intermediate, args.local_experts, args.topk, args.tokens
@@ -169,6 +178,11 @@ def main():
                                vectorized_copy=not args.scalar_peer_copy,
                                reuse_packed_dy=args.reuse_packed_dy)
                 options["staged_return"] = args.staged_return
+                options["dispatch_cache_ctas"] = args.dispatch_cache_ctas
+                for role in ("fc1", "fc2", "dhidden", "dx"):
+                    config = getattr(args, "peer_" + role + "_config")
+                    if config is not None:
+                        options.setdefault("gemm_configs", {})[role] = config
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend == "deepep":
                 options = {"comm_sms": args.deepep_comm_sms}
@@ -237,20 +251,23 @@ def main():
                 end.synchronize()
                 wall_ms = (time.perf_counter() - wall_begin) * 1000 / args.iterations
                 event_ms = begin.elapsed_time(end) / args.iterations
-                timings = torch.tensor([event_ms, wall_ms], device=device, dtype=torch.float64)
+                metrics_device = "cpu" if args.process_group_backend == "gloo" else device
+                timings = torch.tensor([event_ms, wall_ms], device=metrics_device, dtype=torch.float64)
                 if group is not None: dist.all_reduce(timings, op=dist.ReduceOp.MAX, group=group)
                 event_ms, wall_ms = timings.cpu().tolist()
                 elapsed_event.append(event_ms)
                 elapsed_wall.append(wall_ms)
             if args.profile: torch.cuda.profiler.stop()
             plan.check()
-            peak = torch.tensor(torch.cuda.max_memory_allocated(device), device=device, dtype=torch.int64)
+            metrics_device = "cpu" if args.process_group_backend == "gloo" else device
+            peak = torch.tensor(torch.cuda.max_memory_allocated(device), device=metrics_device, dtype=torch.int64)
             if group is not None: dist.all_reduce(peak, op=dist.ReduceOp.MAX, group=group)
             if rank == 0:
                 print(json.dumps({
                     "case": "bounded_training_benchmark", "backend": backend, "compute": args.compute,
                     "host": socket.gethostname(), "device": torch.cuda.get_device_name(device),
                     "torch": torch.__version__,
+                    "process_group_backend": args.process_group_backend,
                     "ep_size": size, "topology": args.topology, "graph": not args.eager,
                     "instrumented": args.profile,
                     "tokens_per_rank": t, "hidden": h, "intermediate": i, "local_experts": e,
@@ -271,6 +288,7 @@ def main():
                     "peer_fuse_activation_backward": getattr(plan, "fuse_activation_backward", None) if backend == "peer" else None,
                     "peer_vectorized_copy": getattr(plan, "vectorized_copy", None) if backend == "peer" else None,
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
+                    "peer_dispatch_cache_ctas": getattr(plan, "dispatch_cache_ctas", None) if backend == "peer" else None,
                     "peer_dispatch_cache_aiu": getattr(plan, "dispatch_cache_aiu", None) if backend == "peer" else None,
                     "peer_staged_return": getattr(plan, "staged_return", None) if backend == "peer" else None,
                     "peer_staged_return_row_padding": getattr(plan, "staged_return_row_padding", None) if backend == "peer" else None,

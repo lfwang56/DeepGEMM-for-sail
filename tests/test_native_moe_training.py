@@ -202,7 +202,8 @@ class NativeTests(unittest.TestCase):
             valid = torch.full((), 5, device="cuda", dtype=torch.int32)
             plan = PeerMoEPlan(512, 384, 3, 2, 7, chunk_tokens=3,
                                dispatch_cache_n=group_n, fuse_dispatch=True, fuse_return=True,
-                               reuse_packed_dy=group_n == 4, dispatch_cache_aiu=group_n == 8)
+                               reuse_packed_dy=group_n == 4, dispatch_cache_aiu=group_n == 8,
+                               dispatch_cache_ctas=1 if group_n == 2 else 4 if group_n in (4, 8) else 2)
             y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
             y.backward(dy)
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
@@ -347,11 +348,16 @@ class NativeTests(unittest.TestCase):
 def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=False, maximize=False,
               gemm_config=None, fuse_dispatch=True, fuse_return=True, fuse_activation_backward=False,
               collective_fused=False, fast_weight_transpose=False, dispatch_cache_n=0, reuse_packed_dy=False,
-              deepep=False, dispatch_cache_aiu=False, staged_return=False):
+              deepep=False, dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
+              group_backend="nccl"):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
-    dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=300))
+    print(json.dumps(dict(case="native_ep_stage", rank=rank, stage="process_group_start",
+                          process_group_backend=group_backend)), flush=True)
+    dist.init_process_group(group_backend, device_id=device if group_backend == "nccl" else None,
+                            timeout=timedelta(seconds=300))
+    print(json.dumps(dict(case="native_ep_stage", rank=rank, stage="process_group_ready")), flush=True)
     generator = torch.Generator().manual_seed(62831)
     global_w1 = (torch.randn(size * 2, 256, 256, generator=generator) * 0.1).bfloat16()
     global_w2 = (torch.randn(size * 2, 256, 128, generator=generator) * 0.1).bfloat16()
@@ -380,6 +386,7 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     plan_options["fast_weight_transpose"] = fast_weight_transpose
     if dispatch_cache_n:
         plan_options["dispatch_cache_n"] = dispatch_cache_n
+        plan_options["dispatch_cache_ctas"] = dispatch_cache_ctas
     if reuse_packed_dy:
         plan_options["reuse_packed_dy"] = True
     if dispatch_cache_aiu:
@@ -396,6 +403,7 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
         plan_options.update(fuse_return=fuse_return, fuse_activation_backward=fuse_activation_backward)
     plan = plan_class(256, 128, 2, 2, max(value.shape[0] for value in xs),
                         chunk_tokens=3, group=dist.group.WORLD, compute=compute, device=device, **plan_options)
+    print(json.dumps(dict(case="native_ep_stage", rank=rank, stage="plan_ready")), flush=True)
     valid = torch.tensor(x.shape[0], device=device, dtype=torch.int32)
     graph, stream = None, torch.cuda.Stream(device)
     stream.wait_stream(torch.cuda.current_stream())
@@ -423,6 +431,9 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
     errors = check((y, x.grad, w1.grad, w2.grad, scores.grad), target, compute)
     print(json.dumps({"case": "native_ep", "rank": rank, "ep_size": size, "graph": graph_mode,
                       "transport": plan.transport,
+                      "process_group_backend": group_backend,
+                      "deepep_backend": getattr(plan, "deep_ep_backend", None),
+                      "deepep_rdma_ranks": getattr(plan, "deep_ep_rdma_ranks", None),
                       "compute": compute, "relative_rms": errors}), flush=True)
     if stress:
         if graph is None:
@@ -484,7 +495,11 @@ if __name__ == "__main__":
     parser.add_argument("--deepep", action="store_true")
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
+    parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
+    parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     options, remaining = parser.parse_known_args()
+    if options.process_group_backend == "gloo" and not (options.ep and options.deepep):
+        parser.error("CPU metadata group is currently supported for --ep --deepep")
     if options.deepep and (not options.ep or options.peer or options.persistent or options.collective_fused or options.fp8):
         parser.error("--deepep requires BF16 --ep and is a separate backend")
     if options.dispatch_cache_aiu and (not options.peer or not options.ep or not options.dispatch_cache_n):
@@ -508,7 +523,7 @@ if __name__ == "__main__":
                   options.gemm_config, not options.no_fuse_dispatch, not options.no_fuse_return,
                   options.fuse_activation_backward, options.collective_fused, options.fast_weight_transpose,
                   options.dispatch_cache_n, options.reuse_packed_dy, options.deepep, options.dispatch_cache_aiu,
-                  options.staged_return)
+                  options.staged_return, options.dispatch_cache_ctas, options.process_group_backend)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer

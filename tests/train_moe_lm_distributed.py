@@ -161,10 +161,11 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   backend="native" if options.backend == "collective" else options.backend,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(dispatch_cache_n=options.dispatch_cache_n,
+                                    dispatch_cache_ctas=options.dispatch_cache_ctas,
                                     dispatch_cache_aiu=options.dispatch_cache_aiu,
                                     staged_return=options.staged_return,
                                     reuse_packed_dy=options.reuse_packed_dy,
-                                    gemm_config=options.gemm_config),
+                                    gemm_config=options.gemm_config, peer_fc1_config=options.peer_fc1_config),
                   initial_validation_loss=initial_loss, validation_loss=validation, ep_size=size)
     local_path = path.with_name(path.stem + f".rank{rank:03d}" + path.suffix)
     temporary = local_path.with_suffix(local_path.suffix + ".tmp")
@@ -209,10 +210,12 @@ def main():
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
+    parser.add_argument("--dispatch-cache-ctas", type=int, choices=(1, 2, 4), default=2)
+    parser.add_argument("--peer-fc1-config", type=int, nargs=5)
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config) and options.backend != "peer":
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2) and options.backend != "peer":
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
@@ -237,11 +240,14 @@ def main():
     plan_options = {}
     if options.backend == "peer":
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
+                            dispatch_cache_ctas=options.dispatch_cache_ctas,
                             dispatch_cache_aiu=options.dispatch_cache_aiu,
                             staged_return=options.staged_return,
                             reuse_packed_dy=options.reuse_packed_dy)
         if options.gemm_config:
             plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
+        if options.peer_fc1_config:
+            plan_options.setdefault("gemm_configs", {})["fc1"] = options.peer_fc1_config
     plan = classes[options.backend](config.hidden, config.intermediate, local_experts, config.topk,
                                     local_batch * config.sequence, chunk_tokens=config.chunk_tokens,
                                     compute=options.compute, group=dist.group.WORLD, device=device,

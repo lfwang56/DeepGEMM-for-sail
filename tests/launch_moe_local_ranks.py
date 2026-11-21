@@ -9,6 +9,7 @@ its process group.
 import argparse
 import json
 import os
+import resource
 from pathlib import Path
 import subprocess
 import sys
@@ -24,6 +25,9 @@ def main():
     parser.add_argument("--log-directory", required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     options = parser.parse_args()
+    # Preserve per-rank diagnostics without writing a process-sized core for
+    # every rank when a distributed runtime aborts after a timeout.
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     command = options.command[1:] if options.command[:1] == ["--"] else options.command
     if not command or not 0 <= options.node_rank < options.nodes or options.local_ranks < 1:
         parser.error("command, valid node rank and positive local rank count are required")

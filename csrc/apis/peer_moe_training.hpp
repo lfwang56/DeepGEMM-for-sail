@@ -157,6 +157,7 @@ public:
         bool dispatch_cache_aiu;
         bool staged_return;
         int block_n, block_k, warp_m, warp_n, stages, threads;
+        int dispatch_cache_ctas;
         LaunchArgs launch_args;
         PeerGemmParams params;
     };
@@ -168,6 +169,8 @@ public:
         if (args.dispatch_cache_n) name += fmt::format("_cache{}", args.dispatch_cache_n);
         if (args.dispatch_cache_aiu) name += "_aiu";
         if (args.staged_return) name += "_staged_return";
+        if (args.dispatch_cache_n && args.dispatch_cache_ctas != 2)
+            name += fmt::format("_ctas{}", args.dispatch_cache_ctas);
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -200,7 +203,7 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                       bool pack_input, const std::vector<int>& config,
                       const c10::optional<torch::Tensor>& activation_gate_up,
                       int dispatch_cache_n, const c10::optional<torch::Tensor>& dispatch_scratch,
-                      bool dispatch_cache_aiu, bool staged_return) {
+                      bool dispatch_cache_aiu, bool staged_return, int dispatch_cache_ctas) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -245,12 +248,14 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
     if (!read_peer) dispatch_cache_n = 0;
     DG_HOST_ASSERT(!dispatch_cache_aiu || (read_peer && dispatch_cache_n));
     DG_HOST_ASSERT(!staged_return || write_peer);
+    DG_HOST_ASSERT(dispatch_cache_ctas == 1 || dispatch_cache_ctas == 2 || dispatch_cache_ctas == 4);
     if (dispatch_cache_n) {
         DG_HOST_ASSERT(dispatch_scratch.has_value());
         const auto& scratch = dispatch_scratch.value();
         DG_HOST_ASSERT(scratch.is_contiguous() && scratch.device() == a.device()
                        && scratch.scalar_type() == torch::kBFloat16 && scratch.dim() == 2);
-        DG_HOST_ASSERT(scratch.size(1) == k && scratch.size(0) >= get_num_sms() * 2 * 128);
+        DG_HOST_ASSERT(scratch.size(1) == k
+                       && scratch.size(0) >= get_num_sms() * dispatch_cache_ctas * 128);
         DG_HOST_ASSERT(scratch.numel() <= INT32_MAX);
         params.dispatch_scratch = scratch.data_ptr();
     }
@@ -281,13 +286,14 @@ static void peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const
                               dispatch_cache_aiu,
                               staged_return,
                               bn, bk, wm, wn, stages, threads,
+                              dispatch_cache_ctas,
                               {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
     const auto code = PeerGemmRuntime::generate(args);
     const auto runtime = compiler->build(PeerGemmRuntime::name(args), code);
     int occupancy = 0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
     DG_HOST_ASSERT(occupancy > 0);
-    args.launch_args.grid_dim.x *= dispatch_cache_n ? std::min(occupancy, 2) : occupancy;
+    args.launch_args.grid_dim.x *= dispatch_cache_n ? std::min(occupancy, dispatch_cache_ctas) : occupancy;
     if (get_env<int>("show_log")) {
         std::printf("[PeerTraining_BF16:]\n");
         std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
@@ -310,7 +316,7 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("pack_input") = false, py::arg("config") = std::vector<int>{},
           py::arg("activation_gate_up") = py::none(), py::arg("dispatch_cache_n") = 0,
           py::arg("dispatch_scratch") = py::none(), py::arg("dispatch_cache_aiu") = false,
-          py::arg("staged_return") = false);
+          py::arg("staged_return") = false, py::arg("dispatch_cache_ctas") = 2);
 }
 
 }  // namespace deep_gemm::training

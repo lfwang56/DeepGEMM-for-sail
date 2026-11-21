@@ -36,3 +36,9 @@ Reuse the established codex worktree and native distributed benchmark. Adapt the
 AKO loop to the PPU toolchain: Asight Systems first, then selected Asight Compute
 counters when useful. NVIDIA ncu is not a PPU profiler. The reference and input
 generator live in existing tests; kernel edits remain in their package paths.
+
+The user explicitly selected **wlf_sgl_2.2** in their latest container clarification.
+Use this existing container for primary DeepEP/peer comparisons; record its
+Torch2.11 runtime separately from the nativeTorch2.10 extension build. The
+installed DeepEP2.2.0 Buffer path is functional and must be tuned as a real
+baseline; the initial8-CU setting is superseded by the measured38-CU setting.

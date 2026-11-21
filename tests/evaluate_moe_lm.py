@@ -32,12 +32,14 @@ def evaluate_checkpoint(path, data_path):
     backend_options = dict(saved.get("backend_options", {}))
     if backend == "peer" and "backend_options" not in saved:
         training_options = saved.get("plan_options", {})
-        for key in ("dispatch_cache_n", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return"):
+        for key in ("dispatch_cache_n", "dispatch_cache_ctas", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return"):
             if key in training_options:
                 backend_options[key] = training_options[key]
         if training_options.get("gemm_config"):
             backend_options["gemm_configs"] = {
                 role: training_options["gemm_config"] for role in ("fc1", "fc2", "dhidden", "dx")}
+        if training_options.get("peer_fc1_config"):
+            backend_options.setdefault("gemm_configs", {})["fc1"] = training_options["peer_fc1_config"]
     plan = None if backend == "torch" else classes[backend](
         config.hidden, config.intermediate, config.experts, config.topk,
         config.batch * config.sequence, chunk_tokens=config.chunk_tokens,

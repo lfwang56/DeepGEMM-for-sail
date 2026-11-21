@@ -26,7 +26,7 @@ class PeerMoEPlan(NativeMoEPlan):
     def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
                  active_rows=True, fuse_local_grad=True, fuse_activation_backward=False,
                  vectorized_copy=True, dispatch_cache_n=0, reuse_packed_dy=False,
-                 dispatch_cache_aiu=False, staged_return=False, **kwargs):
+                 dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -46,6 +46,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if dispatch_cache_n and (not fuse_dispatch or self.transport != "peer"):
             raise ValueError("dispatch caching requires the peer fused-dispatch path")
         self.dispatch_cache_n = dispatch_cache_n
+        if type(dispatch_cache_ctas) is not int or dispatch_cache_ctas not in (1, 2, 4):
+            raise ValueError("dispatch_cache_ctas must be 1, 2 or 4")
+        self.dispatch_cache_ctas = dispatch_cache_ctas
         if not isinstance(dispatch_cache_aiu, bool):
             raise TypeError("dispatch_cache_aiu must be bool")
         if dispatch_cache_aiu and not dispatch_cache_n:
@@ -123,7 +126,8 @@ class PeerMoEPlan(NativeMoEPlan):
         self.dispatch_scratch = None
         if self.dispatch_cache_n:
             cus = torch.cuda.get_device_properties(self.device).multi_processor_count
-            self.dispatch_scratch = torch.empty((cus * 2 * 128, self.h), device=self.device, dtype=torch.bfloat16)
+            self.dispatch_scratch = torch.empty((cus * self.dispatch_cache_ctas * 128, self.h),
+                                                device=self.device, dtype=torch.bfloat16)
             self.buffers["dispatch_scratch"] = self.dispatch_scratch
         self.gate_up.zero_()
         self.hidden.zero_()
@@ -150,6 +154,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.dispatch_cache_n if read else 0, self.dispatch_scratch if read else None,
             self.dispatch_cache_aiu if read else False,
             self.staged_return if write else False,
+            self.dispatch_cache_ctas,
         )
 
     @torch.no_grad()

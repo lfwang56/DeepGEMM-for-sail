@@ -201,3 +201,322 @@ The future staged-return source is present but disabled in these controls. Its i
 - Result: no meaningful change from unpadded49.2693939ms; still slower than the original unstaged iteration3. Do not recommend staged return. Padding did not explain the loss in this workload.
 - Stall audit: iterations3/4/5 produced no >=3% improvement over the best fusion result. Re-profile/review and primary-source search are required before iteration6; there is no physical-floor evidence and viable scheduling/geometry directions remain.
 - Actual occupancy inspection (not a performance comparison): BN128/BK64/WM32/WN64/S2 supports3residentblocks/CU, but the cached launcher caps its grid at2*39=78. BN128/BK128/WM64/WN64/S2 supports only1block/CU. This motivates a tested private-cache concurrency option and role-specific FC1 tiles; it does not by itself establish a speedup.
+
+### Stall reassessment before iteration6
+
+- Reviewed iteration2Asight kernel totals and min/median/max distributions: FC1 remains~37.4% (~18.57ms/step), larger than return kernels combined. Iterations3/4/5 did not materially move total time. No timer, bandwidth, or compute-floor evidence supports stopping.
+- Actual occupancy queries: FC1 BN128/BK64/WM32/WN64/S2 supports3blocks/CU; the private-cache launcher currently caps at2. Larger grid requires correspondingly larger CTA-private scratch; no cross-CTA synchronization is needed.
+- Read primary T-Head memory-bound GEMM study (blog33,2026-09-28) via official API after web page rendering failed: https://developer.t-head.cn/blogDetail?bizType=BLOG&id=33 . It supports checking wave tails and geometry against39CUs, while warning that occupancy alone is not a performance predictor. Its workload and quoted throughput are not our Qwen FC1 workload and are not used as measured bounds here.
+- Next hypothesis: expose1/2/4cached CTAs/CU, retain occupancy clamping, and test FC1-specific smaller tiles while leaving the tuned DeepEP denominator and other GEMM roles unchanged. Validate >78active tasks, not only tiny cases that never touch the additional scratch rows.
+
+### Iteration 6 — cache concurrency matched to actual occupancy
+
+- Direction: configurable1/2/4cached CTAs/CU, matched private scratch capacity and occupancy clamping. No inter-CTA dependency or barrier. Add peer-role-specific tile overrides so FC1 geometry changes leave other roles and the tuned DeepEP control unchanged.
+- Correctness: cache-group unit on clean .63 passed90.603s; full independent Qwen H8192/I2048/E16/K10/T512 reference on clean .215 passed every element, masked/ragged and duplicate-skew patterns, worstRMS.00409. Balanced case activates96cache tasks, exercising storage beyond the original78-CTA cap. Original .220 attempt was blocked before GPU work by other tasks; original .219 unit had a foreign-monitor record and was rerun cleanly.
+- Relocated measurements from SN1 to SN2 because only1-2SN1hosts were idle. Paired5x20graph trials, actual Qwen512routedexperts, EP32T1024/C512, DeepEP38CUs, unstaged bilateral. Allthree phases and allrank/gate receipts passed.
+```json
+[
+  {
+    "run": "qwen38-wlf-ep32-iter6-fc1-n128-ctas2-sn2-attempt0",
+    "backend": "deepep",
+    "ms": 47.06810607910156,
+    "samples": [
+      47.17891845703125,
+      47.05702209472656,
+      47.03438110351563,
+      47.071044921875,
+      47.06810607910156
+    ],
+    "ctas": null,
+    "tiles": {
+      "fc1": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "fc2": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dhidden": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dx": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    },
+    "errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter6-fc1-n128-ctas2-sn2-attempt0",
+    "backend": "peer",
+    "ms": 61.69306640625,
+    "samples": [
+      61.670172119140624,
+      61.69306640625,
+      61.67611083984375,
+      61.7105712890625,
+      61.7082275390625
+    ],
+    "ctas": 2,
+    "tiles": {
+      "fc1": [
+        128,
+        64,
+        32,
+        64,
+        2
+      ],
+      "fc2": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dhidden": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dx": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    },
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.771342337837268e-07,
+      "dw2": 2.786914308217092e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter6-fc1-n128-ctas4-sn2-attempt0",
+    "backend": "deepep",
+    "ms": 47.02039489746094,
+    "samples": [
+      47.17173767089844,
+      47.02039489746094,
+      47.00090637207031,
+      46.975991821289064,
+      47.039422607421876
+    ],
+    "ctas": null,
+    "tiles": {
+      "fc1": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "fc2": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dhidden": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dx": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    },
+    "errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter6-fc1-n128-ctas4-sn2-attempt0",
+    "backend": "peer",
+    "ms": 49.840554809570314,
+    "samples": [
+      49.740902709960935,
+      49.820370483398435,
+      49.85562438964844,
+      49.840554809570314,
+      49.86471862792969
+    ],
+    "ctas": 4,
+    "tiles": {
+      "fc1": [
+        128,
+        64,
+        32,
+        64,
+        2
+      ],
+      "fc2": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dhidden": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dx": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    },
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.642166521127365e-07,
+      "dw2": 2.7665305424307007e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter6-n256-ctas2-sn2-attempt0",
+    "backend": "deepep",
+    "ms": 47.02198791503906,
+    "samples": [
+      47.065286254882814,
+      47.02198791503906,
+      47.0070068359375,
+      47.03162536621094,
+      47.00060119628906
+    ],
+    "ctas": null,
+    "tiles": {
+      "fc1": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "fc2": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dhidden": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dx": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    },
+    "errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter6-n256-ctas2-sn2-attempt0",
+    "backend": "peer",
+    "ms": 50.12757568359375,
+    "samples": [
+      50.11595153808594,
+      50.12693481445312,
+      50.12757568359375,
+      50.15898132324219,
+      50.133447265625
+    ],
+    "ctas": 2,
+    "tiles": {
+      "fc1": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "fc2": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dhidden": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ],
+      "dx": [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    },
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.631226720950508e-07,
+      "dw2": 2.564627834544808e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  }
+]
+```
+- Best peer 49.840554810ms, paired DeepEP 47.020394897ms; ratio DeepEP/peer 0.943416, time reduction -5.9977%. Versus same-domain N256control, time reduction 0.5726%.
+- Cross-supernode DeepEP EP16 passed independent CPU reference and128dynamic-route graph replays, allparents/gatesnormal. CPU Gloo carries initialization metadata; DeepEP transports token/gradient payloads, with cross-host MNNVL disabled. OriginalEP64 NCCL-metadata attempt blocked in NativeMoEPlan recipe all_gather_object / pcclAllGather(socketaccept), before DeepEP initialization. Its own verified rank processes were terminated after timeout; allparents closed. No DeepEP64success claim yet.
