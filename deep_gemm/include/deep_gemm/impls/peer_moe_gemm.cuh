@@ -229,10 +229,11 @@ __device__ __forceinline__ void copy_peer_A_to_tsm(
     }
 }
 
-template <typename DstT, uint32_t SHAPE_N, bool Coherent, class Accum, class Coordinates>
+template <typename DstT, uint32_t SHAPE_N, bool Coherent, bool Cached = false, class Accum, class Coordinates>
 __device__ __forceinline__ void scatter_peer_output(
         const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
-        uint32_t row_base, uint32_t valid_rows, uint32_t column_base) {
+        uint32_t row_base, uint32_t valid_rows, uint32_t column_base,
+        const uint64_t* cached_destinations = nullptr) {
     // tc02 fragments own adjacent pairs. Resolve the destination once per
     // fragment row and use the native fused BF16x2 conversion/store.
     CUTLASS_PRAGMA_UNROLL
@@ -241,13 +242,20 @@ __device__ __forceinline__ void scatter_peer_output(
         for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
             const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
             if (row >= valid_rows) continue;
-            const auto* route_ptr = params.permutation + row_base + row;
-            const int route = Coherent ? load_pipeline_metadata(route_ptr) : __ldg(route_ptr);
-            if (route < 0) continue;
-            const uint32_t rank = uint32_t(route) / params.destination_rows_per_rank;
-            if (rank >= params.num_ranks) continue;
-            auto* destination = reinterpret_cast<DstT*>(__ldg(params.destination_peers + rank));
-            destination += uint64_t(uint32_t(route) % params.destination_rows_per_rank) * SHAPE_N + column_base;
+            DstT* destination;
+            if constexpr (Cached) {
+                const uint64_t address = cached_destinations[row];
+                if (!address) continue;
+                destination = reinterpret_cast<DstT*>(address);
+            } else {
+                const auto* route_ptr = params.permutation + row_base + row;
+                const int route = Coherent ? load_pipeline_metadata(route_ptr) : __ldg(route_ptr);
+                if (route < 0) continue;
+                const uint32_t rank = uint32_t(route) / params.destination_rows_per_rank;
+                if (rank >= params.num_ranks) continue;
+                destination = reinterpret_cast<DstT*>(__ldg(params.destination_peers + rank));
+                destination += uint64_t(uint32_t(route) % params.destination_rows_per_rank) * SHAPE_N + column_base;
+            }
             CUTLASS_PRAGMA_UNROLL
             for (int wn = 0; wn < cute::size<2>(coordinates); ++wn) {
                 CUTLASS_PRAGMA_UNROLL
@@ -364,20 +372,25 @@ template <class _SrcT, GemmType kGemmType,
           bool Coherent = false, bool ActivationBackward = false, uint32_t DispatchCacheN = 0,
           bool DispatchCacheAiu = false, bool StagedReturn = false,
           uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false,
-          bool ProducerInputAiu = false, bool DispatchPipeline = false>
+          bool ProducerInputAiu = false, bool DispatchPipeline = false,
+          bool InlineDispatch = false, bool CacheReturn = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {}) {
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
+    static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
+    static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
     if constexpr (DispatchPipeline) {
         static_assert(!PeerRead && !ActivationBackward && DispatchCacheN == 0
                       && FirstNTile == 0 && NumNTiles == 0);
-        if (blockIdx.x < pipeline.communication_ctas) {
-            if constexpr (PeerWrite)
-                training::return_pipeline_consumer<BLOCK_M, BLOCK_N, SHAPE_N, BLOCK_SIZE>(params, pipeline);
-            else
-                training::dispatch_pipeline_producer<BLOCK_M, SHAPE_K, BLOCK_SIZE>(params, pipeline);
-            return;
+        if constexpr (!InlineDispatch) {
+            if (blockIdx.x < pipeline.communication_ctas) {
+                if constexpr (PeerWrite)
+                    training::return_pipeline_consumer<BLOCK_M, BLOCK_N, SHAPE_N, BLOCK_SIZE>(params, pipeline);
+                else
+                    training::dispatch_pipeline_producer<BLOCK_M, SHAPE_K, BLOCK_SIZE>(params, pipeline);
+                return;
+            }
         }
     }
     const auto& args = params.gemm;
@@ -417,7 +430,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
         training::SlicedPeerScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
                                      FirstNTile, NumNTiles>, UnslicedScheduler>;
     using TileScheduler = std::conditional_t<DispatchPipeline,
-        training::DispatchPipelineScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups, !PeerWrite>,
+        training::DispatchPipelineScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups,
+                                             !PeerWrite, InlineDispatch>,
         SlicedScheduler>;
 
     // Shared memory
@@ -528,6 +542,30 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
       auto blk_coord_mnkl = make_coord(m_block_idx, n_block_idx, _, _1{});
       uint32_t blk_n_offset = n_block_idx * BLOCK_N;
       const int* blk_token_base = args.sorted_token_ids + deep_scheduler.cumsum_m_block_idx * BLOCK_M;
+      if constexpr (InlineDispatch) {
+          if (n_block_idx == 0) {
+              __shared__ uint64_t inline_source_addresses[BLOCK_M];
+              for (uint32_t row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE) {
+                  const uint32_t source_row = __ldg(blk_token_base + row);
+                  uint64_t address = 0;
+                  if (source_row < uint64_t(params.num_ranks) * params.source_rows_per_rank) {
+                      const uint32_t rank = source_row / params.source_rows_per_rank;
+                      const uint32_t local_row = source_row % params.source_rows_per_rank;
+                      address = __ldg(params.source_peers + rank)
+                              + uint64_t(local_row) * SHAPE_K * sizeof(SrcT);
+                  }
+                  inline_source_addresses[row] = address;
+              }
+              __syncthreads();
+              training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(
+                  inline_source_addresses, params, deep_scheduler.curr_block_m_offset);
+              if (thread_idx == 0) {
+                  tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx, 1u);
+                  tix::red_add_rel(pipeline.ready + pipeline.signal_capacity, 1u);
+              }
+              __syncthreads();
+          }
+      }
       const uint64_t* source_addresses = nullptr;
       if constexpr (PeerRead) {
           __shared__ uint64_t cached_source_addresses[BLOCK_M];
@@ -556,6 +594,29 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
           }
           __syncthreads();
           source_addresses = cached_source_addresses;
+      }
+      const uint64_t* output_addresses = nullptr;
+      if constexpr (CacheReturn) {
+          __shared__ uint64_t cached_output_addresses[BLOCK_M];
+          // The preceding tile's epilogue can still read this cache in a
+          // slower warp. Join every warp before reusing its destination rows.
+          __syncthreads();
+          for (uint32_t row = thread_idx; row < deep_scheduler.valid_m_in_block; row += BLOCK_SIZE) {
+              const auto* route_ptr = params.permutation + deep_scheduler.curr_block_m_offset + row;
+              const int route = Coherent ? training::load_pipeline_metadata(route_ptr) : __ldg(route_ptr);
+              uint64_t address = 0;
+              if (route >= 0) {
+                  const uint32_t rank = uint32_t(route) / params.destination_rows_per_rank;
+                  if (rank < params.num_ranks) {
+                      const uint64_t local_row = uint32_t(route) % params.destination_rows_per_rank;
+                      address = __ldg(params.destination_peers + rank)
+                              + (local_row * SHAPE_N + blk_n_offset) * sizeof(DstT);
+                  }
+              }
+              cached_output_addresses[row] = address;
+          }
+          __syncthreads();
+          output_addresses = cached_output_addresses;
       }
       // gmem_b in block
       SrcT* gmem_b = (SrcT*)args.b_ptr + deep_scheduler.curr_group_idx * STRIDE_BE;
@@ -709,8 +770,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                   accum, tCcC, params, reinterpret_cast<DstT*>(smem_buffer),
                   deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
           } else {
-              training::scatter_peer_output<DstT, SHAPE_N, Coherent>(accum, tCcC, params,
-                  deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
+              training::scatter_peer_output<DstT, SHAPE_N, Coherent, CacheReturn>(accum, tCcC, params,
+                  deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset, output_addresses);
           }
       } else {
           epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM>(accum, tCcC, args.c_ptr,

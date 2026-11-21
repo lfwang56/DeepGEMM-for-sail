@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=8)
     parser.add_argument("--pipeline-serialize", action="store_true")
+    parser.add_argument("--inline-dispatch", action="store_true")
+    parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--producer-input-aiu", action="store_true")
@@ -88,13 +90,15 @@ def main():
     for backend in args.backends:
         options = dict(gemm_configs=configs)
         if backend == "peer":
-            options.update(dispatch_producer=not args.dispatch_pipeline, dispatch_producer_tiles=1,
+            use_producer = not (args.dispatch_pipeline or args.inline_dispatch)
+            options.update(dispatch_producer=use_producer, dispatch_producer_tiles=1,
                            reuse_packed_dy=True,
-                           producer_input_aiu=args.producer_input_aiu and not args.dispatch_pipeline,
-                           producer_local_aiu=args.producer_local_aiu and not args.dispatch_pipeline,
+                           producer_input_aiu=args.producer_input_aiu and use_producer,
+                           producer_local_aiu=args.producer_local_aiu and use_producer,
                            fuse_activation_backward=args.fuse_activation_backward,
                            dispatch_pipeline=args.dispatch_pipeline, return_pipeline=args.return_pipeline,
-                           pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize)
+                           pipeline_comm_ctas=args.pipeline_comm_ctas, pipeline_serialize=args.pipeline_serialize,
+                           inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
@@ -139,10 +143,12 @@ def main():
         print(json.dumps(dict(case="skew_capacity_reference", rank=rank, ranks=size,
             backend=backend, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens_per_rank=c, chunk_tokens=c, graph=args.graph,
-            dispatch_pipeline=args.dispatch_pipeline if backend == "peer" else None,
+            dispatch_pipeline=getattr(plan, "dispatch_pipeline", False) if backend == "peer" else None,
             return_pipeline=args.return_pipeline if backend == "peer" else None,
             pipeline_comm_ctas=args.pipeline_comm_ctas if backend == "peer" else None,
             pipeline_serialized=args.pipeline_serialize if backend == "peer" else None,
+            inline_dispatch=args.inline_dispatch if backend == "peer" else None,
+            cache_return_addresses=args.cache_return_addresses if backend == "peer" else None,
             capacity_rows=plan.rows, alignment=plan.alignment, active_rows=active_rows,
             largest_active_element_offset=max(0, active_rows * h - 1),
             relative_rms=errors, unused_expert_gradients_exactly_zero=unused_zero,

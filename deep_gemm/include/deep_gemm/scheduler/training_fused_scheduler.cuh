@@ -41,7 +41,7 @@ struct CoherentFusedScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
 // Resident communication CTAs publish one ready flag per packed M tile. Each
 // compute CTA waits only for its next tile, never for the whole dispatch.
 template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E,
-          bool WaitForInput = true>
+          bool WaitForInput = true, bool InlineOwners = false>
 struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
     PeerDispatchPipeline control;
@@ -66,6 +66,10 @@ struct DispatchPipelineScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
         this->curr_block_m_offset = data.w + m * BM;
         this->valid_m_in_block = min(BM, data.y - m * BM);
         if constexpr (!WaitForInput) return true;
+        // N=0 owns this M tile's input. Every dependency points to a smaller
+        // work index; with the verified fully resident grid, an owner can
+        // always run. Other N tiles acquire only their own owner's signal.
+        if constexpr (InlineOwners) if (n == 0) return true;
         __shared__ int failed;
         __syncthreads();
         if (threadIdx.x == 0) {

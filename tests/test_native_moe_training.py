@@ -168,7 +168,9 @@ class NativeTests(unittest.TestCase):
             valid = torch.full((), 5, device="cuda", dtype=torch.int32)
             plan = self.plan(fuse_dispatch=dispatch, fuse_return=returned,
                              dispatch_pipeline=dispatch and self.plan_options.get("dispatch_pipeline", False),
-                             return_pipeline=returned and self.plan_options.get("return_pipeline", False))
+                             return_pipeline=returned and self.plan_options.get("return_pipeline", False),
+                             inline_dispatch=dispatch and self.plan_options.get("inline_dispatch", False),
+                             cache_return_addresses=returned and self.plan_options.get("cache_return_addresses", False))
             y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
             y.backward(dy)
             check((y, x.grad, w1.grad, w2.grad, scores.grad),
@@ -263,7 +265,8 @@ class NativeTests(unittest.TestCase):
         x, ids, scores, w1, w2, dy = self.inputs()
         ids[2, 1] = -1
         plan = self.plan(gemm_configs={"fc1": (256, 64, 64, 64, 2)},
-                         dispatch_pipeline=False, dispatch_producer=True, producer_input_aiu=True,
+                         dispatch_pipeline=False, inline_dispatch=False,
+                         dispatch_producer=True, producer_input_aiu=True,
                          producer_local_aiu=True, reuse_packed_dy=True)
         y = native_moe(x, ids, scores, w1, w2, plan=plan)
         y.backward(dy)
@@ -412,7 +415,8 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
               deepep=False, dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
               group_backend="nccl", dispatch_producer=False, dispatch_producer_tiles=1,
               producer_local_aiu=False, producer_input_aiu=False, dispatch_pipeline=False,
-              pipeline_comm_ctas=2, return_pipeline=False, pipeline_serialize=False):
+              pipeline_comm_ctas=2, return_pipeline=False, pipeline_serialize=False,
+              inline_dispatch=False, cache_return_addresses=False):
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -447,6 +451,9 @@ def ep_checks(compute, graph_mode=False, peer=False, stress=False, persistent=Fa
                   else CollectiveFusedMoEPlan if collective_fused else NativeMoEPlan)
     plan_options = {"maximize_ctas": True} if persistent and maximize else {}
     plan_options["fast_weight_transpose"] = fast_weight_transpose
+    if inline_dispatch or cache_return_addresses:
+        plan_options.update(inline_dispatch=inline_dispatch, cache_return_addresses=cache_return_addresses,
+                            pipeline_statistics=True)
     if dispatch_pipeline:
         plan_options.update(dispatch_pipeline=True, pipeline_comm_ctas=pipeline_comm_ctas,
                             pipeline_statistics=True)
@@ -578,6 +585,8 @@ if __name__ == "__main__":
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=2)
     parser.add_argument("--pipeline-serialize", action="store_true")
+    parser.add_argument("--inline-dispatch", action="store_true")
+    parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     options, remaining = parser.parse_known_args()
@@ -615,13 +624,17 @@ if __name__ == "__main__":
                   options.staged_return, options.dispatch_cache_ctas, options.process_group_backend,
                   options.dispatch_producer, options.dispatch_producer_tiles, options.producer_local_aiu,
                   options.producer_input_aiu, options.dispatch_pipeline, options.pipeline_comm_ctas,
-                  options.return_pipeline, options.pipeline_serialize)
+                  options.return_pipeline, options.pipeline_serialize,
+                  options.inline_dispatch, options.cache_return_addresses)
     else:
         NativeTests.compute = recipe
         NativeTests.plan_class = (PersistentMoEPlan if options.persistent else PeerMoEPlan if options.peer
                                   else CollectiveFusedMoEPlan if options.collective_fused else NativeMoEPlan)
         NativeTests.plan_options = {"maximize_ctas": True} if options.persistent and options.maximize_ctas else {}
         NativeTests.plan_options["fast_weight_transpose"] = options.fast_weight_transpose
+        if options.inline_dispatch or options.cache_return_addresses:
+            NativeTests.plan_options.update(inline_dispatch=options.inline_dispatch,
+                cache_return_addresses=options.cache_return_addresses, pipeline_statistics=True)
         if options.dispatch_pipeline:
             NativeTests.plan_options.update(dispatch_pipeline=True,
                 pipeline_comm_ctas=options.pipeline_comm_ctas, pipeline_statistics=True)

@@ -45,6 +45,8 @@ def main():
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=2)
     parser.add_argument("--pipeline-serialize", action="store_true")
+    parser.add_argument("--inline-dispatch", action="store_true")
+    parser.add_argument("--cache-return-addresses", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -83,6 +85,8 @@ def main():
         extra["return_pipeline"] = options.return_pipeline
         extra["pipeline_comm_ctas"] = options.pipeline_comm_ctas
         extra["pipeline_serialize"] = options.pipeline_serialize
+        extra["inline_dispatch"] = options.inline_dispatch
+        extra["cache_return_addresses"] = options.cache_return_addresses
         extra["dispatch_producer_tiles"] = options.dispatch_producer_tiles
         if options.peer_fc1_config:
             extra["gemm_configs"]["fc1"] = options.peer_fc1_config
@@ -133,10 +137,12 @@ def main():
                               staged_return=options.staged_return,
                               dispatch_cache_ctas=options.dispatch_cache_ctas,
                               dispatch_producer=options.dispatch_producer,
-                              dispatch_pipeline=options.dispatch_pipeline,
+                              dispatch_pipeline=getattr(plan, "dispatch_pipeline", False),
                               return_pipeline=options.return_pipeline,
                               pipeline_comm_ctas=options.pipeline_comm_ctas,
                               pipeline_serialize=options.pipeline_serialize,
+                              inline_dispatch=options.inline_dispatch,
+                              cache_return_addresses=options.cache_return_addresses,
                               producer_local_aiu=options.producer_local_aiu,
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,

@@ -29,7 +29,8 @@ class PeerMoEPlan(NativeMoEPlan):
                  dispatch_cache_aiu=False, staged_return=False, dispatch_cache_ctas=2,
                  dispatch_producer=False, dispatch_producer_tiles=1, producer_local_aiu=False,
                  producer_input_aiu=False, dispatch_pipeline=False, pipeline_comm_ctas=2,
-                 pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False, **kwargs):
+                 pipeline_statistics=False, return_pipeline=False, pipeline_serialize=False,
+                 inline_dispatch=False, cache_return_addresses=False, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
@@ -52,6 +53,12 @@ class PeerMoEPlan(NativeMoEPlan):
         if producer_input_aiu and (not dispatch_producer or dispatch_producer_tiles != 1):
             raise ValueError("producer input AIU requires exactly one producer N tile")
         self.producer_input_aiu = producer_input_aiu
+        if not isinstance(inline_dispatch, bool) or not isinstance(cache_return_addresses, bool):
+            raise TypeError("inline dispatch and cached-return switches must be bool")
+        if inline_dispatch:
+            dispatch_pipeline = True
+        self.inline_dispatch = inline_dispatch
+        self.cache_return_addresses = cache_return_addresses
         if not isinstance(dispatch_pipeline, bool) or not isinstance(pipeline_statistics, bool):
             raise TypeError("pipeline switches must be bool")
         if dispatch_pipeline and (not fuse_dispatch or self.transport != "peer"
@@ -65,11 +72,15 @@ class PeerMoEPlan(NativeMoEPlan):
         if not isinstance(pipeline_serialize, bool):
             raise TypeError("pipeline_serialize must be bool")
         self.pipeline_serialize = pipeline_serialize
+        if inline_dispatch and pipeline_serialize:
+            raise ValueError("inline input owners require tile readiness; global dispatch serialization is unsupported")
         if not isinstance(return_pipeline, bool):
             raise TypeError("return_pipeline must be bool")
         if return_pipeline and (not fuse_return or self.transport != "peer" or staged_return):
             raise ValueError("return pipeline requires fused peer return without staged-return mode")
         self.return_pipeline = return_pipeline
+        if cache_return_addresses and (not fuse_return or return_pipeline or staged_return):
+            raise ValueError("cached return addresses require direct fused return without a return pipeline or staging")
         if not isinstance(active_rows, bool) or not isinstance(fuse_local_grad, bool):
             raise TypeError("peer pointwise switches must be bool")
         self.active_rows, self.fuse_local_grad = active_rows, fuse_local_grad
@@ -219,8 +230,9 @@ class PeerMoEPlan(NativeMoEPlan):
             self.status if dispatch_pipeline or return_pipeline else None,
             (self.return_pipeline_statistics if return_pipeline else self.pipeline_statistics if dispatch_pipeline else None)
                 if not compile_only else None,
-            self.pipeline_comm_ctas,
+            0 if dispatch_pipeline and self.inline_dispatch else self.pipeline_comm_ctas,
             self.pipeline_serialize,
+            self.cache_return_addresses if write else False,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"

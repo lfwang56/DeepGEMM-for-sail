@@ -1676,3 +1676,191 @@ role design reserves full GEMM registers/TSM for communication CTAs and writes
 intermediate output before copying it; pursue work-conserving input owners
 and direct cached return addresses to remove those costs. Test wgrad layouts
 and a ring over received routed rows to reduce repeated FP32DW traffic.
+
+
+## Iteration14 — inline input owners and direct cached return (negative overall)
+
+Each M tile's N0 task bulk-packs X and publishes a local ready flag, then computes
+real FC1 columns. Other N tasks acquire that tile and use local AIU. All CTAs
+compute; there are no reserved copy CTAs. The occupancy-verified resident grid
+is all CUs*occupancy,78 for the measured tile. Global dispatch serialization is
+rejected for owners because that would introduce a dependency cycle.
+Direct-return GEMMs may precompute128 destination addresses before the mainloop
+and retain the original BF16x2 peer-store epilogue, avoiding staged output copies.
+All options defaultFalse. Extension SHA256
+a944ea3f417bef5c35ecdcbb84a3cf9f5b401061a3b6a090a86f7de8355f1f64.
+
+Source review during correctness validation found that reusing the shared return
+address table needed a CTA barrier BEFORE the next tile writes it. Fixed before
+any performance measurement. The initial broad BF16 oracle alone had passed;
+new same-input cacheFalse/True graph checks require Y,DX,dScore BITWISE equality.
+Balanced/ragged/duplicate/allmasked modes each passed with mutated inputs and
+three replays. FP32DW order differences<=2.126e-6relativeRMS (<1e-5limit).
+Postfix full H8192/I2048/E16/T768 independent FP32 masked+duplicate references
+passed (maxRMS0.004081), EP2+128dynamicgraphs passed all ranks, and actualEP32
+C768 near-int32 worstskew passed32records and four clean audits, maxRMS0.003497055.
+All correctness audits clean. New meaningful regression test:
+tests/test_moe_return_cache_equivalence.py.
+
+Benchmark: BF16,H8192/I2048/E16local/K10/T4096/C768,BN256/BK64/WM64/WN64/S2,
+full backward replay with FP32DW zero/accumulation,no optimizer/shared expert,
+graph5x20 median-max-rank. wlf_sgl_2.2/Torch2.11 on ZW-M890P/ppu0015/SDK2.2;
+native extension buildTorch2.10. All12phases completed all ranks and clean audits.
+EP8 is128-expert local-shape proxy; actualEP32 is512experts on225/226/227/223.
+[
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-producer-control-attempt0",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 137.97523193359376
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-inline-input",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 264.64931640625
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-cached-return",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 137.85975341796876
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-bilateral",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 264.6408935546875
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-bilateral-forward",
+    "backend": "deepep",
+    "timing_scope": "forward",
+    "ms": 32.97703552246094
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-bilateral-forward",
+    "backend": "peer",
+    "timing_scope": "forward",
+    "ms": 97.3546142578125
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-bilateral-backward",
+    "backend": "deepep",
+    "timing_scope": "backward",
+    "ms": 101.91519775390626
+  },
+  {
+    "scope": "ep8",
+    "phase": "qwen38-wlf-ep8-iter14-bilateral-backward",
+    "backend": "peer",
+    "timing_scope": "backward",
+    "ms": 165.8747802734375
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-producer-control-attempt0",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.61651611328125
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-producer-control-attempt0",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 144.81435546875
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-inline-input",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.61014404296876
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-inline-input",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 318.49453125
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-cached-return",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.6460693359375
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-cached-return",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 145.03409423828126
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-bilateral",
+    "backend": "deepep",
+    "timing_scope": "step",
+    "ms": 164.610107421875
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-bilateral",
+    "backend": "peer",
+    "timing_scope": "step",
+    "ms": 318.85009765625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-bilateral-forward",
+    "backend": "deepep",
+    "timing_scope": "forward",
+    "ms": 46.35319213867187
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-bilateral-forward",
+    "backend": "peer",
+    "timing_scope": "forward",
+    "ms": 123.55506591796875
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-bilateral-backward",
+    "backend": "deepep",
+    "timing_scope": "backward",
+    "ms": 118.09283447265625
+  },
+  {
+    "scope": "ep32",
+    "phase": "qwen38-wlf-ep32-iter14-bilateral-backward",
+    "backend": "peer",
+    "timing_scope": "backward",
+    "ms": 195.0868408203125
+  }
+]
+
+Verdict: cached direct return alone is essentially neutral; inline input with
+row-major work ordering regresses badly. Keep opt-in and reject as winner.
+The first78 work items with16Ntiles start only five input owners; the remaining
+CTAs wait instead of exposing more independent input copies. Next order every
+M-tile owner before the consumer jobs, matching the existing producer's broad
+dispatch concurrency while allowing consumers to start before its last owner
+finishes. Inspect the conservative256-thread cap and actual compute occupancy
+with512/1024-thread geometry, retuning DeepEP under the same compute settings.
+
+After iterations11–13 stalled, rechecked primary MoK paper and official PPU
+articles34/36 (full source archived in work/reference/t-head-blog-34.json and36).
+The PPU article's TP inference case is not an EP training speedup claim. Asight
+DW1 evidence and measured waiting, not kernel count, drive the next direction.
+Full timing/audit/equality/EP2 records: outputs/qwen38/iter14-inline-owner-controls.json.
