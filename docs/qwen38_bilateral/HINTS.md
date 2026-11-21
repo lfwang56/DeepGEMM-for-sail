@@ -12,8 +12,11 @@ https://huggingface.co/Qwen/Qwen3.8-2.4T-A95B/blob/912e40d903bfc891be8fe3c51faa0
   exclusion explicitly; routed-layer timing is not complete-model timing.
 - EP32 uses16 local routed experts; EP64 uses8. Keep512 total routed experts.
 - Sweep1024/4096/8192 tokens per rank independently of model context capacity.
-- Existing int32 element offsets constrain EP32 chunks to512 and EP64 to256
-  for the worst-skew allocation. Do not silently drop tokens or expert routes.
+- Initial power-of-two sweeps use EP32 chunks512 and EP64 chunks256. These
+  are choices below the int32 guard, not the exact maximum capacity. Validate
+  aligned chunks768/384 as well: the allocated aligned row count times H must
+  remain <=INT32_MAX, including the worst skew and expert alignment padding.
+  Do not silently drop tokens or expert routes.
 
 The primary deployment comparison should use PPU dispatch/combine with native
 grouped GEMM where available, following the type of baseline used by MoK.

@@ -983,3 +983,166 @@ The future staged-return source is present but disabled in these controls. Its i
 ]
 ```
 - Best43.880346680ms vspairedDeepEP47.107824707ms (6.8513%less time). Improvementoverpeercontrol1.2778%. Below3%materialthreshold; retain explicit controls and continue a distinct direction.
+
+## Iteration10 — larger token counts and aligned chunk capacity
+
+- All5cases use the same SN2fourhosts225/226/227/223,all32rankparents0andeveryownershipgateclean. Actual512routedexpertsH8192/I2048/E16/K10,producer1+inputAIU+localAIU+activationbackward+DYreuse,256/64/64/64/S2,5x20graphs. PairedDeepEPBuffer38CU19QPfabricscaleup32.
+- Chunk768 remains inside the existing int32 guard: alignment128 and247808allocatedrows atEP32,rows*8192=2030043136elements<=INT32_MAX. Initial512/256power-of-twochoices were not absolute limits; HINTS corrected. No token/expert drops. FullFWD+BWDreplay+FP32DW, nooptimizer/sharedexpert.
+- SingleGPUH8192/I2048/E16/K10,T768all-elementFP32masked/duplicate referencepassed, maxRMS0.004081. New independently summed-duplicate-weight skew oracle passed2ranksmall-shape checks for bothDeepEPandpeer; actualEP32near-limitoffset stress remains pending.
+
+```json
+[
+  {
+    "run": "qwen38-wlf-ep32-iter10-t4096-c512-attempt0",
+    "tokens": 4096,
+    "chunk": 512,
+    "peer_ms": 164.041357421875,
+    "deepep_ms": 176.67615966796876,
+    "reduction_vs_paired_deepep_percent": 7.151390583675021,
+    "peer_samples": [
+      163.94080810546876,
+      164.0297607421875,
+      164.041357421875,
+      164.063818359375,
+      164.04788818359376
+    ],
+    "peer_peak_torch_gib": 18.566678047180176,
+    "deepep_peak_torch_gib": 18.53543519973755,
+    "errors": {
+      "y": 0.0026847815606743097,
+      "dx": 0.0014849959407001734,
+      "dw1": 2.5937464442904457e-07,
+      "dw2": 2.5325016395072453e-07,
+      "dscores": 1.460545888676279e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter10-t4096-c768",
+    "tokens": 4096,
+    "chunk": 768,
+    "peer_ms": 144.710009765625,
+    "deepep_ms": 164.65115966796876,
+    "reduction_vs_paired_deepep_percent": 12.111150594114594,
+    "peer_samples": [
+      144.5995849609375,
+      144.6011474609375,
+      144.710009765625,
+      144.78558349609375,
+      144.71041259765624
+    ],
+    "peer_peak_torch_gib": 24.713059425354004,
+    "deepep_peak_torch_gib": 24.681816577911377,
+    "errors": {
+      "y": 0.0026847815606743097,
+      "dx": 0.0014849959407001734,
+      "dw1": 3.5115400009999576e-07,
+      "dw2": 3.4753790600916545e-07,
+      "dscores": 1.460545888676279e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter10-t8192-c512",
+    "tokens": 8192,
+    "chunk": 512,
+    "peer_ms": 323.7109130859375,
+    "deepep_ms": 349.591796875,
+    "reduction_vs_paired_deepep_percent": 7.403172505880196,
+    "peer_samples": [
+      323.5693115234375,
+      323.6948974609375,
+      323.719775390625,
+      323.735302734375,
+      323.7109130859375
+    ],
+    "peer_peak_torch_gib": 18.69213581085205,
+    "deepep_peak_torch_gib": 18.660892963409424,
+    "errors": {
+      "y": 0.0026137905661016703,
+      "dx": 0.0014898645458742976,
+      "dw1": 2.780894874376827e-07,
+      "dw2": 2.75692570994579e-07,
+      "dscores": 1.482959675058737e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter10-t8192-c768",
+    "tokens": 8192,
+    "chunk": 768,
+    "peer_ms": 273.1869873046875,
+    "deepep_ms": 310.4890380859375,
+    "reduction_vs_paired_deepep_percent": 12.013967066665177,
+    "peer_samples": [
+      273.1869873046875,
+      273.0773681640625,
+      273.117724609375,
+      273.3026123046875,
+      273.2547607421875
+    ],
+    "peer_peak_torch_gib": 24.83851718902588,
+    "deepep_peak_torch_gib": 24.807274341583252,
+    "errors": {
+      "y": 0.0026137905661016703,
+      "dx": 0.0014898645458742976,
+      "dw1": 3.627561397934187e-07,
+      "dw2": 3.646568700332864e-07,
+      "dscores": 1.482959675058737e-07
+    }
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter10-t1024-c768",
+    "tokens": 1024,
+    "chunk": 768,
+    "peer_ms": 44.298519897460935,
+    "deepep_ms": 50.536065673828126,
+    "reduction_vs_paired_deepep_percent": 12.342760943492925,
+    "peer_samples": [
+      44.29283447265625,
+      44.298519897460935,
+      44.29408569335938,
+      44.30423583984375,
+      44.30420837402344
+    ],
+    "peer_peak_torch_gib": 24.618966102600098,
+    "deepep_peak_torch_gib": 24.58772325515747,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 3.2887786005630915e-07,
+      "dw2": 3.228395542009821e-07,
+      "dscores": 1.4615960708397324e-07
+    }
+  }
+]
+```
+
+BestbaselineusesitsownbestmeasuredchunkforeachT;donotcompareonlyagainsttheweaker512setting: Include iteration9C512controls forT1024.
+
+```json
+[
+  {
+    "tokens": 1024,
+    "best_peer_ms": 43.8803466796875,
+    "peer_chunk": 512,
+    "best_deepep_ms": 47.04383239746094,
+    "deepep_chunk": 512,
+    "reduction_vs_best_deepep_percent": 6.724549333153773
+  },
+  {
+    "tokens": 4096,
+    "best_peer_ms": 144.710009765625,
+    "peer_chunk": 768,
+    "best_deepep_ms": 164.65115966796876,
+    "deepep_chunk": 768,
+    "reduction_vs_best_deepep_percent": 12.111150594114594
+  },
+  {
+    "tokens": 8192,
+    "best_peer_ms": 273.1869873046875,
+    "peer_chunk": 768,
+    "best_deepep_ms": 310.4890380859375,
+    "deepep_chunk": 768,
+    "reduction_vs_best_deepep_percent": 12.013967066665177
+  }
+]
+```
+- T1024C768 is slower in absolute time for both implementations than the earlierC512controls. Its paired12.34% ratio is not a gain over the best DeepEP setting and must not be promoted as that. For4096/8192bothbestmeasuredsettingsareC768andthe~12%fusionreductionholdsagainstthebetterbaseline.

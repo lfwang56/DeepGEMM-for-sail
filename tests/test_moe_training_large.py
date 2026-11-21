@@ -129,6 +129,8 @@ def main():
                               producer_input_aiu=options.producer_input_aiu,
                               dispatch_producer_tiles=options.dispatch_producer_tiles,
                               tokens=t, valid_tokens=max(0, t - 3), pattern=pattern,
+                              chunk_tokens=plan.chunk_tokens, alignment=plan.alignment,
+                              capacity_rows=plan.rows,
                               relative_rms=errors, every_element_compared=True,
                               fuse_dispatch=getattr(plan, "fuse_dispatch", None),
                               fuse_return=getattr(plan, "fuse_return", None),
