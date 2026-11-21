@@ -131,6 +131,11 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self.hybrid_domains, self.hybrid_domain_size = 2, groups.domain_size
         self.hybrid_pair_backend = str(dist.get_backend(groups.pair))
 
+    @property
+    def activation_workspace_bytes(self):
+        return self.inner.activation_workspace_bytes + sum(
+            t.numel() * t.element_size() for name, t in self.buffers.items() if name.startswith("pair_"))
+
     def __getattr__(self, name):
         inner = self.__dict__.get('inner')
         if inner is not None:

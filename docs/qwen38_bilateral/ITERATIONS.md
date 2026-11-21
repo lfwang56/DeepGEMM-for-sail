@@ -3251,3 +3251,35 @@ Preflight configurations: [('control', [256, 64, 64, 64, 2], True), ('wn32', [25
 | Configuration | Backend | Source chunk | Complete routed-layer ms |
 | --- | --- | ---: | ---: |
 | qwen38-wlf-cross-ep64-iter38-hybrid-c2048-attempt0 | excluded/incomplete | — | — |
+
+
+## Iteration 39 — accept routed hybrid/elastic benchmark configurations
+
+**Change.** Iteration38 completed independent EP64 hybrid and Elastic validation, but its first timing command was rejected by a legacy CLI guard before device initialization. Extend that guard to hybrid/elastic transports, validate positive domain size, and add --validate-configuration to check all nine recipes without device initialization. Correct activation-workspace metadata to exclude the inner weight-transpose buffers, matching the base plan convention. Kernels and numerical contracts are unchanged. Two contiguous physical domains of32 ranks each. Matching two-rank PCCL groups all-gather X/IDs/scores across domains. Each domain runs the existing bilateral PeerMoEPlan on its own expert subspace; pair reduce-scatter returns source outputs. Backward regathers inputs, all-gathers raw DY, rematerializes the complete inner operator, then reduce-scatters DX/dScore while retaining each expert owner's FP32 DW. GPU payload only; Gloo is metadata/oracle control. Fixed maximum input shapes preserve graph capture; global-ID validation precedes domain masking. Fresh outputs prevent later plan calls from overwriting autograd storage. Group lifetime is caller-owned.
+
+**Strong baseline.** Installed DeepEP ElasticBuffer nonexpanded hybrid dispatch/combine shares the exact DeepEPMoEPlan GEMM/rematerialization/FP32 DW implementation. Native PPU header/thread-scope compatibility uses an isolated package copy; installed package is untouched. Elastic hybrid rejects deterministic routing, so record nondeterministic mode explicitly. Its top-k expert IDs must be distinct; compare balanced/masked/reversed and uniquely skewed routes. Peer additionally retains duplicate-route tests. Legacy flat-RDMA Buffer controls are separate and disable MNNVL; the fastest accepted baseline, including Elastic, is the denominator.
+
+**Preflight evidence.** Two physical hosts/16 ranks proxy checks passed48 every-element FP32 records and mutable graphs. Qwen H8192/I2048/E512/top10 two-domain EP64 passed192 records, max relative RMS0.006988, all eight whole-host gates clean. Additional stage3 hybrid/Elastic oracles gate performance. The initial Elastic probes rejected deterministic mode and then a missing PCCL include path; the native compatibility environment resolves both and passes forward/DX/dScore plus4 changed-route graph replays at scaleup8/scaleout2. Preserve failed attempts. Elastic no-CPU-sync receive buffers initialize only a GPU-counted prefix; the adapter masks padded expert IDs to -1 and weights to0 using the documented device prefix sum. Its initial full-shape padding failure is preserved. Corrected Elastic EP16 and stage3 EP64 references passed before these timings.
+
+**Precision and model validation.** Domain BF16 partial rounding differs from flat dispatch/combine. In a full57.8M LM, the unfrozen BF16-vs-FP32 preflight changes selected expert sets in later layers (0/0/6/5) and fails the original4% per-parameter limit; do not relax it. On identical selected IDs the largest parameter-gradient difference is0.6851%, global L2~0.23%. Training remains dynamically routed. The training harness uses the global GPU group for auxiliary load gradients, separate from Gloo plan metadata, and serializes no process-group handles. Checkpoints explicitly retain training backend and consolidated single-device evaluation backend. Public-text seed runs and heldout evaluation are reported separately; performance is not convergence proof.
+
+**Timing scope.** Full BF16 routed layer plus rematerialized backward and FP32 DW zero/accumulation; stage3, G8, ring65536, T4096, E512/top10. Pure matched C2048 controls first; separately tuned Hybrid C4096 and Elastic C3840 are labeled. The legacy/Elastic global receive matrix forbids C4096 at EP64 due to int32 indexing. Pair AG/RS composition changes cross-domain traffic and is not a measurement of domain-only fusion.
+
+| Configuration | Backend | Source chunk | Complete routed-layer ms |
+| --- | --- | ---: | ---: |
+| qwen38-wlf-cross-ep64-iter39-elastic16-c2048 | elastic | 2048 | 203.010681 |
+| qwen38-wlf-cross-ep64-iter39-elastic38-c2048 | elastic | 2048 | 160.894861 |
+| qwen38-wlf-cross-ep64-iter39-elastic38-c3840 | elastic | 3840 | 171.938867 |
+| qwen38-wlf-cross-ep64-iter39-elastic38-early-c2048 | elastic | 2048 | 158.100024 |
+| qwen38-wlf-cross-ep64-iter39-elastic8-c2048 | elastic | 2048 | 267.476953 |
+| qwen38-wlf-cross-ep64-iter39-hybrid-c2048-attempt0 | excluded/incomplete | — | — |
+| qwen38-wlf-cross-ep64-iter39-hybrid-c2048-attempt1 | hybrid | 2048 | 110.592810 |
+| qwen38-wlf-cross-ep64-iter39-hybrid-c4096 | hybrid | 4096 | 103.742053 |
+| qwen38-wlf-cross-ep64-iter39-legacy38-c2048 | deepep | 2048 | 256.243555 |
+| qwen38-wlf-cross-ep64-iter39-legacy38-early-c2048 | deepep | 2048 | 255.487964 |
+
+Fastest accepted hybrid: ('hybrid', 103.74205322265625, 'qwen38-wlf-cross-ep64-iter39-hybrid-c4096', 4096).
+
+Fastest accepted elastic: ('elastic', 158.1000244140625, 'qwen38-wlf-cross-ep64-iter39-elastic38-early-c2048', 2048).
+
+Fastest accepted deepep: ('deepep', 255.4879638671875, 'qwen38-wlf-cross-ep64-iter39-legacy38-early-c2048', 2048).

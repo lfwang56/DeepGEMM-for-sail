@@ -75,6 +75,7 @@ def main():
     parser.add_argument("--chunk-tokens", type=int, default=256)
     parser.add_argument("--backend", choices=("collective", "collective_fused", "collective_both",
                                              "peer", "persistent", "both", "all", "deepep", "deepep_peer", "hybrid", "deepep_hybrid", "elastic", "elastic_vs_hybrid"), default="both")
+    parser.add_argument("--validate-configuration", action="store_true", help="Validate CLI configuration and exit without device initialization")
     parser.add_argument("--hybrid-domain-size", type=int)
     parser.add_argument("--elastic-hybrid-mode", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
@@ -156,7 +157,7 @@ def main():
     args = parser.parse_args()
     if args.process_group_backend == "gloo" and args.backend != "deepep":
         parser.error("Gloo metadata groups currently support only --backend deepep")
-    if args.ring_rows is not None and args.backend not in ("peer", "deepep", "deepep_peer"):
+    if args.ring_rows is not None and args.backend not in ("peer", "deepep", "deepep_peer", "hybrid", "deepep_hybrid", "elastic", "elastic_vs_hybrid"):
         parser.error("routed-row windows require peer or DeepEP transports")
     if args.block_m != 128 and (args.compute != "bf16" or args.backend in ("persistent", "collective_fused", "collective_both", "all")):
         parser.error("BM256 requires BF16 peer/DeepEP or a configured collective control")
@@ -175,6 +176,11 @@ def main():
     if min(args.tokens, args.hidden, args.intermediate, args.local_experts, args.topk,
            args.chunk_tokens, args.warmup, args.iterations, args.repeats) < 1:
         raise ValueError("dimensions and iteration counts must be positive")
+    if args.backend in ("hybrid", "deepep_hybrid", "elastic_vs_hybrid") and (args.hybrid_domain_size is None or args.hybrid_domain_size < 1):
+        parser.error("hybrid transports require a positive --hybrid-domain-size")
+    if args.validate_configuration:
+        print(json.dumps(dict(case="benchmark_configuration_valid", backend=args.backend, source_chunk_tokens=args.chunk_tokens)), flush=True)
+        return
     rank, size = int(os.environ.get("RANK", 0)), int(os.environ.get("WORLD_SIZE", 1))
     device = torch.device("cuda", int(os.environ.get("LOCAL_RANK", 0)))
     torch.cuda.set_device(device)
