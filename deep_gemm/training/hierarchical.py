@@ -4,7 +4,7 @@ Global ranks must be ordered as two contiguous equal physical peer domains.
 The caller owns group lifetime; create groups once and share them across layers.
 No token payload is transferred through the CPU metadata process group.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 import threading
 
@@ -27,11 +27,13 @@ class HierarchicalGroups:
     rank: int
     size: int
     _closed: bool = False
+    _devices: set = field(default_factory=set, repr=False)
 
     def close(self):
         """After all referencing plans and device work have finished."""
         if not self._closed:
-            torch.cuda.synchronize()
+            for device in sorted(self._devices):
+                torch.cuda.synchronize(device)
             dist.barrier(group=self.metadata)
             dist.destroy_process_group(self.pair)
             dist.destroy_process_group(self.domain)
@@ -130,6 +132,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self.inner_valid = allocate('valid', (), torch.int32).fill_(2*t)
         self.hybrid_domains, self.hybrid_domain_size = 2, groups.domain_size
         self.hybrid_pair_backend = str(dist.get_backend(groups.pair))
+        groups._devices.add(self.device.index)
 
     @property
     def activation_workspace_bytes(self):
@@ -158,15 +161,21 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             # Both domains must finish compiling before either enters pair PCCL.
             self._finish_preparation(error)
             self._prepared = False
-            for source, output in ((self.send_x, self.pair_x), (self.send_ids, self.pair_ids),
-                                   (self.send_scores, self.pair_scores)):
-                source.zero_()
-                dist.all_gather_into_tensor(output, source, group=self.groups.pair)
-            for source in (self.pair_x, self.pair_scores):
-                output = torch.empty_like(source[:self.max_tokens])
-                dist.reduce_scatter_tensor(output, source, group=self.groups.pair)
-            torch.cuda.current_stream(self.device).synchronize()
-            self._prepared = True
+            error = None
+            try:
+                for source, output in ((self.send_x, self.pair_x), (self.send_ids, self.pair_ids),
+                                       (self.send_scores, self.pair_scores)):
+                    source.zero_()
+                    dist.all_gather_into_tensor(output, source, group=self.groups.pair)
+                for source in (self.pair_x, self.pair_scores):
+                    output = torch.empty_like(source[:self.max_tokens])
+                    dist.reduce_scatter_tensor(output, source, group=self.groups.pair)
+                torch.cuda.current_stream(self.device).synchronize()
+            except Exception as exception:
+                error = exception
+            # A different pair may fail its communicator warmup. Agree globally
+            # before a successful pair can enter the domain-local peer barriers.
+            self._finish_preparation(error)
 
     def _dispatch_pair(self, x, ids, scores, valid_tokens):
         _launch(13, [x, ids, self.send_x, self.send_ids, valid_tokens, self.status],

@@ -1,8 +1,8 @@
-"""Every-element distributed DeepEP check without replicating expert weights.
+"""Every-element distributed hierarchical MoE check without replicated weights.
 
 Each rank independently evaluates its own experts on all source tokens in FP32.
 CPU/Gloo sums their output/input/score contributions. Weight gradients already
-include every source token and stay local. Token payloads use DeepEP on device.
+include every source token and stay local. Token payloads remain on device.
 """
 
 import argparse

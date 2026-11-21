@@ -17,6 +17,8 @@ parser.add_argument("--steps", type=int, default=2000)
 parser.add_argument("--peer-recipe", choices=("cache", "producer", "producer-input", "producer-expert", "producer-window"), default="cache")
 parser.add_argument("--source-chunk-tokens", type=int, default=128)
 parser.add_argument("--gemm-stages", type=int, choices=(2,3), default=2)
+parser.add_argument("--gemm-config", type=int, nargs=5,
+                    help="BN BK WM WN stages; overrides --gemm-stages")
 parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
 parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
 parser.add_argument("--fuse-fc1-activation", action="store_true")
@@ -47,13 +49,31 @@ source_paths = [root / p for p in (
     "csrc/apis/peer_moe_dag.hpp", "csrc/apis/peer_moe_training.hpp", "tests/train_moe_lm.py", "tests/evaluate_moe_lm.py",
     "tests/train_moe_lm_distributed.py")]
 source_paths.extend((root / "deep_gemm").glob("_C*.so"))
+# Editable installs expose vendor headers through directory symlinks. Hash the
+# same dereferenced tree that copytree freezes, including those dependencies.
+source_paths = sorted(set(source_paths) | {
+    Path(directory) / name
+    for directory, _, files in os.walk(root / 'deep_gemm', followlinks=True)
+    for name in files if Path(name).suffix in ('.py', '.cuh', '.hpp', '.h')
+})
 try:
     source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip()
+    dirty_files = subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
 except (subprocess.CalledProcessError, FileNotFoundError):
     source_commit = None  # The source archive still records every file hash.
-metadata = dict(commit=source_commit,
+    dirty_files = None
+metadata = dict(commit=source_commit, dirty_tracked_files=dirty_files,
                 files={str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths})
-(directory / "source_metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+lut_directory = os.environ.get('SAIL_DEEPGEMM_LUT_PATH')
+if lut_directory:
+    lut_directory = Path(lut_directory).resolve(strict=True)
+    lut_hashes = {str(p.relative_to(lut_directory)): hashlib.sha256(p.read_bytes()).hexdigest()
+                  for p in lut_directory.rglob('*') if p.is_file()}
+    if not lut_hashes:
+        raise RuntimeError('the requested runtime LUT directory is empty')
+    metadata['runtime_lut'] = dict(source_directory=str(lut_directory), files=lut_hashes)
+else:
+    metadata['runtime_lut'] = None
 library_parent = root
 if args.freeze_library:
     library_parent = directory / 'frozen-library'
@@ -64,11 +84,22 @@ if args.freeze_library:
             copied = library_parent / path.relative_to(root)
             if hashlib.sha256(copied.read_bytes()).hexdigest() != metadata['files'][str(path.relative_to(root))]:
                 raise RuntimeError('library changed while freezing: '+str(path))
+    if lut_directory:
+        frozen_lut = library_parent / 'runtime-lut'
+        shutil.copytree(lut_directory, frozen_lut)
+        if {str(p.relative_to(frozen_lut)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in frozen_lut.rglob('*') if p.is_file()} != lut_hashes:
+            raise RuntimeError('runtime LUT changed while freezing')
+        lut_directory = frozen_lut
+if lut_directory:
+    metadata['runtime_lut']['execution_directory'] = str(lut_directory)
+(directory / "source_metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+gemm_config = list(map(str, args.gemm_config or (256, 64, 64, 64, args.gemm_stages)))
 recipe = (["--dispatch-cache-n", "16", "--dispatch-cache-aiu", "--reuse-packed-dy",
-           "--gemm-config", "256", "64", "64", "64", str(args.gemm_stages)] if args.backend in ("peer", "hybrid") else [])
+           "--gemm-config", *gemm_config] if args.backend in ("peer", "hybrid") else [])
 if args.backend in ("peer", "hybrid") and args.peer_recipe in ("producer", "producer-input", "producer-expert", "producer-window"):
     recipe = ["--dispatch-producer", "--dispatch-producer-tiles", "1", "--reuse-packed-dy",
-              "--gemm-config", "256", "64", "64", "64", str(args.gemm_stages)]
+              "--gemm-config", *gemm_config]
     if args.peer_recipe in ("producer-input", "producer-expert", "producer-window"):
         recipe.extend(["--producer-input-aiu", "--producer-local-aiu", "--fuse-activation-backward"])
     if args.peer_recipe in ("producer-expert", "producer-window"):
@@ -99,6 +130,8 @@ for index, seed in enumerate((4827, 4891, 6113)):
     output = (directory / f"seed{seed}.log").open("w")
     environment = dict(os.environ, CUDA_VISIBLE_DEVICES=f"{2*index},{2*index+1}", OMP_NUM_THREADS="2",
                        OPENBLAS_NUM_THREADS="1", PYTHONPATH=str(library_parent)+":.:tests")
+    if lut_directory:
+        environment['SAIL_DEEPGEMM_LUT_PATH'] = str(lut_directory)
     child = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, env=environment)
     children.append((seed, child, output))
     print(json.dumps(dict(case="lm_seed_started", seed=seed, pid=child.pid,
