@@ -633,3 +633,57 @@ The future staged-return source is present but disabled in these controls. Its i
 ```
 - Separate DeepEP cross64Qwen test reached Bufferdispatch but rejected38CUs with default12RDMAQPs (internode_config_check requires2*QPs>=CUs). Allrankparents exited; no numerical success claim. Added explicit/automaticQP selection max(12,ceil(CUs/2)),38CUuses19QPs; true cross64retry pending. This changes RDMA queue setup, not the expert arithmetic or timing work.
 - Producer1three-seed public-text LM ran2000steps each with clean training/evaluation gates. Fullheldoutmeans:producer1.592712080623,priorNative1.585762516074 (+0.438%). Record exact difference; three seeds do not prove statistical equivalence or Qwen2.4T convergence. Fullrecords in outputs/qwen38/public-text-lm-producer-wlf.json.
+
+### Iteration8 diagnostic retry — EP8 same-host controls
+
+- Same physical node226, all8rankparents and every ownership gate clean in all3phases. H8192/I2048/E16/K10,T1024,C512,256/64/64/64/S2,5x20graphs; producer1+packedDYreuse.
+- **128totalexperts on8ranks**. This is a local-load optimization signal, not Qwen512expertEP32/64 validation. No DeepEP speedup denominator is measured here. Finaltargetcomparison remains pending.
+- Fullwork contract unchanged, no optimizer. Independent all-element Qwenexpert-dimension correctness had passed before this signal.
+
+```json
+[
+  {
+    "run": "qwen38-wlf-ep8-proxy-iter8-control-r1-attempt0",
+    "aiu": false,
+    "activation": false,
+    "ms": 44.648681640625,
+    "samples": [
+      44.667868041992186,
+      44.65000915527344,
+      44.6106689453125,
+      44.636297607421874,
+      44.648681640625
+    ],
+    "reduction_vs_control_percent": 0.0
+  },
+  {
+    "run": "qwen38-wlf-ep8-proxy-iter8-local-aiu-r1",
+    "aiu": true,
+    "activation": false,
+    "ms": 44.44956665039062,
+    "samples": [
+      44.48501281738281,
+      44.42349853515625,
+      44.4324951171875,
+      44.44956665039062,
+      44.46959228515625
+    ],
+    "reduction_vs_control_percent": 0.44595939436027354
+  },
+  {
+    "run": "qwen38-wlf-ep8-proxy-iter8-local-aiu-activation-r1",
+    "aiu": true,
+    "activation": true,
+    "ms": 44.25270080566406,
+    "samples": [
+      44.20602111816406,
+      44.25287780761719,
+      44.26948852539063,
+      44.19879150390625,
+      44.25270080566406
+    ],
+    "reduction_vs_control_percent": 0.8868813600100611
+  }
+]
+```
+- Best signal44.252700806ms; relative reduction0.8869%. Keep the controls explicit; do not extrapolate this delta to cross-hostEP32.
