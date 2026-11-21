@@ -495,7 +495,7 @@ __device__ __forceinline__ void fc1_swiglu_epilogue(
 
 namespace training {
 
-template <uint32_t Width, uint32_t BlockM, class Accum, class Coordinates>
+template <uint32_t Width, uint32_t BlockM, bool WarpReduction, class Accum, class Coordinates>
 __device__ __forceinline__ void replay_gradient_epilogue(
         const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
         const PeerReplayGradients& gradients, uint32_t row_base,
@@ -522,7 +522,9 @@ __device__ __forceinline__ void replay_gradient_epilogue(
         CUTLASS_PRAGMA_UNROLL
         for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
             const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
-            if (row >= valid_rows) continue;
+            if constexpr (!WarpReduction) {
+                if (row >= valid_rows) continue;
+            }
             float dot = 0.f;
             CUTLASS_PRAGMA_UNROLL
             for (int wn = 0; wn < cute::size<2>(coordinates); ++wn) {
@@ -540,11 +542,32 @@ __device__ __forceinline__ void replay_gradient_epilogue(
                     const float y1 = __bfloat162float(__float2bfloat16(y[1]));
                     dot += d0 * y0;
                     dot += d1 * y1;
-                    *reinterpret_cast<uint32_t*>(packed + uint64_t(row_base + row) * Width + column)
-                        = tix::cvt_rte_bf16x2_f32(d1 * row_scores[row], d0 * row_scores[row]);
+                    if (row < valid_rows)
+                        *reinterpret_cast<uint32_t*>(packed + uint64_t(row_base + row) * Width + column)
+                            = tix::cvt_rte_bf16x2_f32(d1 * row_scores[row], d0 * row_scores[row]);
                 }
             }
-            atomicAdd(row_dots + row, dot);
+            if constexpr (WarpReduction) {
+                // tc02 C-coordinate lane groups must remain closed under
+                // these XOR steps; strict dynamic/FP32 checks gate this mode.
+                // Keep every lane participating even for ragged M tails.
+                if (row >= valid_rows) dot = 0.f;
+                uint32_t leader = threadIdx.x & 31;
+                #pragma unroll
+                for (int delta = 1; delta < 32; delta <<= 1) {
+                    const auto other_row = __shfl_xor_sync(0xffffffffu, row, delta);
+                    const auto other_dot = __shfl_xor_sync(0xffffffffu, dot, delta);
+                    const auto other_leader = __shfl_xor_sync(0xffffffffu, leader, delta);
+                    if (other_row == row) {
+                        dot += other_dot;
+                        leader = min(leader, other_leader);
+                    }
+                }
+                if (row < valid_rows && (threadIdx.x & 31) == leader)
+                    atomicAdd(row_dots + row, dot);
+            } else {
+                atomicAdd(row_dots + row, dot);
+            }
         }
     }
     __syncthreads();
@@ -567,7 +590,7 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
           bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0,
-          bool ReplayGradients = false>
+          bool ReplayGradients = false, bool ReplayWarpReduction = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -998,7 +1021,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
 
 #if __HGGC_ARCH__ == 150
       if constexpr (ReplayGradients) {
-          training::replay_gradient_epilogue<SHAPE_N, BLOCK_M>(accum, tCcC, params,
+          training::replay_gradient_epilogue<SHAPE_N, BLOCK_M, ReplayWarpReduction>(accum, tCcC, params,
               gradients, deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block,
               blk_n_offset, blk_n_offset / BLOCK_N);
       } else if constexpr (Fc1Activation) {

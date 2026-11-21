@@ -461,6 +461,7 @@ def main():
                     "wgrad_overlap": plan.wgrad_overlap,
                     "dgrad_compute_cus": getattr(plan, "dgrad_compute_cus", None),
                     "fuse_replay_gradients": getattr(plan, "fuse_replay_gradients", None),
+                    "replay_gradient_warp_reduction": os.environ.get("DG_REPLAY_GRAD_WARP_REDUCTION", "0"),
                     "wgrad_compute_cus": os.environ.get("DG_BF16_WGRAD_COMPUTE_CUS", "0"),
                     "overlap_expert_dy": plan.overlap_expert_dy,
                     "wgrad_warp_map": os.environ.get("DG_BF16_WGRAD_WARP_MAP", "0"),

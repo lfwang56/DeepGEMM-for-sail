@@ -244,6 +244,7 @@ public:
         int poll_yield_every = 0;
         int poll_pause_cycles = 0;
         bool replay_gradients = false;
+        bool replay_warp_reduce = false;
         PeerReplayGradients gradients{};
     };
     static std::string name(const Args& args) {
@@ -265,6 +266,7 @@ public:
         if (args.poll_yield_every) name += fmt::format("_yield{}", args.poll_yield_every);
         if (args.poll_pause_cycles) name += fmt::format("_pause{}", args.poll_pause_cycles);
         if (args.replay_gradients) name += "_replay_grad";
+        if (args.replay_warp_reduce) name += "_warp_reduce";
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
         if (args.cache_return_addresses) name += "_cached_return";
@@ -302,7 +304,7 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.interleaved_gate_up ? "true" : "false",
        args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
        args.input_copy_ilp, args.external_input ? "true" : "false", args.poll_yield_every, args.poll_pause_cycles,
-       args.replay_gradients ? ", true" : "",
+       args.replay_gradients ? (args.replay_warp_reduce ? ", true, true" : ", true") : "",
        args.pipeline.ready ? ", pipeline"
                            : args.replay_gradients ? ", deep_gemm::training::PeerDispatchPipeline{}, 0, ~0u, gradients" : "");
     }
@@ -472,6 +474,9 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
         DG_HOST_ASSERT(g[4].scalar_type() == torch::kInt32 && g[4].numel() == 1);
         DG_HOST_ASSERT(destination_rows_per_rank % source_rows_per_rank == 0);
         args.replay_gradients = true;
+        const int warp_reduce = get_env<int>("DG_REPLAY_GRAD_WARP_REDUCTION", 0);
+        DG_HOST_ASSERT(warp_reduce == 0 || warp_reduce == 1);
+        args.replay_warp_reduce = warp_reduce;
         args.gradients = {
             reinterpret_cast<const uint64_t*>(g[0].data_ptr<int64_t>()),
             reinterpret_cast<const uint64_t*>(g[1].data_ptr<int64_t>()),
@@ -547,7 +552,19 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
             DG_HOST_ASSERT(pipeline_comm_ctas < args.launch_args.grid_dim.x);
     }
     if (get_env<int>("show_log")) {
+        int registers = 0, local_bytes = 0;
+#if HGGCRT_VERSION >= 12080 and defined(DG_JIT_USE_RUNTIME_API)
+        hggcFuncAttributes attributes;
+        DG_HGGC_RUNTIME_CHECK(hggcFuncGetAttributes(&attributes, runtime->kernel));
+        registers = attributes.numRegs;
+        local_bytes = static_cast<int>(attributes.localSizeBytes);
+#else
+        DG_HGGC_DRIVER_CHECK(lazy_hgFuncGetAttribute(&registers, HG_FUNC_ATTRIBUTE_NUM_REGS, runtime->kernel));
+        DG_HGGC_DRIVER_CHECK(lazy_hgFuncGetAttribute(&local_bytes, HG_FUNC_ATTRIBUTE_LOCAL_SIZE_BYTES, runtime->kernel));
+#endif
         std::printf("[PeerTraining_BF16:]\n");
+        std::printf("kernel:%s, vreg:%d, local_size_bytes:%d\n",
+                    PeerGemmRuntime::name(args).c_str(), registers, local_bytes);
         std::printf("groups:%d, n:%d, k:%d, read_peer:%d, write_peer:%d, capacity_rows:%d\n",
                     int(groups), int(n), int(k), read_peer, write_peer, int(m));
         std::printf("tile:[%d,%d,%d], warp:[%d,%d], stages:%d, threads:%d, "

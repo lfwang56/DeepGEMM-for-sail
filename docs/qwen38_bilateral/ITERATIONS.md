@@ -3493,3 +3493,38 @@ Fastest accepted deepep: {"name": "qwen38-wlf-ep32-iter43-replay-legacy-early", 
 Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter43-replay-elastic-early", "backend": "elastic", "ms": 105.71798095703124}
 
 Mixed kernel duration includes computation and peer traffic; it is not pure wire time. See iter43-replay-controls.json and iter43-replay-reference.json.
+
+
+## Iteration 44 — reduce replay score atomics inside each warp
+
+43's fused replay passed every numerical check but cost90.19ms versus83.10ms
+unfused control. Test DG_REPLAY_GRAD_WARP_REDUCTION0(default)/1: combine the
+tc02 C-coordinate lane contributions belonging to one row with uniform XOR
+shuffles, then one shared float atomic per row's lane group. All lanes keep
+participating for ragged M tails. C-coordinate groups being closed under XOR
+is a tested layout property, not a general hardware assumption. Kernel names
+append _warp_reduce and the explicit environment setting is recorded. The
+default0 source retains43's kernel call/ABI; no base GPU Params changes.
+Native debug output now exposes registers and stack bytes: both BM128/BM256
+new kernels use232registers/thread, no local stack, occupancy1; dynamic SMEM
+147456/196608bytes respectively, in addition to the epilogue static scratch.
+
+Strict serial/both-WG graph checks and independent fullH8192/I2048/E16/K10
+FP32 BM128/BM256 checks passed with unchanged43 thresholds. Actual32-rank and
+fullC4096 skew gate timing. The initial CPU build on215 observed foreign work
+and returned75; no timing was accepted there and no foreign process was stopped.
+Build/preflight repeated cleanly on219. Retain complete routed-layer FWD+remat
+BWD,DX/DW/dScore andFP32 DW zero, H8192/I2048/E512/top10,T4096/C4096,ring65536,
+MGroup/WGrad stage3,BF16. Only whole-host-clean four-node phases count.
+
+| Phase | Backend | Warp reduction | Complete layer ms |
+| --- | --- | --- | ---: |
+| qwen38-wlf-ep32-iter44-warp-control-attempt0 | peer | 0 | 83.176367 |
+| qwen38-wlf-ep32-iter44-warp-elastic-early | elastic | 0 | 105.676208 |
+| qwen38-wlf-ep32-iter44-warp-fused-old | peer | 0 | 90.149237 |
+| qwen38-wlf-ep32-iter44-warp-fused-warp | peer | 1 | 89.398389 |
+| qwen38-wlf-ep32-iter44-warp-fused-warp-overlap | peer | 1 | 93.930542 |
+
+Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter44-warp-control-attempt0", "backend": "peer", "ms": 83.1763671875}
+
+Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter44-warp-elastic-early", "backend": "elastic", "ms": 105.67620849609375}
