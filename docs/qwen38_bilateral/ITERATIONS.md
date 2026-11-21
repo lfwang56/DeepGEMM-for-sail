@@ -899,3 +899,87 @@ The future staged-return source is present but disabled in these controls. Its i
 ]
 ```
 - Bestobserved38CU/19QP: 87.662927246ms. Use this instead of the initial8CUcontrol for subsequent same-topology large-T comparisons. DomainEP32fusion cannot be directly extended across supernodes via peer pointers. Cross64largeshapecorrectness has already passed.
+
+### Iteration9 actualQwen EP32 controls
+
+- SameSN2fourhosts225/226/227/223 acrossall3cases,all32rankparents0+allgatesclean. Actual512routedexpertsH8192/I2048/E16/K10,T1024,C512,256/64/64/64/S2,5x20graphs. Producer1+packedDYreuse, activationbackwardfused. FullFWD+BWDrematerialization+FP32DW,nooptimizer/sharedexpert.
+- Paired installedDeepEPBuffer38CU,19QP,within-domainRDMA-ranks1,matchingGEMMrecipe. Source8317ff1a69,extensionbe4414...; no kernel/source changes during these phases.
+- Both new input staging variants and whole-FC1 case had passed independent fullgrad references and128dynamicroutegraphs before timing.
+
+```json
+[
+  {
+    "run": "qwen38-wlf-ep32-iter9-control-attempt0",
+    "producer_input_aiu": false,
+    "producer_local_aiu": true,
+    "activation": true,
+    "peer_ms": 44.44829406738281,
+    "deepep_ms": 47.06523132324219,
+    "samples": [
+      44.43448181152344,
+      44.487799072265624,
+      44.468630981445315,
+      44.44829406738281,
+      44.44420166015625
+    ],
+    "reduction_vs_deepep_percent": 5.560234555921662,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.727231844801281e-07,
+      "dw2": 2.489265682470432e-07,
+      "dscores": 1.4615960708397324e-07
+    },
+    "reduction_vs_peer_control_percent": 0.0
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter9-input-aiu",
+    "producer_input_aiu": true,
+    "producer_local_aiu": true,
+    "activation": true,
+    "peer_ms": 43.8803466796875,
+    "deepep_ms": 47.10782470703125,
+    "samples": [
+      43.85205078125,
+      43.894473266601565,
+      43.895574951171874,
+      43.8803466796875,
+      43.86514587402344
+    ],
+    "reduction_vs_deepep_percent": 6.8512567655496515,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.6842042188945925e-07,
+      "dw2": 2.735590953761857e-07,
+      "dscores": 1.4615960708397324e-07
+    },
+    "reduction_vs_peer_control_percent": 1.2777709462467035
+  },
+  {
+    "run": "qwen38-wlf-ep32-iter9-input-aiu-gather-consumer",
+    "producer_input_aiu": true,
+    "producer_local_aiu": false,
+    "activation": true,
+    "peer_ms": 44.086865234375,
+    "deepep_ms": 47.04383239746094,
+    "samples": [
+      44.05244445800781,
+      44.08622741699219,
+      44.086865234375,
+      44.09914855957031,
+      44.09129638671875
+    ],
+    "reduction_vs_deepep_percent": 6.285557558540944,
+    "errors": {
+      "y": 0.002692387904971838,
+      "dx": 0.0014900852693244815,
+      "dw1": 2.6045481149594707e-07,
+      "dw2": 2.680600061921723e-07,
+      "dscores": 1.4615960708397324e-07
+    },
+    "reduction_vs_peer_control_percent": 0.8131444425288681
+  }
+]
+```
+- Best43.880346680ms vspairedDeepEP47.107824707ms (6.8513%less time). Improvementoverpeercontrol1.2778%. Below3%materialthreshold; retain explicit controls and continue a distinct direction.
