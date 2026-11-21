@@ -23,6 +23,7 @@ enum class PeerOperation : int {
     SetRouteWindow,
     PrefetchRawDy,
     AssistInputTiles,
+    ReduceScorePartials,
 };
 
 struct PeerGemmParams {
@@ -47,6 +48,19 @@ struct PeerDispatchPipeline {
     uint64_t timeout_cycles = uint64_t(180) * 2'000'000'000;
     uint32_t signal_capacity = 0;
     bool serialize = false;
+};
+
+// Separate optional launch argument: preserve PeerGemmParams and old kernels.
+struct PeerReplayGradients {
+    const uint64_t* dy_peers = nullptr;
+    const uint64_t* score_peers = nullptr;
+    void* packed_dy = nullptr;
+    float* score_partials = nullptr;
+    uint32_t* status = nullptr;
+    uint32_t source_tokens = 0;
+    uint32_t topk = 0;
+    uint32_t num_ranks = 0;
+    uint32_t num_n_tiles = 0;
 };
 
 }  // namespace deep_gemm::training

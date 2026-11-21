@@ -154,6 +154,29 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                 }
             }
         }
+    } else if constexpr (Op == PeerOperation::ReduceScorePartials) {
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 2)[0]) * p.dim[5];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 4), 2);
+            return;
+        }
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+        const int64_t stride = p.dim[2] * p.dim[3];
+        for (int64_t row = block_index * 8 + warp; row < rows; row += int64_t(gridDim.x) * 8) {
+            const int route = peer_pointer<int32_t>(p, 1)[row];
+            const bool valid = route >= 0 && route < p.dim[4] * stride;
+            if (route >= p.dim[4] * stride && lane == 0)
+                atomicOr(peer_pointer<int32_t>(p, 4), 2);
+            float dot = 0.f;
+            if (valid)
+                for (int column = lane; column < p.dim[1]; column += 32)
+                    dot += peer_pointer<float>(p, 0)[row * p.dim[1] + column];
+            #pragma unroll
+            for (int delta = 16; delta; delta >>= 1)
+                dot += __shfl_down_sync(0xffffffffu, dot, delta);
+            if (valid && lane == 0)
+                reinterpret_cast<float*>(peer_pointer<uint64_t>(p, 3)[route / stride])[route % stride] = dot;
+        }
     } else if constexpr (Op == PeerOperation::ExpertLocalGradients) {
         // Keep replayed Y at its expert. Pull raw source DY and scores once
         // here, produce the mandatory BF16 packed DY and return one FP32

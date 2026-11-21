@@ -33,6 +33,7 @@ parser.add_argument('--fc1-activation-ablation', action='store_true')
 parser.add_argument('--gemm-geometry-ablation', type=int, nargs=5)
 parser.add_argument('--gemm-stages', type=int, choices=(2,3), default=2)
 parser.add_argument('--dgrad-compute-cus', type=int, default=0)
+parser.add_argument('--replay-gradients-ablation', action='store_true')
 args = parser.parse_args()
 if args.dag_backward_only:
     args.dag_ablation = args.dag_backward = True
@@ -53,7 +54,7 @@ dy = (torch.randn_like(x) * .1).bfloat16()
 w1 = (torch.randn(e, 2*i, h, device='cuda') * .02).bfloat16()
 w2 = (torch.randn(e, h, i, device='cuda') * .02).bfloat16()
 if (args.fc1_activation_ablation or args.dag_g8 or args.input_copy_ilp_ablation
-        or args.wgrad_overlap_ablation or args.dy_prefetch_ablation or args.input_assist_ablation is not None or args.gemm_geometry_ablation):
+        or args.wgrad_overlap_ablation or args.dy_prefetch_ablation or args.input_assist_ablation is not None or args.gemm_geometry_ablation or args.replay_gradients_ablation):
     w1 = to_g8_weight(w1)
 ids = torch.randn(t, e, device='cuda').topk(k, -1).indices.contiguous()
 original_ids = ids.clone()
@@ -138,6 +139,13 @@ with torch.cuda.stream(stream):
                            gate_up_layout='g8', fuse_fc1_activation=True, input_copy_ilp=8,
                            dispatch_producer=True, producer_input_aiu=True, producer_local_aiu=True)
         config = tuple(args.gemm_geometry_ablation) if cache and args.gemm_geometry_ablation else (256,64,64,64,args.gemm_stages)
+        if args.replay_gradients_ablation:
+            options = dict(expert_local_grad=True, ring_rows=1024, block_m=256,
+                           gate_up_layout='g8', fuse_fc1_activation=True,
+                           dispatch_producer=True, producer_input_aiu=True,
+                           producer_local_aiu=True, input_copy_ilp=8,
+                           wgrad_overlap=args.wgrad_overlap_ablation or 'none',
+                           fuse_replay_gradients=cache)
         options['dgrad_compute_cus'] = args.dgrad_compute_cus if cache else 0
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
@@ -182,14 +190,19 @@ with torch.cuda.stream(stream):
         for plan in plans:
             plan.check()
         exact = {name:torch.equal(outputs[0][index],outputs[1][index])
-                 for name,index in ((('y',0),('dx',1)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation or args.return_vector_ablation
+                 for name,index in ((('y',0),('dx',1)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation or args.return_vector_ablation or args.replay_gradients_ablation
                                     else (('y',0),('dx',1),('dscores',4)))}
         errors = {}
-        for name,index in ((('dw1',2),('dw2',3),('dscores',4)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation or args.return_vector_ablation
+        for name,index in ((('dw1',2),('dw2',3),('dscores',4)) if args.expert_local_grad_ablation or args.ring_rows_ablation is not None or args.block_m_ablation or args.return_vector_ablation or args.replay_gradients_ablation
                            else (('dw1',2),('dw2',3))):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        case = ('gemm_geometry_graph_equivalence' if args.gemm_geometry_ablation else
+        if args.replay_gradients_ablation:
+            # Y and weighted DY keep the same BF16 boundaries. FP32 dScore is
+            # reassociated into tile partials; bound both RMS and worst errors.
+            torch.testing.assert_close(outputs[1][4], outputs[0][4], rtol=2e-5, atol=2e-6)
+        case = ('replay_gradient_graph_equivalence' if args.replay_gradients_ablation else
+                'gemm_geometry_graph_equivalence' if args.gemm_geometry_ablation else
                 'input_assist_graph_equivalence' if args.input_assist_ablation is not None else
                 'dy_prefetch_graph_equivalence' if args.dy_prefetch_ablation else
                 'wgrad_stream_graph_equivalence' if args.wgrad_overlap_ablation else
@@ -209,7 +222,8 @@ with torch.cuda.stream(stream):
                                         overlap_expert_dy=p.overlap_expert_dy,inline_dispatch=p.inline_dispatch,
                                         dispatch_assist_ctas=p.dispatch_assist_ctas, dispatch_external=p.dispatch_external, dispatch_external_serial=p.dispatch_external_serial) for p in plans],
                           'exact':exact,'wgrad_relative_rms':errors,
-                          'source':('identical tensors and arithmetic; sliced producer versus inline tile owners with optional auxiliary input copy' if args.input_assist_ablation is not None else
+                          'source':('same BF16 Y/weighted-DY boundaries; fused replay peer-DY and two-stage FP32 dScore reduction' if args.replay_gradients_ablation else
+                                    'identical tensors and arithmetic; sliced producer versus inline tile owners with optional auxiliary input copy' if args.input_assist_ablation is not None else
                                     'identical tensors, GEMM tiles and dot reduction kernel; prefetched raw DY versus direct peer DY reads' if args.dy_prefetch_ablation else
                                     'identical tensors, GEMM tiles and accumulation order; auxiliary wgrad stream versus main stream' if args.wgrad_overlap_ablation else
                                     'identical tensors and GEMM tiles; only independent input vector loads per thread change' if args.input_copy_ilp_ablation else

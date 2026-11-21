@@ -493,6 +493,67 @@ __device__ __forceinline__ void fc1_swiglu_epilogue(
 
 }  // namespace training
 
+namespace training {
+
+template <uint32_t Width, uint32_t BlockM, class Accum, class Coordinates>
+__device__ __forceinline__ void replay_gradient_epilogue(
+        const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
+        const PeerReplayGradients& gradients, uint32_t row_base,
+        uint32_t valid_rows, uint32_t column_base, uint32_t n_tile) {
+    __shared__ __align__(16) uint64_t dy_addresses[BlockM];
+    __shared__ __align__(16) float row_scores[BlockM];
+    __shared__ __align__(16) float row_dots[BlockM];
+    const uint64_t stride = uint64_t(gradients.source_tokens) * gradients.topk;
+    for (uint32_t row = threadIdx.x; row < BlockM; row += blockDim.x) {
+        const int route = row < valid_rows ? params.permutation[row_base + row] : -1;
+        const bool valid = route >= 0 && uint64_t(route) < gradients.num_ranks * stride;
+        if (route >= 0 && !valid) atomicOr(gradients.status, 2u);
+        const uint32_t owner = valid ? route / stride : 0;
+        const uint64_t local = valid ? route % stride : 0;
+        dy_addresses[row] = valid ? gradients.dy_peers[owner]
+            + (local / gradients.topk) * Width * sizeof(__ppu_bfloat16) : 0;
+        row_scores[row] = valid ? reinterpret_cast<const float*>(gradients.score_peers[owner])[local] : 0.f;
+        row_dots[row] = 0.f;
+    }
+    __syncthreads();
+    auto* packed = reinterpret_cast<__ppu_bfloat16*>(gradients.packed_dy);
+    CUTLASS_PRAGMA_UNROLL
+    for (int wm = 0; wm < cute::size<1>(coordinates); ++wm) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
+            const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
+            if (row >= valid_rows) continue;
+            float dot = 0.f;
+            CUTLASS_PRAGMA_UNROLL
+            for (int wn = 0; wn < cute::size<2>(coordinates); ++wn) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int mn = 0; mn < cute::size<0, 2>(coordinates); ++mn) {
+                    const uint32_t column = column_base + cute::get<1>(coordinates(cute::make_coord(cute::_0{}, mm, mn), wm, wn));
+                    if (column >= Width) continue;
+                    const auto* y = cute::raw_pointer_cast(accum(cute::make_coord(cute::_, mm, mn), wm, wn).data());
+                    const uint32_t raw = dy_addresses[row]
+                        ? *reinterpret_cast<const uint32_t*>(dy_addresses[row] + uint64_t(column) * 2) : 0;
+                    const auto* dy = reinterpret_cast<const __ppu_bfloat16*>(&raw);
+                    const float d0 = __bfloat162float(dy[0]), d1 = __bfloat162float(dy[1]);
+                    // Match the existing BF16 Y and weighted-DY boundaries.
+                    const float y0 = __bfloat162float(__float2bfloat16(y[0]));
+                    const float y1 = __bfloat162float(__float2bfloat16(y[1]));
+                    dot += d0 * y0;
+                    dot += d1 * y1;
+                    *reinterpret_cast<uint32_t*>(packed + uint64_t(row_base + row) * Width + column)
+                        = tix::cvt_rte_bf16x2_f32(d1 * row_scores[row], d0 * row_scores[row]);
+                }
+            }
+            atomicAdd(row_dots + row, dot);
+        }
+    }
+    __syncthreads();
+    for (uint32_t row = threadIdx.x; row < valid_rows; row += blockDim.x)
+        gradients.score_partials[uint64_t(row_base + row) * gradients.num_n_tiles + n_tile] = row_dots[row];
+}
+
+}  // namespace training
+
 template <class _SrcT, GemmType kGemmType,
           uint32_t SHAPE_N, uint32_t SHAPE_K, uint32_t kNumGroups,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
@@ -505,12 +566,14 @@ template <class _SrcT, GemmType kGemmType,
           bool InlineDispatch = false, bool CacheReturn = false, bool FixedMTile = false,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
-          bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0>
+          bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0,
+          bool ReplayGradients = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
                            const uint32_t selected_m_tile = 0,
-                           const uint32_t selected_n_tile = ~0u) {
+                           const uint32_t selected_n_tile = ~0u,
+                           const training::PeerReplayGradients gradients = {}) {
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
     static_assert(!ExternalInput || (DispatchPipeline && !InlineDispatch && !PeerRead && !PeerWrite));
@@ -520,6 +583,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     static_assert(ReturnVectorBytes == 4 || ReturnVectorBytes == 8);
     static_assert(ReturnVectorBytes == 4 || (PeerWrite && !DispatchPipeline && !StagedReturn));
     static_assert(!Fc1Activation || (GateUpG8 && !ActivationBackward && !PeerWrite));
+    static_assert(!ReplayGradients || (!PeerRead && !PeerWrite && !ActivationBackward
+                                      && !Fc1Activation && !DispatchPipeline));
     if constexpr (DispatchPipeline) {
         static_assert(!PeerRead && !ActivationBackward && DispatchCacheN == 0
                       && FirstNTile == 0 && NumNTiles == 0);
@@ -932,7 +997,11 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
           "Accumulator count must have the same destination element count.");
 
 #if __HGGC_ARCH__ == 150
-      if constexpr (Fc1Activation) {
+      if constexpr (ReplayGradients) {
+          training::replay_gradient_epilogue<SHAPE_N, BLOCK_M>(accum, tCcC, params,
+              gradients, deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block,
+              blk_n_offset, blk_n_offset / BLOCK_N);
+      } else if constexpr (Fc1Activation) {
           training::fc1_swiglu_epilogue<SHAPE_N, KeepGateUp>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
       } else if constexpr (ActivationBackward) {

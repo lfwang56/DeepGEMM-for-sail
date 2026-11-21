@@ -3443,3 +3443,53 @@ Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter42-wgrad-peer-control-attem
 Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter42-wgrad-baseline-early-dy", "backend": "elastic", "ms": 105.70355224609375}
 
 Only a lower complete-layer latency is an optimization win. See iter42-wgrad-controls.json, iter42-wgrad-reference.json and iter42-compute-selection.json.
+
+
+## Iteration 43 — fuse raw-DY and score-dot work into replay FC2
+
+Reassessment after40–42 is in stall_review_before43.md. More kernel overlap had
+not beaten the83.17ms producer: even positive paired-budget overlap89.68 versus
+116.30ms stayed slower. Choose a different dataflow: during FC2 backward replay,
+load raw peer DY and source FP32 scores, round expert Y to the SAME BF16 boundary,
+produce the SAME BF16 weighted DY, and save per-N-tile FP32 score-dot partials.
+New pointwise peer opcode17 reduces these partials and returns FP32 dScore.
+This removes the expert-Y write/read and standalone H-wide DY weighting/dot pass.
+The existing packed-Y buffer remains allocated; this is a traffic change, not
+an advertised activation-allocation reduction. BM256 uses4KB aligned static
+shared scratch. Shared float atomicAdd was validated on the actual PPU.
+
+PeerGemmParams ABI stays unchanged: an optional separate PeerReplayGradients
+launch argument accompanies only the uniquely named _replay_grad kernels. Old
+false-mode source/API calls remain compatible; opcode17 avoids the old13 cache.
+Replay gradients require routed bilateral expert-local gradients, packed DY,
+fused activation backward and an explicit FC2 tile; DAG, DY prefetch and staged
+return combinations are rejected. Kernel names expose the mixed peer-DY path.
+
+Two graph cases(serial/both-WG) passed changing inputs, masks, ragged valid counts,
+duplicate/skew and zero-score cases. Y/DX exact and original DW RMS<1e-5 remain.
+The new FP32 score reduction is reassociated: BEFORE testing, its graph contract
+was RMS<1e-5 plus elementwise rtol2e-5/atol2e-6. Other ablations retain their
+previous exact score contract. Independent every-element fullH8192/I2048/E16/K10
+FP32 checks passed BM128 andBM256 with unchanged .04 thresholds. Actual32-rank
+balanced/BM128/overlap and fullC4096 skew checks gate timing. No failed or incomplete
+host receipt contributes a latency. All phases retain complete remat, allDX/DW/
+dScore and FP32 DW zero/accumulation, BF16,H8192/I2048/E512/top10,T4096/C4096,
+ring65536,G8 and identical MGroup/WGrad stage3 tuning opportunity for DeepEP.
+
+| Phase | Backend | Replay-gradient fusion | Complete layer ms |
+| --- | --- | --- | ---: |
+| qwen38-wlf-ep32-iter43-replay-control-attempt0 | peer | False | 83.099426 |
+| qwen38-wlf-ep32-iter43-replay-elastic-early | elastic | None | 105.717981 |
+| qwen38-wlf-ep32-iter43-replay-fused | peer | True | 90.186145 |
+| qwen38-wlf-ep32-iter43-replay-fused-bm128 | peer | True | 118.545337 |
+| qwen38-wlf-ep32-iter43-replay-fused-overlap | peer | True | 94.672382 |
+| qwen38-wlf-ep32-iter43-replay-fused-w16-d23 | peer | True | 96.613776 |
+| qwen38-wlf-ep32-iter43-replay-legacy-early | deepep | None | 107.871680 |
+
+Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter43-replay-control-attempt0", "backend": "peer", "ms": 83.09942626953125}
+
+Fastest accepted deepep: {"name": "qwen38-wlf-ep32-iter43-replay-legacy-early", "backend": "deepep", "ms": 107.8716796875}
+
+Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter43-replay-elastic-early", "backend": "elastic", "ms": 105.71798095703124}
+
+Mixed kernel duration includes computation and peer traffic; it is not pure wire time. See iter43-replay-controls.json and iter43-replay-reference.json.

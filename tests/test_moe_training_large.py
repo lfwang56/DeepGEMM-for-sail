@@ -70,6 +70,7 @@ def main():
     parser.add_argument("--input-inline", action="store_true")
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--dgrad-compute-cus", type=int, default=0)
+    parser.add_argument("--fuse-replay-gradients", action="store_true")
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
@@ -138,6 +139,7 @@ def main():
         extra["dispatch_external"] = options.dispatch_external
         extra["dispatch_external_serial"] = options.serialize_external_dispatch
         extra["dgrad_compute_cus"] = options.dgrad_compute_cus
+        extra["fuse_replay_gradients"] = options.fuse_replay_gradients
         if options.input_inline or options.dispatch_assist_ctas:
             extra.update(inline_dispatch=not options.dispatch_external, dispatch_producer=False, producer_input_aiu=False, producer_local_aiu=False)
         extra["ffn_fusion"] = options.ffn_fusion
