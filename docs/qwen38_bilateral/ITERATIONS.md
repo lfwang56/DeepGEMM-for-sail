@@ -93,3 +93,7 @@ all32 ranks, but .227 reported foreign GPU work during the phase (gate75).
 `qwen38-wlf-ep32-cache0-control-attempt0/` is excluded. The queued cache8/16
 controls were not launched. Retry on a different supernode after fresh checks.
 
+The SN1 retry (.219/.220/.213/.215) also completed all32 ranks, but .213
+reported foreign GPU work (gate75). `qwen38-wlf-ep32-cache0-control-sn1-attempt0/`
+is excluded. Next selection prioritizes .215/.216 ahead of the contested .213.
+
