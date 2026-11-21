@@ -54,6 +54,7 @@ class PeerMoEPlan(NativeMoEPlan):
         if not isinstance(staged_return, bool):
             raise TypeError("staged_return must be bool")
         self.staged_return = staged_return and fuse_return
+        self.staged_return_row_padding = 16 if self.staged_return else 0
         if not isinstance(reuse_packed_dy, bool):
             raise TypeError("reuse_packed_dy must be bool")
         if reuse_packed_dy and self.transport != "peer":

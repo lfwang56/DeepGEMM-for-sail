@@ -192,3 +192,12 @@ The future staged-return source is present but disabled in these controls. Its i
 - Seeds4827/4891/6113 each trained2000steps, EP2, same parameter initialization and public text. Every checkpoint evaluated on all111539held-out successors. Seed4891 nativeCE1.5826763200, peerCE1.5837014101. All training retries/evaluation gates normal.
 - The means differ by about0.00004nats, far below seed variation; no quality improvement claim. Frozen-route preflight did not freeze real training. Keep the original seed4891unfrozen oracle failures and exact branch discrepancy alongside the successful branch-matched checks.
 - Trainer/evaluator now retain and reconstruct actual plan options. Standalone JSON evidence: outputs/qwen38/public-text-lm-wlf.json in the local delivery workspace. This validates iteration3small-model behavior; it does not substitute for final kernel correctness and performance gates.
+
+### Iteration 5 — aligned padding in shared return staging
+
+- Direction: add16BF16elements to the TSM row pitch (BN+16), preserving16-byte vector alignment and changing adjacent fragment-row bank offsets. Remote return remains inside GEMM. Record peer_staged_return_row_padding=16.
+- Correctness: BN64/128/256 unit passed115.516s; both full Qwen expert-dimension references passed, worstRMS0.00494, clean gates.
+- Paired Qwen EP32T1024 SN1, all32parents/gatespassed: DeepEP38CUs46.9747131ms; padded-staged peer49.2741119ms, samples [49.2392700,49.2922302,49.2727478,49.2808899,49.2741119].
+- Result: no meaningful change from unpadded49.2693939ms; still slower than the original unstaged iteration3. Do not recommend staged return. Padding did not explain the loss in this workload.
+- Stall audit: iterations3/4/5 produced no >=3% improvement over the best fusion result. Re-profile/review and primary-source search are required before iteration6; there is no physical-floor evidence and viable scheduling/geometry directions remain.
+- Actual occupancy inspection (not a performance comparison): BN128/BK64/WM32/WN64/S2 supports3residentblocks/CU, but the cached launcher caps its grid at2*39=78. BN128/BK128/WM64/WN64/S2 supports only1block/CU. This motivates a tested private-cache concurrency option and role-specific FC1 tiles; it does not by itself establish a speedup.

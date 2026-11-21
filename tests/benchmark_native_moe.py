@@ -273,6 +273,7 @@ def main():
                     "peer_dispatch_cache_n": getattr(plan, "dispatch_cache_n", None) if backend == "peer" else None,
                     "peer_dispatch_cache_aiu": getattr(plan, "dispatch_cache_aiu", None) if backend == "peer" else None,
                     "peer_staged_return": getattr(plan, "staged_return", None) if backend == "peer" else None,
+                    "peer_staged_return_row_padding": getattr(plan, "staged_return_row_padding", None) if backend == "peer" else None,
                     "peer_reuse_packed_dy": getattr(plan, "reuse_packed_dy", None) if backend == "peer" else None,
                     "deepep_version": getattr(plan, "deep_ep_version", None),
                     "deepep_backend": getattr(plan, "deep_ep_backend", None),

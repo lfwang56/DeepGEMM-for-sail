@@ -133,6 +133,9 @@ template <typename DstT, uint32_t BM, uint32_t BN, uint32_t SHAPE_N, bool Cohere
 __device__ __forceinline__ void scatter_peer_output_staged(
         const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
         DstT* stage, uint32_t row_base, uint32_t valid_rows, uint32_t column_base) {
+    // Keep adjacent fragment rows at different shared-memory bank offsets.
+    // The pitch stays 128-bit aligned for the subsequent vector reads.
+    constexpr uint32_t StageN = BN + 16;
     // All MMA readers must finish before reusing the input pipeline storage.
     __syncthreads();
     CUTLASS_PRAGMA_UNROLL
@@ -147,7 +150,7 @@ __device__ __forceinline__ void scatter_peer_output_staged(
                 for (int mn = 0; mn < cute::size<0, 2>(coordinates); ++mn) {
                     const uint32_t col = cute::get<1>(coordinates(cute::make_coord(cute::_0{}, mm, mn), wm, wn));
                     const auto* values = cute::raw_pointer_cast(accum(cute::make_coord(cute::_, mm, mn), wm, wn).data());
-                    *reinterpret_cast<uint32_t*>(stage + uint64_t(row) * BN + col)
+                    *reinterpret_cast<uint32_t*>(stage + uint64_t(row) * StageN + col)
                         = tix::cvt_rte_bf16x2_f32(values[1], values[0]);
                 }
             }
@@ -167,7 +170,8 @@ __device__ __forceinline__ void scatter_peer_output_staged(
         if (rank >= params.num_ranks) continue;
         auto* destination = reinterpret_cast<DstT*>(__ldg(params.destination_peers + rank));
         destination += uint64_t(uint32_t(route) % params.destination_rows_per_rank) * SHAPE_N + column_base + col;
-        *reinterpret_cast<uint4*>(destination) = reinterpret_cast<const uint4*>(stage)[index];
+        *reinterpret_cast<uint4*>(destination) = reinterpret_cast<const uint4*>(stage)[
+            uint64_t(row) * (StageN / 8) + index % vectors];
     }
     __syncthreads();
 }
@@ -527,7 +531,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params) {
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
       } else if constexpr (PeerWrite) {
           if constexpr (StagedReturn) {
-              static_assert(BLOCK_M * BLOCK_N * sizeof(DstT)
+              static_assert(BLOCK_M * (BLOCK_N + 16) * sizeof(DstT)
                   <= kSmemASize + smem_b_size(sizeof(SrcT), kNumStages, BLOCK_N, BLOCK_K));
               training::scatter_peer_output_staged<DstT, BLOCK_M, BLOCK_N, SHAPE_N, Coherent>(
                   accum, tCcC, params, reinterpret_cast<DstT*>(smem_buffer),
