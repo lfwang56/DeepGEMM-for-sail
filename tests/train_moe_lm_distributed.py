@@ -169,6 +169,7 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                                     dag_fusion=options.dag_fusion, dag_backward=options.dag_backward,
                                     dag_direct_return=options.dag_direct_return,
                                     dag_shared_pool=options.dag_fusion or options.dag_backward,
+                                    input_copy_ilp=options.input_copy_ilp,
                                     dispatch_cache_n=options.dispatch_cache_n,
                                     dispatch_producer=options.dispatch_producer,
                                     producer_local_aiu=options.producer_local_aiu,
@@ -229,6 +230,7 @@ def main():
     parser.add_argument("--dag-fusion", action="store_true")
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
+    parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
@@ -244,6 +246,8 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
+    if options.input_copy_ilp != 1 and options.backend != "peer":
+        parser.error("input copy ILP requires --backend peer")
     if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend != "peer":
         parser.error("DAG options require --backend peer")
     if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.expert_local_grad or options.ring_rows is not None) and options.backend != "peer":
@@ -279,6 +283,7 @@ def main():
                             dag_fusion=options.dag_fusion, dag_backward=options.dag_backward,
                             dag_direct_return=options.dag_direct_return,
                             dag_shared_pool=options.dag_fusion or options.dag_backward,
+                            input_copy_ilp=options.input_copy_ilp,
                             expert_local_grad=options.expert_local_grad,
                             ring_rows=options.ring_rows,
                             dispatch_producer_tiles=options.dispatch_producer_tiles,

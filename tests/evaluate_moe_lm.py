@@ -39,7 +39,7 @@ def evaluate_checkpoint(path, data_path):
         for key in ("dispatch_cache_n", "dispatch_cache_ctas", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return",
                     "dispatch_producer", "dispatch_producer_tiles", "producer_local_aiu", "producer_input_aiu",
                     "fuse_activation_backward", "fuse_fc1_activation", "expert_local_grad", "ring_rows",
-                    "dag_fusion", "dag_backward", "dag_direct_return", "dag_shared_pool"):
+                    "dag_fusion", "dag_backward", "dag_direct_return", "dag_shared_pool", "input_copy_ilp"):
             if key in training_options:
                 backend_options[key] = training_options[key]
         if training_options.get("gemm_config"):
