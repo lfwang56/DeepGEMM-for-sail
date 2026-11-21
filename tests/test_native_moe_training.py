@@ -187,6 +187,20 @@ class NativeTests(unittest.TestCase):
         y.backward(dy)
         check((y, x.grad, w1.grad, w2.grad, scores.grad), expected(x, ids, scores, w1, w2, dy), self.compute)
 
+    def test_peer_pointwise_switches(self):
+        if self.plan_class is not PeerMoEPlan:
+            self.skipTest("peer active-row and local-gradient controls")
+        for active, fused in ((False, False), (False, True), (True, False), (True, True)):
+            x, ids, scores, w1, w2, dy = self.inputs()
+            ids.fill_(1)
+            ids[3].fill_(-1)
+            valid = torch.full((), 5, device="cuda", dtype=torch.int32)
+            plan = self.plan(active_rows=active, fuse_local_grad=fused)
+            y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
+            y.backward(dy)
+            check((y, x.grad, w1.grad, w2.grad, scores.grad),
+                  expected(x, ids, scores, w1, w2, dy, 5), self.compute)
+
     def test_graph_replay_updated_parameters(self):
         x, ids, scores, w1, w2, dy = self.inputs()
         w1, w2 = w1.detach().float().requires_grad_(), w2.detach().float().requires_grad_()

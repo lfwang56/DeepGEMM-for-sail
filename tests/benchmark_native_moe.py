@@ -69,6 +69,10 @@ def main():
     parser.add_argument("--separate-fp8-quantization", action="store_true")
     parser.add_argument("--fp8-ablation", action="store_true")
     parser.add_argument("--peer-ablation", action="store_true")
+    parser.add_argument("--no-fuse-dispatch", action="store_true")
+    parser.add_argument("--no-fuse-return", action="store_true")
+    parser.add_argument("--capacity-pointwise", action="store_true")
+    parser.add_argument("--separate-local-grad", action="store_true")
     args = parser.parse_args()
     if args.collective_gemm_config and (args.compute != "bf16" or args.m_schedule != "nopad"):
         parser.error("explicit collective tiles require BF16 nopad compute")
@@ -126,6 +130,10 @@ def main():
                 plan_class = ConfiguredCollectivePlan
             options = {"gemm_configs": {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}}
             options = options if backend == "peer" and args.gemm_config else {}
+            if backend == "peer":
+                options.update(fuse_dispatch=not args.no_fuse_dispatch, fuse_return=not args.no_fuse_return,
+                               active_rows=not args.capacity_pointwise,
+                               fuse_local_grad=not args.separate_local_grad)
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend == "collective":
                 options = {"m_schedule": args.m_schedule,
@@ -201,6 +209,8 @@ def main():
                                                        if backend == "collective" and args.compute == "fp8" else None),
                     "peer_fuse_dispatch": getattr(plan, "fuse_dispatch", None),
                     "peer_fuse_return": getattr(plan, "fuse_return", None),
+                    "peer_active_rows": getattr(plan, "active_rows", None) if backend == "peer" else None,
+                    "peer_fuse_local_grad": getattr(plan, "fuse_local_grad", None) if backend == "peer" else None,
                     "persistent_ctas": getattr(plan, "num_ctas", None),
                     "persistent_resident_blocks_per_cu": getattr(plan, "resident_blocks_per_cu", None),
                     "warmup": args.warmup, "iterations": args.iterations, "repeats": args.repeats,

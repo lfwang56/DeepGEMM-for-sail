@@ -23,12 +23,16 @@ class PeerMoEPlan(NativeMoEPlan):
 
     transport = "peer"
 
-    def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True, **kwargs):
+    def __init__(self, *args, gemm_configs=None, fuse_dispatch=True, fuse_return=True,
+                 active_rows=True, fuse_local_grad=True, **kwargs):
         if kwargs.get("compute", "bf16") != "bf16":
             raise ValueError("peer-fused GEMMs currently use BF16 compute")
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
             raise TypeError("peer fusion switches must be bool")
         self.fuse_dispatch, self.fuse_return = fuse_dispatch, fuse_return
+        if not isinstance(active_rows, bool) or not isinstance(fuse_local_grad, bool):
+            raise TypeError("peer pointwise switches must be bool")
+        self.active_rows, self.fuse_local_grad = active_rows, fuse_local_grad
         super().__init__(*args, **kwargs)
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
@@ -141,6 +145,14 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.rows, self.h, self.chunk_tokens, self.k, self.size], True)
         if not self.fuse_dispatch:
             self._stage_input(compile_only=True)
+        if self.active_rows:
+            self._activation(compile_only=True)
+            self._activation(backward=True, compile_only=True)
+            self._pack_dy(compile_only=True)
+        if self.fuse_local_grad:
+            empty_dy = torch.empty((0, self.h), device=self.device, dtype=torch.bfloat16)
+            empty_scores = torch.empty((0, self.k), device=self.device, dtype=torch.float32)
+            self._local_gradients(empty_dy, empty_scores, empty_scores, 0, compile_only=True)
         self._peer_gemm(self.packed_x, w1, self.gate_up,
                         self.source_rows if self.fuse_dispatch else self.identity_rows,
                         read=self.fuse_dispatch, compile_only=True, role="fc1")
@@ -181,7 +193,7 @@ class PeerMoEPlan(NativeMoEPlan):
         self._peer_gemm(self.packed_x, w1, self.gate_up,
                         self.source_rows if self.fuse_dispatch else self.identity_rows,
                         read=self.fuse_dispatch, pack_input=pack_input and self.fuse_dispatch, role="fc1")
-        _launch(7, [self.gate_up, self.hidden], [self.rows, self.i])
+        self._activation()
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows, write=self.fuse_return)
         if not self.fuse_return:
             self._scatter_peer("local_values")
@@ -194,6 +206,25 @@ class PeerMoEPlan(NativeMoEPlan):
     def _stage_input(self, compile_only=False):
         _peer(7, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size], compile_only)
+
+    def _activation(self, backward=False, compile_only=False):
+        if self.active_rows:
+            _peer(9 if backward else 8, [self.gate_up, self.hidden, self.num_blocks, self.status],
+                  [self.rows, self.i], compile_only)
+        elif not compile_only:
+            tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
+            _launch(8 if backward else 7, tensors, [self.rows, self.i])
+
+    def _pack_dy(self, compile_only=False):
+        tensors = [self.pointer_tables["local_dy"], self.permutation, self.packed_dy, self.status]
+        if self.active_rows:
+            tensors.append(self.num_blocks)
+        _peer(7 if self.active_rows else 4, tensors,
+              [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size], compile_only)
+
+    def _local_gradients(self, dy, scores, dscores, start, compile_only=False):
+        _peer(10, [self.local_values, dy, scores, dscores, self.local_dy],
+              [self.chunk_tokens, self.h, self.k, dy.shape[0], start], compile_only)
 
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
@@ -220,16 +251,18 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._route_chunk(x, ids, valid_tokens, start)
                 self._chunk_forward(w1, w2, pack_input=True)
                 dims = [self.chunk_tokens, self.h, self.k, x.shape[0], start]
-                _launch(12, [self.local_values, dy, dscores], dims)
-                _launch(11, [dy, scores, self.local_dy], dims)
+                if self.fuse_local_grad:
+                    self._local_gradients(dy, scores, dscores, start)
+                else:
+                    _launch(12, [self.local_values, dy, dscores], dims)
+                    _launch(11, [dy, scores, self.local_dy], dims)
                 self._barrier(start * 4 + 2)
-                _peer(4, [self.pointer_tables["local_dy"], self.permutation, self.packed_dy, self.status],
-                      [self.rows, self.h, self.chunk_tokens * self.k, 1, self.size])
+                self._pack_dy()
                 dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
                 self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
                                 self.permutation if self.fuse_dispatch else self.identity_rows,
                                 read=self.fuse_dispatch, source="local_dy", role="dhidden")
-                _launch(8, [self.gate_up, self.hidden, self.gate_up], [self.rows, self.i])
+                self._activation(backward=True)
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
                                 write=self.fuse_return, destination="local_dx")

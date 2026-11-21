@@ -105,6 +105,55 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
             peer_pointer<__ppu_bfloat16>(p, 2)[position] = value;
         }
+    } else if constexpr (Op == PeerOperation::ActivationActive || Op == PeerOperation::ActivationBackwardActive) {
+        // Both matrices keep their physical worst-skew capacity. Only rows
+        // referenced by the GPU work list are consumed by the expert GEMMs.
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 2)[0]) * 128;
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
+        } else for (int64_t position = index; position < rows * p.dim[1];
+                    position += int64_t(gridDim.x) * blockDim.x) {
+            const int64_t offset = (position / p.dim[1]) * 2 * p.dim[1] + position % p.dim[1];
+            auto* gate_up = peer_pointer<__ppu_bfloat16>(p, 0);
+            auto* hidden = peer_pointer<__ppu_bfloat16>(p, 1);
+            const float gate = __bfloat162float(gate_up[offset]);
+            const float up = __bfloat162float(gate_up[offset + p.dim[1]]);
+            const float sigmoid = 1.f / (1.f + expf(-gate));
+            const float silu = gate * sigmoid;
+            if constexpr (Op == PeerOperation::ActivationActive) {
+                hidden[position] = __float2bfloat16(silu * up);
+            } else {
+                const float dh = __bfloat162float(hidden[position]);
+                gate_up[offset] = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
+                gate_up[offset + p.dim[1]] = __float2bfloat16(dh * silu);
+            }
+        }
+    } else if constexpr (Op == PeerOperation::LocalGradients) {
+        // One CTA owns one source route: reuse dy for the score dot product
+        // and weighted route gradient, preserving the BF16 rounding boundary.
+        // local values, dy, scores, dscores, local dy. dims C,H,K,T,start.
+        const int64_t route = block_index;
+        const int64_t token = route / p.dim[2] + p.dim[4];
+        const bool valid = token < p.dim[3];
+        const float score = valid ? peer_pointer<float>(p, 2)[token * p.dim[2] + route % p.dim[2]] : 0.f;
+        float sum = 0.f;
+        for (int64_t column = threadIdx.x; column < p.dim[1]; column += blockDim.x) {
+            const float dy = valid ? __bfloat162float(peer_pointer<__ppu_bfloat16>(p, 1)[token * p.dim[1] + column]) : 0.f;
+            peer_pointer<__ppu_bfloat16>(p, 4)[route * p.dim[1] + column] = __float2bfloat16(dy * score);
+            if (valid) sum += __bfloat162float(peer_pointer<__ppu_bfloat16>(p, 0)[route * p.dim[1] + column]) * dy;
+        }
+        #pragma unroll
+        for (int delta = 16; delta; delta >>= 1) sum += __shfl_down_sync(0xffffffffu, sum, delta);
+        __shared__ float sums[8];
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+        if (lane == 0) sums[warp] = sum;
+        __syncthreads();
+        if (warp == 0) {
+            sum = lane < blockDim.x / 32 ? sums[lane] : 0.f;
+            #pragma unroll
+            for (int delta = 16; delta; delta >>= 1) sum += __shfl_down_sync(0xffffffffu, sum, delta);
+            if (lane == 0 && valid) peer_pointer<float>(p, 3)[token * p.dim[2] + route % p.dim[2]] = sum;
+        }
     } else if constexpr (Op == PeerOperation::Scatter) {
         // Packed result, permutation, destination pointers, status, work count.
         // dims: capacity, H, destination rows per rank, P.

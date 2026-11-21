@@ -38,7 +38,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PackActive));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::LocalGradients));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -111,6 +111,22 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             expect(2, dims[0] * dims[1], bf); expect(3, 1, i32); expect(4, 1, i32);
             work = dims[0] * dims[1];
             blocks = std::min((work + 255) / 256, int64_t(get_num_sms()) * 2);
+            break;
+        case PeerOperation::ActivationActive:
+        case PeerOperation::ActivationBackwardActive:
+            schema(4, 2);
+            DG_HOST_ASSERT(dims[0] >= 0 && dims[1] > 0);
+            expect(0, dims[0] * 2 * dims[1], bf); expect(1, dims[0] * dims[1], bf);
+            expect(2, 1, i32); expect(3, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
+            break;
+        case PeerOperation::LocalGradients:
+            schema(5, 5);
+            DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[2] > 0);
+            expect(0, dims[0] * dims[2] * dims[1], bf);
+            expect(1, dims[3] * dims[1], bf); expect(2, dims[3] * dims[2], torch::kFloat);
+            expect(3, dims[3] * dims[2], torch::kFloat); expect(4, dims[0] * dims[2] * dims[1], bf);
+            blocks = dims[0] * dims[2];
             break;
     }
     if (blocks < 0) blocks = (work + 255) / 256;
