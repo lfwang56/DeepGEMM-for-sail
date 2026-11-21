@@ -113,7 +113,9 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             break;
         case Operation::Activation:
         case Operation::ActivationBackward:
-            schema(static_cast<Operation>(operation) == Operation::Activation ? 2 : 3, 2);
+            DG_HOST_ASSERT(dims.size() == 2 || dims.size() == 3);
+            schema(static_cast<Operation>(operation) == Operation::Activation ? 2 : 3, dims.size());
+            if (dims.size() == 3) DG_HOST_ASSERT(dims[2] == 8);
             DG_HOST_ASSERT(dims[1] > 0);
             expect(0, dims[0] * dims[1] * 2, bf); expect(1, dims[0] * dims[1], bf);
             if (tensors.size() == 3) expect(2, dims[0] * dims[1] * 2, bf);
@@ -172,7 +174,9 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             work = dims[1] * std::max(dims[2], dims[3]);
             break;
         case Operation::ActivationDeviceRows:
-            schema(4, 3);
+            DG_HOST_ASSERT(dims.size() == 3 || dims.size() == 4);
+            schema(4, dims.size());
+            if (dims.size() == 4) DG_HOST_ASSERT(dims[3] == 8);
             DG_HOST_ASSERT(dims[1] > 0 && dims[2] <= 1);
             expect(0, dims[0] * 2 * dims[1], bf); expect(1, dims[0] * dims[1], bf);
             expect(2, 1, i32); expect(3, 1, i32);

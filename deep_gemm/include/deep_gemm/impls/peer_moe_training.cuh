@@ -189,11 +189,14 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             if (index == 0) atomicOr(peer_pointer<int32_t>(p, 3), 2);
         } else for (int64_t position = index; position < rows * p.dim[1];
                     position += int64_t(gridDim.x) * blockDim.x) {
-            const int64_t offset = (position / p.dim[1]) * 2 * p.dim[1] + position % p.dim[1];
+            const int64_t column = position % p.dim[1];
+            const int64_t offset = (position / p.dim[1]) * 2 * p.dim[1]
+                + (p.dim[3] == 8 ? column / 8 * 16 + column % 8 : column);
+            const int64_t up_step = p.dim[3] == 8 ? 8 : p.dim[1];
             auto* gate_up = peer_pointer<__ppu_bfloat16>(p, 0);
             auto* hidden = peer_pointer<__ppu_bfloat16>(p, 1);
             const float gate = __bfloat162float(gate_up[offset]);
-            const float up = __bfloat162float(gate_up[offset + p.dim[1]]);
+            const float up = __bfloat162float(gate_up[offset + up_step]);
             const float sigmoid = 1.f / (1.f + expf(-gate));
             const float silu = gate * sigmoid;
             if constexpr (Op == PeerOperation::ActivationActive) {
@@ -201,7 +204,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             } else {
                 const float dh = __bfloat162float(hidden[position]);
                 gate_up[offset] = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
-                gate_up[offset + p.dim[1]] = __float2bfloat16(dh * silu);
+                gate_up[offset + up_step] = __float2bfloat16(dh * silu);
             }
         }
     } else if constexpr (Op == PeerOperation::LocalGradients) {

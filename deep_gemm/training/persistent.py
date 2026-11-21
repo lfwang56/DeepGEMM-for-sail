@@ -18,6 +18,8 @@ class PersistentMoEPlan(PeerMoEPlan):
     transport = "persistent_peer"
 
     def __init__(self, *args, num_ctas=None, maximize_ctas=False, **kwargs):
+        if kwargs.get("gate_up_layout", "split") != "split":
+            raise ValueError("persistent training currently requires split gate/up layout")
         if not kwargs.get("fuse_dispatch", True) or not kwargs.get("fuse_return", True):
             raise ValueError("persistent training always fuses dispatch and return")
         if kwargs.get("gemm_configs"):

@@ -34,7 +34,7 @@ class NativeMoEPlan:
                  chunk_tokens=128, compute="bf16", group=None, device=None,
                  check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
                  active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True,
-                 packed_rows=None, block_m=128):
+                 packed_rows=None, block_m=128, gate_up_layout="split"):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
@@ -44,6 +44,10 @@ class NativeMoEPlan:
         if type(block_m) is not int or block_m not in (128, 256) or (block_m != 128 and compute != "bf16"):
             raise ValueError("block_m must be128, or256 for BF16")
         self.block_m = block_m
+        if gate_up_layout not in ("split", "g8") or (gate_up_layout == "g8" and compute != "bf16"):
+            raise ValueError("gate_up_layout must be split, or g8 with BF16 compute")
+        self.gate_up_layout = gate_up_layout
+        self.g8_interleaved = gate_up_layout == "g8"
         if m_schedule not in ("nopad", "contiguous"):
             raise ValueError("m_schedule must be 'nopad' or 'contiguous'")
         if not isinstance(fuse_activation_quant, bool):
@@ -97,7 +101,7 @@ class NativeMoEPlan:
             if self.vectorized_routes:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                           recipe, self.transport, m_schedule, self.rows, block_m)
+                           recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -362,10 +366,11 @@ class NativeMoEPlan:
             tensors += list(self.quantized[2 * self.i if backward else self.i])
             _launch(15 if backward else 14, tensors, [self.rows, self.i])
         elif self.active_pointwise:
-            _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status], [self.rows, self.i, int(backward)])
+            _launch(16, [self.gate_up, self.hidden, self.current_rows, self.status],
+                    [self.rows, self.i, int(backward)] + ([8] if self.g8_interleaved else []))
         else:
             tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
-            _launch(8 if backward else 7, tensors, [self.rows, self.i])
+            _launch(8 if backward else 7, tensors, [self.rows, self.i] + ([8] if self.g8_interleaved else []))
         return fused
 
     def _scatter_output(self):

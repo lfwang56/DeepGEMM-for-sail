@@ -18,6 +18,7 @@ import torch.distributed as dist
 from deep_gemm.training import DeepEPMoEPlan, PeerMoEPlan
 from moe_distributed_utils import destroy_training_process_group
 from test_moe_training_large import relative_rms
+from deep_gemm.training.layout import to_g8_weight, from_g8_weight
 
 
 def main():
@@ -45,6 +46,8 @@ def main():
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--dag-shared-pool", action="store_true")
+    parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
+    parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
@@ -98,9 +101,11 @@ def main():
     del global_x, global_dy, global_scores, sources, pieces
     gc.collect()
     torch.cuda.empty_cache()
+    if args.gate_up_layout == "g8":
+        w1 = to_g8_weight(w1)
     configs = {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     for backend in args.backends:
-        options = dict(gemm_configs=configs, block_m=args.block_m)
+        options = dict(gemm_configs=configs, block_m=args.block_m, gate_up_layout=args.gate_up_layout)
         if args.ring_rows is not None:
             options["ring_rows"] = args.ring_rows
         if backend == "peer":
@@ -115,6 +120,7 @@ def main():
                            inline_dispatch=args.inline_dispatch, cache_return_addresses=args.cache_return_addresses,
                            ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad,
                            return_vector_bytes=args.return_vector_bytes,
+                           fuse_fc1_activation=args.fuse_fc1_activation,
                            dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
                            dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
                            dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool)
@@ -149,7 +155,7 @@ def main():
         unused_zero = not bool(torch.count_nonzero(dw1[1:] if rank == 0 else dw1))
         unused_zero &= not bool(torch.count_nonzero(dw2[1:] if rank == 0 else dw2))
         if rank == 0:
-            errors.update(dw1=relative_rms(dw1[0], weight_targets[0]),
+            errors.update(dw1=relative_rms(from_g8_weight(dw1[0]) if args.gate_up_layout == "g8" else dw1[0], weight_targets[0]),
                           dw2=relative_rms(dw2[0], weight_targets[1]))
         else:
             errors.update(dw1=0., dw2=0.)
@@ -171,6 +177,8 @@ def main():
             ffn_fusion=args.ffn_fusion if backend == "peer" else None,
             dag_fusion=args.dag_fusion if backend == "peer" else None,
             dag_shared_pool=args.dag_shared_pool if backend == "peer" else None,
+            gate_up_layout=plan.gate_up_layout,
+            fuse_fc1_activation=args.fuse_fc1_activation if backend == "peer" else None,
             expert_local_grad=args.expert_local_grad if backend == "peer" else None,
             ring_rows=args.ring_rows, last_window_rows=int(plan.current_rows),
             block_m=plan.block_m,

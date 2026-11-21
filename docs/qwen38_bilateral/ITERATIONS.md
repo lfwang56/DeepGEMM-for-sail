@@ -2392,3 +2392,56 @@ recipe. Before iteration23, reassess with the resource profile, these timing
 controls, official PPU references and the user's inference MegaMoE source.
 Prioritize a new dataflow/compute fusion direction; do not keep claiming that
 activity overlap alone achieves the2–3x objective.
+
+
+## Iteration23: persistent G8 parameter layout and FC1/SwiGLU epilogue
+
+Add optional G8 gate/up parameter storage and register FC1/SwiGLU fusion.
+Convert checkpoints once; optimizer parameters and DW1 remain in G8 order.
+The public inverse conversion restores canonical gate/up ordering. Both
+DeepEP and peer receive the same layout. DeepEP retains its separate
+activation; split-layout and G8 separate-activation controls isolate the
+layout effect from epilogue fusion. Defaults remain split and unfused.
+
+The epilogue explicitly rounds gate and up accumulators to BF16 BEFORE
+SiLU/multiplication, preserving the training precision boundary. Forward
+discards temporary gate/up output; backward replay preserves it for the
+activation gradient. No gradient or backward replay is omitted. This is
+intra-kernel compute fusion; no new inter-kernel overlap is claimed.
+
+Native SHA25646b44dec8e29b37316fd895b3e31c87aa71306227290d1b8f47a6ebac840dac1.
+ZW-M890P/ppu0015, wlf_sgl_2.2, Torch2.11 runtime/native Torch2.10 build.
+Full H8192/I2048/E16/K10 FP32 masked/skewed oracles passed. G8 fused versus
+separate activation changing-route graphs have exact Y/DX/dScore and DW
+RMS about4e-7. Two-rank DeepEP G8 full-gradient oracles passed. Actual EP32
+C4096/S65536 all-to-expert0 passes output/all-gradient FP32 checks and
+unused-expert exact zeros on32 ranks, with clean four-host audits.
+
+Full BF16 routed-layer FWD + rematerialized BWD + FP32 DW zero/accumulation,
+no optimizer. H8192/I2048/K10, T4096 unless named t8192, C4096/S65536,
+BM256/BN256/BK64/WM64/WN64/S2. Warmup5,20 graph iterations,5 repeats;
+median of max-rank event times. Each phase rechecks whole-host exclusivity.
+
+|Group|Configuration/scope|DeepEP ms|Peer ms|
+|---|---|---:|---:|
+|ep8 proxy E128|g8-control|101.450116|103.620276|
+|ep8 proxy E128|g8-fused|101.300336|102.805981|
+|ep8 proxy E128|split-control|100.410327|103.596619|
+|ep32 E512|g8-control|121.271008|104.810876|
+|ep32 E512|g8-fused|121.330542|103.884631|
+|ep32 E512|g8-fused-backward|85.042645|74.517993|
+|ep32 E512|g8-fused-forward|36.125153|29.279465|
+|ep32 E512|g8-fused-t8192|237.952075|202.558191|
+|ep32 E512|split-control-attempt0|120.333325|104.789685|
+
+This controlled group does not establish a2–3x gain against DeepEP. Any
+gain must use matched layout/scope and complete-step timings, not the
+forced-serial DAG denominator. Public-text paired full-LM validation is
+running separately with three2000-step seeds, frozen libraries, persistent
+G8 optimizer state and full111539-target held-out evaluation. Its outcome
+will be recorded only after all training/evaluation audits complete.
+
+Artifacts: outputs/qwen38/iter23-g8-fc1-{proxy,controls}.json;
+full graph/oracle logs are in the campaign workspace. The G8 design is
+adapted from the user-provided PPU inference MegaMoE fragment pairing,
+with the additional BF16 intermediate-rounding and replay-storage contract.

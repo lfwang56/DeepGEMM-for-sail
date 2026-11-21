@@ -18,6 +18,7 @@ import torch.distributed as dist
 from deep_gemm.training import DeepEPMoEPlan
 from moe_distributed_utils import destroy_training_process_group
 from test_moe_training import reference
+from deep_gemm.training.layout import to_g8_weight, from_g8_weight
 
 
 def relative_rms(actual, expected):
@@ -36,6 +37,7 @@ def main():
     parser.add_argument("--comm-sms", type=int, default=38)
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
+    parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--graph", action="store_true")
     args = parser.parse_args()
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
@@ -65,11 +67,14 @@ def main():
     weight_rng = torch.Generator().manual_seed(88291 + rank)
     w1 = (torch.randn(e, 2 * i, h, generator=weight_rng) * .02).bfloat16().to(device)
     w2 = (torch.randn(e, h, i, generator=weight_rng) * .02).bfloat16().to(device)
+    if args.gate_up_layout == "g8":
+        w1 = to_g8_weight(w1)
     configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
     plan = DeepEPMoEPlan(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
                         group=dist.group.WORLD, device=device, comm_sms=args.comm_sms,
                         ring_rows=args.ring_rows,
                         block_m=args.block_m,
+                        gate_up_layout=args.gate_up_layout,
                         gemm_configs=configs, check_errors=False)
     print(json.dumps(dict(case="large_deepep_stage", rank=rank, stage="plan_ready",
                           rdma_ranks=plan.deep_ep_rdma_ranks)), flush=True)
@@ -113,7 +118,7 @@ def main():
         local_ids = global_ids - rank * e
         local_ids[(local_ids < 0) | (local_ids >= e)] = -1
         rx, rp = all_x.float().to(device).requires_grad_(), all_scores.to(device).requires_grad_()
-        rw1, rw2 = w1.float().requires_grad_(), w2.float().requires_grad_()
+        rw1, rw2 = (from_g8_weight(w1) if args.gate_up_layout == "g8" else w1).float().requires_grad_(), w2.float().requires_grad_()
         ry = reference(rx, local_ids.to(device), rp, rw1, rw2)
         # Empty experts/ranks still have explicitly defined zero gradients.
         ry = ry + 0 * (rx.sum() + rp.sum() + rw1.sum() + rw2.sum())
@@ -124,8 +129,9 @@ def main():
             dist.all_reduce(total)
             totals.append(total[local_slice].to(device))
         expected = (totals[0], totals[1], gw1, gw2, totals[2])
+        compared = (outputs[0], outputs[1], from_g8_weight(outputs[2]), outputs[3], outputs[4]) if args.gate_up_layout == "g8" else outputs
         errors = {name: relative_rms(a, b) for name, a, b in zip(
-            ("y", "dx", "dw1", "dw2", "dscores"), outputs, expected)}
+            ("y", "dx", "dw1", "dw2", "dscores"), compared, expected)}
         passed = all(math.isfinite(error) and error < .04 for error in errors.values())
         print(json.dumps(dict(case="large_distributed_deepep_reference", rank=rank,
             ranks=size, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,

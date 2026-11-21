@@ -135,9 +135,11 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         // dims: physical rows, intermediate size.
         if (index >= p.dim[0] * p.dim[1]) return;
         const int64_t row = index / p.dim[1], column = index % p.dim[1];
-        const int64_t offset = row * 2 * p.dim[1] + column;
+        const int64_t offset = row * 2 * p.dim[1]
+            + (p.dim[2] == 8 ? column / 8 * 16 + column % 8 : column);
+        const int64_t up_step = p.dim[2] == 8 ? 8 : p.dim[1];
         const float gate = __bfloat162float(pointer<Bf16>(p, 0)[offset]);
-        const float up = __bfloat162float(pointer<Bf16>(p, 0)[offset + p.dim[1]]);
+        const float up = __bfloat162float(pointer<Bf16>(p, 0)[offset + up_step]);
         const float sigmoid = 1.f / (1.f + expf(-gate));
         const float silu = gate * sigmoid;
         if constexpr (Op == Operation::Activation) {
@@ -145,7 +147,7 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         } else {
             const float dh = __bfloat162float(pointer<Bf16>(p, 1)[index]);
             pointer<Bf16>(p, 2)[offset] = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
-            pointer<Bf16>(p, 2)[offset + p.dim[1]] = __float2bfloat16(dh * silu);
+            pointer<Bf16>(p, 2)[offset + up_step] = __float2bfloat16(dh * silu);
         }
     } else if constexpr (Op == Operation::ActivationQuantize || Op == Operation::ActivationBackwardQuantize) {
         // Preserve the BF16 activation/gradient rounding boundary for wgrad,
@@ -281,15 +283,18 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
             if (index == 0) atomicOr(pointer<int32_t>(p, 3), 2);
         } else for (int64_t position = index; position < rows * p.dim[1];
                     position += int64_t(gridDim.x) * blockDim.x) {
-            const int64_t offset = position / p.dim[1] * 2 * p.dim[1] + position % p.dim[1];
+            const int64_t column = position % p.dim[1];
+            const int64_t offset = position / p.dim[1] * 2 * p.dim[1]
+                + (p.dim[3] == 8 ? column / 8 * 16 + column % 8 : column);
+            const int64_t up_step = p.dim[3] == 8 ? 8 : p.dim[1];
             const float gate = __bfloat162float(pointer<Bf16>(p, 0)[offset]);
-            const float up = __bfloat162float(pointer<Bf16>(p, 0)[offset + p.dim[1]]);
+            const float up = __bfloat162float(pointer<Bf16>(p, 0)[offset + up_step]);
             const float sigmoid = 1.f / (1.f + expf(-gate)), silu = gate * sigmoid;
             if (!p.dim[2]) pointer<Bf16>(p, 1)[position] = __float2bfloat16(silu * up);
             else {
                 const float dh = __bfloat162float(pointer<Bf16>(p, 1)[position]);
                 pointer<Bf16>(p, 0)[offset] = __float2bfloat16(dh * up * sigmoid * (1.f + gate * (1.f - sigmoid)));
-                pointer<Bf16>(p, 0)[offset + p.dim[1]] = __float2bfloat16(dh * silu);
+                pointer<Bf16>(p, 0)[offset + up_step] = __float2bfloat16(dh * silu);
             }
         }
     } else if constexpr (Op == Operation::TransformDeviceRows || Op == Operation::TransformDeviceRowsVector) {

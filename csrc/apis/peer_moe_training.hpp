@@ -145,9 +145,10 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             break;
         case PeerOperation::ActivationActive:
         case PeerOperation::ActivationBackwardActive:
-            DG_HOST_ASSERT(dims.size() == 2 || dims.size() == 3);
+            DG_HOST_ASSERT(dims.size() >= 2 && dims.size() <= 4);
             schema(4, dims.size());
-            if (dims.size() == 3) DG_HOST_ASSERT(dims[2] == 128 || dims[2] == 256);
+            if (dims.size() >= 3) DG_HOST_ASSERT(dims[2] == 128 || dims[2] == 256);
+            if (dims.size() == 4) DG_HOST_ASSERT(dims[3] == 8);
             DG_HOST_ASSERT(dims[0] >= 0 && dims[1] > 0);
             expect(0, dims[0] * 2 * dims[1], bf); expect(1, dims[0] * dims[1], bf);
             expect(2, 1, i32); expect(3, 1, i32);
@@ -194,6 +195,9 @@ public:
         bool cache_return_addresses = false;
         int block_m = 128;
         int return_vector_bytes = 4;
+        bool interleaved_gate_up = false;
+        bool fc1_activation = false;
+        bool keep_gate_up = true;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -216,6 +220,8 @@ public:
         if (args.cache_return_addresses) name += "_cached_return";
         if (args.block_m != 128) name += fmt::format("_bm{}", args.block_m);
         if (args.return_vector_bytes != 4) name += fmt::format("_return{}", args.return_vector_bytes);
+        if (args.interleaved_gate_up) name += "_g8";
+        if (args.fc1_activation) name += args.keep_gate_up ? "_swiglu_keep" : "_swiglu_discard";
         return name;
     }
     static std::string generate_impl(const Args& args) {
@@ -225,7 +231,7 @@ extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
     deep_gemm::training_bf16_peer_gemm_impl<
         cutlass::bfloat16_t, deep_gemm::GemmType::MGroupedFused,
-        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, false, {}, {}, {}, {}
     >(params{});
 }}
 )", args.threads, name(args),
@@ -241,6 +247,8 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0 ? "true" : "false",
        args.cache_return_addresses ? "true" : "false",
        args.return_vector_bytes,
+       args.interleaved_gate_up ? "true" : "false",
+       args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
        args.pipeline.ready ? ", pipeline" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -266,10 +274,14 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       const c10::optional<torch::Tensor>& pipeline_status,
                       const c10::optional<torch::Tensor>& pipeline_statistics,
                       int pipeline_comm_ctas, bool pipeline_serialize, bool cache_return_addresses,
-                      int block_m = 128, int return_vector_bytes = 4) {
+                      int block_m = 128, int return_vector_bytes = 4,
+                      bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true) {
     DG_HOST_ASSERT(block_m == 128 || block_m == 256);
     DG_HOST_ASSERT(return_vector_bytes == 4 || return_vector_bytes == 8);
     DG_HOST_ASSERT(return_vector_bytes == 4 || (write_peer && !pipeline_ready.has_value() && !staged_return));
+    DG_HOST_ASSERT(!fc1_activation || (interleaved_gate_up && !write_peer && !pipeline_ready.has_value()
+                                     && activation_gate_up.has_value()));
+    DG_HOST_ASSERT(!interleaved_gate_up || activation_gate_up.has_value());
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && weight.dim() == 3 && out.dim() == 2);
     const c10::cuda::CUDAGuard guard(a.device());
     for (const auto& tensor : {a, weight, out, source_peers, destination_peers, input_rows,
@@ -330,7 +342,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
         const auto& activation = activation_gate_up.value();
         DG_HOST_ASSERT(!write_peer && activation.device() == a.device() && activation.is_contiguous());
         DG_HOST_ASSERT(activation.scalar_type() == torch::kBFloat16 && activation.dim() == 2);
-        DG_HOST_ASSERT(activation.size(0) == m && activation.size(1) == 2 * n);
+        DG_HOST_ASSERT(activation.size(0) == m && activation.size(1) == (fc1_activation ? n / 2 : 2 * n));
+        DG_HOST_ASSERT(!fc1_activation || n % 16 == 0);
         DG_HOST_ASSERT(activation.numel() <= INT32_MAX);
         params.activation_gate_up = activation.data_ptr();
     }
@@ -369,6 +382,10 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.cache_return_addresses = cache_return_addresses;
     args.block_m = block_m;
     args.return_vector_bytes = return_vector_bytes;
+    args.activation_backward = activation_gate_up.has_value() && !fc1_activation;
+    args.interleaved_gate_up = interleaved_gate_up;
+    args.fc1_activation = fc1_activation;
+    args.keep_gate_up = keep_gate_up;
     if (pipeline_ready.has_value()) {
         DG_HOST_ASSERT(!read_peer && !activation_gate_up.has_value()
                        && !dispatch_cache_n && !local_input_aiu && !producer_input_aiu
@@ -443,7 +460,9 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("pipeline_ready") = py::none(), py::arg("pipeline_status") = py::none(),
           py::arg("pipeline_statistics") = py::none(), py::arg("pipeline_comm_ctas") = 2,
           py::arg("pipeline_serialize") = false, py::arg("cache_return_addresses") = false,
-          py::arg("block_m") = 128, py::arg("return_vector_bytes") = 4);
+          py::arg("block_m") = 128, py::arg("return_vector_bytes") = 4,
+          py::arg("interleaved_gate_up") = false, py::arg("fc1_activation") = false,
+          py::arg("keep_gate_up") = true);
 }
 
 }  // namespace deep_gemm::training

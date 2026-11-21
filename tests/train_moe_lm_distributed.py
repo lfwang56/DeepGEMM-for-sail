@@ -96,6 +96,10 @@ def reference_check(model, global_state, config, vocabulary, x, y, reduction, ra
     loss.backward()
     reduction.reduce()
     actual = {name: parameter.grad.detach().cpu().clone() for name, parameter in model.named_parameters()}
+    if model.blocks[0].experts.plan.gate_up_layout == "g8":
+        from deep_gemm.training import from_g8_weight
+        actual = {name: from_g8_weight(value) if name.endswith(".experts.w1") else value
+                  for name, value in actual.items()}
     selected_ids = []
     for block in model.blocks:
         local = block.experts.observed_reference_ids
@@ -160,7 +164,9 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
     common = dict(configuration=asdict(config), manifest=manifest, compute=options.compute,
                   backend="native" if options.backend == "collective" else options.backend,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
-                  plan_options=dict(dispatch_cache_n=options.dispatch_cache_n,
+                  plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
+                                    fuse_fc1_activation=options.fuse_fc1_activation,
+                                    dispatch_cache_n=options.dispatch_cache_n,
                                     dispatch_producer=options.dispatch_producer,
                                     producer_local_aiu=options.producer_local_aiu,
                                     producer_input_aiu=options.producer_input_aiu,
@@ -214,6 +220,9 @@ def main():
     parser.add_argument("--global-batch", type=int, default=8)
     parser.add_argument("--sequence", type=int, default=128)
     parser.add_argument("--chunk-tokens", type=int, default=128)
+    parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
+    parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
+    parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-cache-n", type=int, choices=(0, 2, 4, 8, 16), default=0)
     parser.add_argument("--dispatch-cache-aiu", action="store_true")
     parser.add_argument("--staged-return", action="store_true")
@@ -229,7 +238,7 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.expert_local_grad or options.ring_rows is not None) and options.backend != "peer":
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.expert_local_grad or options.ring_rows is not None) and options.backend != "peer":
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
@@ -251,13 +260,14 @@ def main():
     initial_hash = hashlib.sha256(b"".join(value.numpy().tobytes() for value in global_state.values())).hexdigest()
     local_experts, local_batch = config.experts // size, config.batch // size
     classes = {"collective": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan}
-    plan_options = {}
+    plan_options = dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout)
     if options.backend == "peer":
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
                             dispatch_producer=options.dispatch_producer,
                             producer_local_aiu=options.producer_local_aiu,
                             producer_input_aiu=options.producer_input_aiu,
                             fuse_activation_backward=options.fuse_activation_backward,
+                            fuse_fc1_activation=options.fuse_fc1_activation,
                             expert_local_grad=options.expert_local_grad,
                             ring_rows=options.ring_rows,
                             dispatch_producer_tiles=options.dispatch_producer_tiles,
@@ -279,6 +289,9 @@ def main():
         section = slice(rank * local_experts, (rank + 1) * local_experts)
         experts.w1 = nn.Parameter(experts.w1[section].clone())
         experts.w2 = nn.Parameter(experts.w2[section].clone())
+        if options.gate_up_layout == "g8":
+            from deep_gemm.training import to_g8_weight
+            experts.w1 = nn.Parameter(to_g8_weight(experts.w1.detach()))
     model.to(device)
     reduction = GradientReduction(model, dist.group.WORLD)
     learning_rate = torch.tensor(3e-4, device=device)

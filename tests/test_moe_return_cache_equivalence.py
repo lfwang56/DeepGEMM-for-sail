@@ -4,6 +4,7 @@ import argparse
 import json
 import torch
 from deep_gemm.training import PeerMoEPlan
+from deep_gemm.training.layout import to_g8_weight
 
 
 parser = argparse.ArgumentParser()
@@ -15,6 +16,7 @@ parser.add_argument('--return-vector-ablation', action='store_true')
 parser.add_argument('--dag-ablation', action='store_true')
 parser.add_argument('--dag-serialization-ablation', action='store_true')
 parser.add_argument('--dag-shared-pool', action='store_true')
+parser.add_argument('--fc1-activation-ablation', action='store_true')
 args = parser.parse_args()
 if args.ffn_fusion_ablation and args.expert_local_grad_ablation:
     parser.error('choose one ablation')
@@ -26,6 +28,8 @@ x = (torch.randn(t, h, device='cuda') * .1).bfloat16()
 dy = (torch.randn_like(x) * .1).bfloat16()
 w1 = (torch.randn(e, 2*i, h, device='cuda') * .02).bfloat16()
 w2 = (torch.randn(e, h, i, device='cuda') * .02).bfloat16()
+if args.fc1_activation_ablation:
+    w1 = to_g8_weight(w1)
 ids = torch.randn(t, e, device='cuda').topk(k, -1).indices.contiguous()
 original_ids = ids.clone()
 scores = torch.randn(t, k, device='cuda').softmax(-1)
@@ -62,6 +66,11 @@ with torch.cuda.stream(stream):
                            producer_local_aiu=False if args.dag_serialization_ablation else not cache,
                            dag_serialize=cache if args.dag_serialization_ablation else False)
             options['dag_shared_pool'] = args.dag_shared_pool and options['dag_fusion']
+        if args.fc1_activation_ablation:
+            options = dict(expert_local_grad=True, dispatch_producer=True,
+                           producer_input_aiu=True, producer_local_aiu=True,
+                           ring_rows=1024, block_m=256, gate_up_layout='g8',
+                           fuse_fc1_activation=cache)
         plan = PeerMoEPlan(h, i, e, k, t, chunk_tokens=t, reuse_packed_dy=True,
                           fuse_activation_backward=True, check_errors=False,
                           gemm_configs={role:(256,64,64,64,2) for role in ('fc1','fc2','dhidden','dx')}, **options)
@@ -109,7 +118,8 @@ with torch.cuda.stream(stream):
                            else (('dw1',2),('dw2',3))):
             a,b = outputs[0][index],outputs[1][index]
             errors[name] = float((a-b).square().sum().sqrt() / a.square().sum().sqrt().clamp_min(1e-20))
-        case = ('dag_graph_equivalence' if args.dag_ablation or args.dag_serialization_ablation else
+        case = ('fc1_activation_graph_equivalence' if args.fc1_activation_ablation else
+                'dag_graph_equivalence' if args.dag_ablation or args.dag_serialization_ablation else
                 'return_vector_graph_equivalence' if args.return_vector_ablation else
                 'block_m_graph_equivalence' if args.block_m_ablation else
                 'routed_row_window_graph_equivalence' if args.ring_rows_ablation is not None else
@@ -118,7 +128,8 @@ with torch.cuda.stream(stream):
         print(json.dumps({'case':case,'pattern':pattern,
                           'dag_shared_pool':args.dag_shared_pool,
                           'exact':exact,'wgrad_relative_rms':errors,
-                          'source':('identical tensors and GEMM tiles; DAG enabled versus producer control, or DAG serial versus parallel' if args.dag_ablation or args.dag_serialization_ablation else
+                          'source':('identical G8 parameters and GEMM tiles; separate versus register-fused BF16-rounded FC1/SwiGLU' if args.fc1_activation_ablation else
+                                    'identical tensors and GEMM tiles; DAG enabled versus producer control, or DAG serial versus parallel' if args.dag_ablation or args.dag_serialization_ablation else
                                     'identical tensors and BM256; four-byte versus eight-byte direct peer stores' if args.return_vector_ablation else
                                     'identical tensors; BM128 versus BM256, with matching metadata alignment' if args.block_m_ablation else
                                     'identical tensors and expert-side gradients; full packed rows versus bounded routed-row windows' if args.ring_rows_ablation is not None else

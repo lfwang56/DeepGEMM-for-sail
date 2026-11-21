@@ -15,6 +15,8 @@ class CollectiveFusedMoEPlan(NativeMoEPlan):
 
     def __init__(self, *args, gemm_configs=None, fuse_return=True,
                  fuse_activation_backward=False, **kwargs):
+        if kwargs.get("gate_up_layout", "split") != "split":
+            raise ValueError("collective-fused training currently requires split gate/up layout")
         if kwargs.get("compute", "bf16") != "bf16" or kwargs.get("m_schedule", "nopad") != "nopad":
             raise ValueError("collective-fused training requires BF16 nopad compute")
         if not isinstance(fuse_return, bool) or not isinstance(fuse_activation_backward, bool):

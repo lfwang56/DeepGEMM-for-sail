@@ -13,6 +13,7 @@ import torch
 
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan, native_moe
 from test_moe_training import reference
+from deep_gemm.training.layout import to_g8_weight, from_g8_weight
 
 
 def relative_rms(actual, expected):
@@ -59,6 +60,8 @@ def main():
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--dag-shared-pool", action="store_true")
+    parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
+    parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument("--topk", type=int, default=8)
     options = parser.parse_args()
@@ -79,6 +82,8 @@ def main():
     x = (torch.randn(t, h, device="cuda") * 0.1).bfloat16().requires_grad_()
     w1 = (torch.randn(e, 2 * i, h, device="cuda") * 0.02).bfloat16().float().requires_grad_()
     w2 = (torch.randn(e, h, i, device="cuda") * 0.02).bfloat16().float().requires_grad_()
+    if options.gate_up_layout == "g8":
+        w1 = to_g8_weight(w1.detach()).requires_grad_()
     scores = torch.randn(t, k, device="cuda").softmax(-1).requires_grad_()
     with torch.no_grad():
         scores[0, 0] = 0
@@ -111,6 +116,7 @@ def main():
         extra["inline_dispatch"] = options.inline_dispatch
         extra["cache_return_addresses"] = options.cache_return_addresses
         extra["return_vector_bytes"] = options.return_vector_bytes
+        extra["fuse_fc1_activation"] = options.fuse_fc1_activation
         extra.update(dag_fusion=options.dag_fusion, dag_input_ctas=options.dag_input_ctas,
                      dag_return_ctas=options.dag_return_ctas, dag_serialize=options.dag_serialize,
                      dag_trace=options.dag_trace, dag_shared_pool=options.dag_shared_pool)
@@ -128,6 +134,7 @@ def main():
                      fuse_activation_backward=options.fuse_activation_backward)
     extra["fast_weight_transpose"] = options.fast_weight_transpose
     extra["block_m"] = options.block_m
+    extra["gate_up_layout"] = options.gate_up_layout
     if options.reuse_packed_dy:
         if options.backend != "peer":
             parser.error("packed gradient reuse requires peer backend")
@@ -157,12 +164,15 @@ def main():
         actual_y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
         actual_y.backward(dy)
         rx, rp, rw1, rw2 = [value.detach().float().requires_grad_() for value in (x, scores, w1, w2)]
+        if options.gate_up_layout == "g8":
+            rw1 = from_g8_weight(rw1.detach()).requires_grad_()
         reference_ids = ids.clone()
         reference_ids[max(0, t - 3):] = -1
         expected_y = reference(rx, reference_ids, rp, rw1, rw2)
         expected_y = expected_y + 0 * (rx.sum() + rp.sum() + rw1.sum() + rw2.sum())
         expected_grads = torch.autograd.grad(expected_y, (rx, rw1, rw2, rp), dy.float())
-        actual = (actual_y, x.grad, w1.grad, w2.grad, scores.grad)
+        actual = (actual_y, x.grad, from_g8_weight(w1.grad) if options.gate_up_layout == "g8" else w1.grad,
+                  w2.grad, scores.grad)
         errors = {name: relative_rms(a, b) for name, a, b in zip(
             ("y", "dx", "dw1", "dw2", "dscores"), actual, (expected_y, *expected_grads))}
         limit = 0.13 if options.compute == "fp8" else 0.04
@@ -186,6 +196,8 @@ def main():
                               block_m=plan.block_m,
                               return_vector_bytes=getattr(plan, "return_vector_bytes", None),
                               dag_fusion=getattr(plan, "dag_fusion", None),
+                              gate_up_layout=plan.gate_up_layout,
+                              fuse_fc1_activation=getattr(plan, "fuse_fc1_activation", None),
                               dag_shared_pool=getattr(plan, "dag_shared_pool", None),
                               dag_serialized_control=getattr(plan, "dag_serialize", None),
                               producer_local_aiu=options.producer_local_aiu,

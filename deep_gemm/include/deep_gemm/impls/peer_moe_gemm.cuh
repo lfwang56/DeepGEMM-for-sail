@@ -373,7 +373,7 @@ __device__ __forceinline__ void scatter_peer_output_staged(
 
 namespace training {
 
-template <uint32_t Width, class Accum, class Coordinates>
+template <uint32_t Width, bool G8 = false, class Accum, class Coordinates>
 __device__ __forceinline__ void activation_backward_epilogue(
         const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
         uint32_t row_base, uint32_t valid_rows, uint32_t column_base) {
@@ -394,18 +394,71 @@ __device__ __forceinline__ void activation_backward_epilogue(
                     float dg[2], du[2];
                     CUTLASS_PRAGMA_UNROLL
                     for (int element = 0; element < 2; ++element) {
-                        const uint64_t offset = uint64_t(row_base + row) * 2 * Width + column + element;
+                        const uint32_t feature = column + element;
+                        const uint64_t offset = uint64_t(row_base + row) * 2 * Width
+                            + (G8 ? feature / 8 * 16 + feature % 8 : feature);
                         const float gate = __bfloat162float(gate_up[offset]);
-                        const float up = __bfloat162float(gate_up[offset + Width]);
+                        const float up = __bfloat162float(gate_up[offset + (G8 ? 8 : Width)]);
                         // Preserve the existing GEMM's BF16 dHidden boundary.
                         const float dh = __bfloat162float(__float2bfloat16(values[element]));
                         const float sigmoid = 1.f / (1.f + expf(-gate));
                         dg[element] = dh * up * sigmoid * (1.f + gate * (1.f - sigmoid));
                         du[element] = dh * (gate * sigmoid);
                     }
-                    const uint64_t base = uint64_t(row_base + row) * 2 * Width + column;
+                    const uint64_t base = uint64_t(row_base + row) * 2 * Width
+                        + (G8 ? column / 8 * 16 + column % 8 : column);
                     *reinterpret_cast<uint32_t*>(gate_up + base) = tix::cvt_rte_bf16x2_f32(dg[1], dg[0]);
-                    *reinterpret_cast<uint32_t*>(gate_up + base + Width) = tix::cvt_rte_bf16x2_f32(du[1], du[0]);
+                    *reinterpret_cast<uint32_t*>(gate_up + base + (G8 ? 8 : Width)) = tix::cvt_rte_bf16x2_f32(du[1], du[0]);
+                }
+            }
+        }
+    }
+}
+
+// G=8 interleaving puts each thread's gate/up pair in consecutive tc02 MMA_N
+// fragments. Match the BF16 training boundary before applying SwiGLU.
+template <uint32_t Width, bool KeepGateUp, class Accum, class Coordinates>
+__device__ __forceinline__ void fc1_swiglu_epilogue(
+        const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
+        uint32_t row_base, uint32_t valid_rows, uint32_t column_base) {
+    static_assert(cute::size<0, 2>(Coordinates{}) % 2 == 0);
+    static_assert(Width % 16 == 0);
+    auto* gate_up = reinterpret_cast<__ppu_bfloat16*>(params.gemm.c_ptr);
+    auto* hidden = reinterpret_cast<__ppu_bfloat16*>(params.activation_gate_up);
+    CUTLASS_PRAGMA_UNROLL
+    for (int wm = 0; wm < cute::size<1>(coordinates); ++wm) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
+            const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
+            if (row >= valid_rows) continue;
+            CUTLASS_PRAGMA_UNROLL
+            for (int wn = 0; wn < cute::size<2>(coordinates); ++wn) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int mn = 0; mn < cute::size<0, 2>(coordinates); mn += 2) {
+                    const uint32_t column = column_base + cute::get<1>(coordinates(cute::make_coord(cute::_0{}, mm, mn), wm, wn));
+                    if (column >= Width) continue;
+                    const auto* g = cute::raw_pointer_cast(accum(cute::make_coord(cute::_, mm, mn), wm, wn).data());
+                    const auto* u = cute::raw_pointer_cast(accum(cute::make_coord(cute::_, mm, mn + 1), wm, wn).data());
+                    const uint32_t gate_bits = tix::cvt_rte_bf16x2_f32(g[1], g[0]);
+                    const uint32_t up_bits = tix::cvt_rte_bf16x2_f32(u[1], u[0]);
+                    union Scalar {uint16_t bits; __ppu_bfloat16 value;};
+                    float activated[2];
+                    CUTLASS_PRAGMA_UNROLL
+                    for (int element = 0; element < 2; ++element) {
+                        const Scalar gb{uint16_t(gate_bits >> (16 * element))};
+                        const Scalar ub{uint16_t(up_bits >> (16 * element))};
+                        const float gf = __bfloat162float(gb.value), uf = __bfloat162float(ub.value);
+                        const float sigmoid = 1.f / (1.f + expf(-gf));
+                        activated[element] = (gf * sigmoid) * uf;
+                    }
+                    const uint32_t compact = column / 16 * 8 + column % 8;
+                    *reinterpret_cast<uint32_t*>(hidden + uint64_t(row_base + row) * (Width / 2) + compact)
+                        = tix::cvt_rte_bf16x2_f32(activated[1], activated[0]);
+                    if constexpr (KeepGateUp) {
+                        const uint64_t offset = uint64_t(row_base + row) * Width + column;
+                        *reinterpret_cast<uint32_t*>(gate_up + offset) = gate_bits;
+                        *reinterpret_cast<uint32_t*>(gate_up + offset + 8) = up_bits;
+                    }
                 }
             }
         }
@@ -424,7 +477,8 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t FirstNTile = 0, uint32_t NumNTiles = 0, bool LocalInputAiu = false,
           bool ProducerInputAiu = false, bool DispatchPipeline = false,
           bool InlineDispatch = false, bool CacheReturn = false, bool FixedMTile = false,
-          uint32_t ReturnVectorBytes = 4>
+          uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
+          bool Fc1Activation = false, bool KeepGateUp = true>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -435,6 +489,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     static_assert(!CacheReturn || (PeerWrite && !DispatchPipeline && !StagedReturn));
     static_assert(ReturnVectorBytes == 4 || ReturnVectorBytes == 8);
     static_assert(ReturnVectorBytes == 4 || (PeerWrite && !DispatchPipeline && !StagedReturn));
+    static_assert(!Fc1Activation || (GateUpG8 && !ActivationBackward && !PeerWrite && !DispatchPipeline));
     if constexpr (DispatchPipeline) {
         static_assert(!PeerRead && !ActivationBackward && DispatchCacheN == 0
                       && FirstNTile == 0 && NumNTiles == 0);
@@ -820,8 +875,11 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
           "Accumulator count must have the same destination element count.");
 
 #if __HGGC_ARCH__ == 150
-      if constexpr (ActivationBackward) {
-          training::activation_backward_epilogue<SHAPE_N>(accum, tCcC, params,
+      if constexpr (Fc1Activation) {
+          training::fc1_swiglu_epilogue<SHAPE_N, KeepGateUp>(accum, tCcC, params,
+              deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
+      } else if constexpr (ActivationBackward) {
+          training::activation_backward_epilogue<SHAPE_N, GateUpG8>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
       } else if constexpr (PeerWrite && !DispatchPipeline) {
           if constexpr (StagedReturn) {

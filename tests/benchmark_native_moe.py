@@ -21,6 +21,7 @@ import torch.distributed as dist
 import deep_gemm as dg
 from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, CollectiveFusedMoEPlan, DeepEPMoEPlan
 from moe_distributed_utils import destroy_training_process_group
+from deep_gemm.training.layout import to_g8_weight
 
 
 def sample_outputs(values):
@@ -109,6 +110,8 @@ def main():
     parser.add_argument("--dag-serialize", action="store_true")
     parser.add_argument("--dag-trace", action="store_true")
     parser.add_argument("--dag-shared-pool", action="store_true")
+    parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
+    parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--dispatch-producer-tiles", type=int, choices=(1, 2, 4), default=1)
     for role in ("fc1", "fc2", "dhidden", "dx"):
         parser.add_argument("--peer-" + role + "-config", type=int, nargs=5)
@@ -155,6 +158,8 @@ def main():
     x = (torch.randn(t, h, device=device) * 0.1).bfloat16()
     w1 = (torch.randn(e, 2 * i, h, device=device) * 0.02).bfloat16()
     w2 = (torch.randn(e, h, i, device=device) * 0.02).bfloat16()
+    if args.gate_up_layout == "g8":
+        w1 = to_g8_weight(w1)
     ids = torch.randn(t, e * size, device=device).topk(k, -1).indices.contiguous()
     if args.routing == "skewed": ids.fill_(0)
     if args.routing == "masked": ids.fill_(-1)
@@ -211,6 +216,7 @@ def main():
                 options["dispatch_cache_ctas"] = args.dispatch_cache_ctas
                 options["dispatch_producer"] = args.dispatch_producer
                 options["return_vector_bytes"] = args.return_vector_bytes
+                options["fuse_fc1_activation"] = args.fuse_fc1_activation
                 options.update(dag_fusion=args.dag_fusion, dag_input_ctas=args.dag_input_ctas,
                                dag_return_ctas=args.dag_return_ctas, dag_serialize=args.dag_serialize,
                                dag_trace=args.dag_trace, dag_shared_pool=args.dag_shared_pool)
@@ -249,6 +255,7 @@ def main():
                     options["gemm_configs"] = {role: args.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
             options["fast_weight_transpose"] = args.fast_weight_transpose
             options["block_m"] = args.block_m
+            options["gate_up_layout"] = args.gate_up_layout
             if args.ring_rows is not None:
                 options["ring_rows"] = args.ring_rows
             options.update(controls)
@@ -364,6 +371,9 @@ def main():
                     "peer_inline_dispatch": getattr(plan, "inline_dispatch", None) if backend == "peer" else None,
                     "peer_cached_return_addresses": getattr(plan, "cache_return_addresses", None) if backend == "peer" else None,
                     "peer_return_vector_bytes": getattr(plan, "return_vector_bytes", None) if backend == "peer" else None,
+                    "gate_up_layout": plan.gate_up_layout,
+                    "peer_fuse_fc1_activation": getattr(plan, "fuse_fc1_activation", None) if backend == "peer" else None,
+                    "weight_layout_scope": "persistent optimizer parameter storage; checkpoint conversion outside timing",
                     "dag_fusion": getattr(plan, "dag_fusion", None) if backend == "peer" else None,
                     "dag_shared_pool": getattr(plan, "dag_shared_pool", None) if backend == "peer" else None,
                     "dag_input_ctas": getattr(plan, "dag_input_ctas", None) if backend == "peer" and not args.dag_shared_pool else None,

@@ -34,7 +34,18 @@ class PeerMoEPlan(NativeMoEPlan):
                  inline_dispatch=False, cache_return_addresses=False, ffn_fusion=False,
                  expert_local_grad=False, ring_rows=None, return_vector_bytes=4,
                  dag_fusion=False, dag_input_ctas=4, dag_return_ctas=4,
-                 dag_serialize=False, dag_trace=False, dag_shared_pool=False, **kwargs):
+                 dag_serialize=False, dag_trace=False, dag_shared_pool=False,
+                 fuse_fc1_activation=False, **kwargs):
+        if not isinstance(fuse_fc1_activation, bool):
+            raise TypeError("fuse_fc1_activation must be bool")
+        g8 = kwargs.get("gate_up_layout", "split") == "g8"
+        if g8 and (self.transport != "peer" or ffn_fusion or dag_fusion or dispatch_pipeline
+                   or return_pipeline or inline_dispatch):
+            raise ValueError("G8 currently supports direct/producer peer paths without resident/FFN/DAG modes")
+        if fuse_fc1_activation and (not g8 or not expert_local_grad or not fuse_dispatch or not fuse_return
+                                   or dispatch_cache_n or ffn_fusion or dag_fusion):
+            raise ValueError("FC1 activation fusion requires G8, bilateral fusion and expert-local gradients")
+        self.fuse_fc1_activation = fuse_fc1_activation
         if not all(isinstance(value, bool) for value in (dag_fusion, dag_serialize, dag_trace, dag_shared_pool)):
             raise TypeError("DAG switches must be bool")
         if any(type(value) is not int or value < 1 for value in (dag_input_ctas, dag_return_ctas)):
@@ -301,11 +312,13 @@ class PeerMoEPlan(NativeMoEPlan):
     def _peer_gemm(self, a, weight, output, source_rows, *, read=False, write=False,
                    source="local_x", destination="local_values", compile_only=False, pack_input=False, role=None,
                    first_n_tile=0, num_n_tiles=0, local_input_aiu=False, producer_input_aiu=False,
-                   dispatch_pipeline=False):
+                   dispatch_pipeline=False, keep_gate_up=True):
         source_stride = self.chunk_tokens if source == "local_x" else self.chunk_tokens * self.k
         if role is None:
             role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
         return_pipeline = write and self.return_pipeline
+        fc1_activation = role == "fc1" and self.fuse_fc1_activation
+        interleaved = self.g8_interleaved and (fc1_activation or (role == "dhidden" and self.fuse_activation_backward))
         if return_pipeline and not compile_only:
             self.return_pipeline_ready.zero_()
         grid = dg._C._moe_training_peer_gemm(
@@ -313,7 +326,7 @@ class PeerMoEPlan(NativeMoEPlan):
             source_rows, self.permutation, self.work_info, self.num_blocks,
             source_stride, self.chunk_tokens * self.k, read, write, compile_only,
             pack_input, self.gemm_configs.get(role, ()),
-            self.gate_up if role == "dhidden" and self.fuse_activation_backward else None,
+            self.hidden if fc1_activation else self.gate_up if role == "dhidden" and self.fuse_activation_backward else None,
             self.dispatch_cache_n if read else 0, self.dispatch_scratch if read else None,
             self.dispatch_cache_aiu if read else False,
             self.staged_return if write else False,
@@ -328,6 +341,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.cache_return_addresses if write else False,
             self.block_m,
             self.return_vector_bytes if write else 4,
+            interleaved, fc1_activation, keep_gate_up if fc1_activation else True,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
@@ -340,12 +354,12 @@ class PeerMoEPlan(NativeMoEPlan):
                     setattr(self, name, statistics)
                     self.buffers[name] = statistics
 
-    def _fc1(self, w1, *, pack_input=False, compile_only=False):
+    def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True):
         if self.dispatch_pipeline:
             if not compile_only:
                 self.pipeline_ready.zero_()
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
-                            role="fc1", compile_only=compile_only, dispatch_pipeline=True)
+                            role="fc1", compile_only=compile_only, dispatch_pipeline=True, keep_gate_up=keep_gate_up)
         elif self.dispatch_producer:
             bn = self.gemm_configs.get("fc1", (128, 64, 64, 64, 3))[0]
             ntiles = (2 * self.i + bn - 1) // bn
@@ -356,16 +370,16 @@ class PeerMoEPlan(NativeMoEPlan):
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
                             read=True, pack_input=True, role="fc1", compile_only=compile_only,
                             first_n_tile=0, num_n_tiles=produced,
-                            producer_input_aiu=self.producer_input_aiu)
+                            producer_input_aiu=self.producer_input_aiu, keep_gate_up=keep_gate_up)
             if produced < ntiles:
                 self._peer_gemm(self.packed_x, w1, self.gate_up, self.identity_rows,
                                 role="fc1", compile_only=compile_only, first_n_tile=produced,
-                                local_input_aiu=self.producer_local_aiu)
+                                local_input_aiu=self.producer_local_aiu, keep_gate_up=keep_gate_up)
         else:
             self._peer_gemm(self.packed_x, w1, self.gate_up,
                             self.source_rows if self.fuse_dispatch else self.identity_rows,
                             read=self.fuse_dispatch, pack_input=pack_input and self.fuse_dispatch,
-                            role="fc1", compile_only=compile_only)
+                            role="fc1", compile_only=compile_only, keep_gate_up=keep_gate_up)
 
     @torch.no_grad()
     def prepare(self, w1, w2):
@@ -415,6 +429,8 @@ class PeerMoEPlan(NativeMoEPlan):
             empty_scores = torch.empty((0, self.k), device=self.device, dtype=torch.float32)
             self._local_gradients(empty_dy, empty_scores, empty_scores, 0, compile_only=True)
         self._fc1(w1, compile_only=True)
+        if self.fuse_fc1_activation:
+            self._fc1(w1, compile_only=True, keep_gate_up=False)
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                         write=self.fuse_return, compile_only=True)
         read_dy = self.fuse_dispatch and not self.reuse_packed_dy
@@ -482,8 +498,9 @@ class PeerMoEPlan(NativeMoEPlan):
             return
         if not self.fuse_dispatch:
             self._stage_input()
-        self._fc1(w1, pack_input=pack_input)
-        self._activation()
+        self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output)
+        if not self.fuse_fc1_activation:
+            self._activation()
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                         write=self.fuse_return and return_output)
         if not return_output:
@@ -535,10 +552,10 @@ class PeerMoEPlan(NativeMoEPlan):
     def _activation(self, backward=False, compile_only=False):
         if self.active_rows:
             _peer(9 if backward else 8, [self.gate_up, self.hidden, self.num_blocks, self.status],
-                  [self.rows, self.i, self.block_m], compile_only)
+                  [self.rows, self.i, self.block_m] + ([8] if self.g8_interleaved else []), compile_only)
         elif not compile_only:
             tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
-            _launch(8 if backward else 7, tensors, [self.rows, self.i])
+            _launch(8 if backward else 7, tensors, [self.rows, self.i] + ([8] if self.g8_interleaved else []))
 
     def _pack_dy(self, compile_only=False):
         tensors = [self.pointer_tables["local_dy"], self.permutation, self.packed_dy, self.status]
