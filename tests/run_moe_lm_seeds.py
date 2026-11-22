@@ -11,8 +11,10 @@ import sys
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--backend", choices=("collective", "peer", "hybrid"), required=True)
+parser.add_argument("--backend", choices=("collective", "peer", "hybrid", "elastic"), required=True)
 parser.add_argument("--name", required=True)
+parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
+parser.add_argument("--fp8-async-weights", action="store_true")
 parser.add_argument("--steps", type=int, default=2000)
 parser.add_argument("--peer-recipe", choices=("cache", "producer", "producer-input", "producer-expert", "producer-window"), default="cache")
 parser.add_argument("--source-chunk-tokens", type=int, default=128)
@@ -49,7 +51,7 @@ source_paths = [root / p for p in (
     "deep_gemm/include/deep_gemm/impls/peer_moe_dag.cuh",
     "deep_gemm/include/deep_gemm/common/peer_moe_dag.cuh",
     "csrc/apis/peer_moe_dag.hpp", "csrc/apis/peer_moe_training.hpp", "tests/train_moe_lm.py", "tests/evaluate_moe_lm.py",
-    "tests/train_moe_lm_distributed.py")]
+    "tests/train_moe_lm_distributed.py", "tests/moe_distributed_utils.py", "tests/run_moe_lm_seeds.py")]
 source_paths.extend((root / "deep_gemm").glob("_C*.so"))
 # Editable installs expose vendor headers through directory symlinks. Hash the
 # same dereferenced tree that copytree freezes, including those dependencies.
@@ -86,6 +88,10 @@ if args.freeze_library:
             copied = library_parent / path.relative_to(root)
             if hashlib.sha256(copied.read_bytes()).hexdigest() != metadata['files'][str(path.relative_to(root))]:
                 raise RuntimeError('library changed while freezing: '+str(path))
+    frozen_tests = library_parent / 'tests'
+    frozen_tests.mkdir()
+    for test_name in ('train_moe_lm.py', 'train_moe_lm_distributed.py', 'evaluate_moe_lm.py', 'moe_distributed_utils.py'):
+        shutil.copy2(root / 'tests' / test_name, frozen_tests / test_name)
     if lut_directory:
         frozen_lut = library_parent / 'runtime-lut'
         shutil.copytree(lut_directory, frozen_lut)
@@ -108,6 +114,12 @@ if args.backend in ("peer", "hybrid") and args.peer_recipe in ("producer", "prod
         recipe.append("--expert-local-grad")
     if args.peer_recipe == "producer-window":
         recipe.extend(["--ring-rows", "65536"])
+if args.backend == "elastic":
+    recipe = ["--ring-rows", "65536", "--deepep-comm-sms", "38"]
+    if args.compute == "fp8":
+        recipe += ["--fp8-active-quantization", "--fp8-mn-major-scales"]
+        if args.fp8_async_weights:
+            recipe.append("--fp8-async-weights")
 fixed_route_seeds = {int(value) for value in args.fixed_route_seeds.split(",") if value}
 if args.dag_fusion:
     recipe = [flag for flag in recipe if flag not in ("--dispatch-producer", "--producer-input-aiu", "--producer-local-aiu")]
@@ -118,7 +130,7 @@ for enabled, flag in ((args.dag_fusion, "--dag-fusion"), (args.dag_backward, "--
 children = []
 for index, seed in enumerate((4827, 4891, 6113)):
     command = ["torchrun", "--standalone", "--nproc-per-node", "2", "--max-restarts", "0",
-        "tests/train_moe_lm_distributed.py", "--backend", args.backend, "--compute", "bf16",
+        str(library_parent / "tests/train_moe_lm_distributed.py") if args.freeze_library else "tests/train_moe_lm_distributed.py", "--backend", args.backend, "--compute", args.compute,
         "--graph", "--reference-check", "--steps", str(args.steps), "--seed", str(seed),
         "--eval-interval", "200", "--eval-batches", "20", "--hidden", "512", "--layers", "4",
         "--experts", "8", "--global-batch", "8", "--sequence", "128", "--chunk-tokens", str(args.source_chunk_tokens),
@@ -135,7 +147,10 @@ for index, seed in enumerate((4827, 4891, 6113)):
         command.append("--reference-fixed-routes")
     output = (directory / f"seed{seed}.log").open("w")
     environment = dict(os.environ, CUDA_VISIBLE_DEVICES=f"{2*index},{2*index+1}", OMP_NUM_THREADS="2",
-                       OPENBLAS_NUM_THREADS="1", PYTHONPATH=str(library_parent)+":.:tests")
+                       OPENBLAS_NUM_THREADS="1", PYTHONPATH=str(library_parent)+":"+str(library_parent / "tests")+":.:tests")
+    if args.backend == "elastic":
+        environment['PYTHONPATH'] = str(library_parent)+":"+str(library_parent / "tests")+":build/campaign/deepep-native-scope:.:tests"
+        environment['DEEPEP_NUM_MAX_ICN_PEERS'] = "2"
     if lut_directory:
         environment['SAIL_DEEPGEMM_LUT_PATH'] = str(lut_directory)
     child = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT, env=environment)

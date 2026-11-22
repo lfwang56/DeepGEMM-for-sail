@@ -21,7 +21,7 @@ import torch.distributed as dist
 from torch import nn
 
 from deep_gemm.training.hierarchical import HierarchicalPeerMoEPlan, make_hierarchical_groups
-from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan
+from deep_gemm.training import NativeMoEPlan, PeerMoEPlan, PersistentMoEPlan, DeepEPMoEPlan
 from train_moe_lm import Configuration, LanguageModel, batch, read_data
 from moe_distributed_utils import destroy_training_process_group
 
@@ -164,10 +164,14 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
     path.parent.mkdir(parents=True, exist_ok=True)
     common = dict(configuration=asdict(config), manifest=manifest, compute=options.compute,
                   backend="native" if options.backend == "collective" else options.backend,
-                  evaluation_backend="peer" if options.backend == "hybrid" else "native" if options.backend == "collective" else options.backend,
+                  evaluation_backend="peer" if options.backend == "hybrid" else "native" if options.backend in ("collective", "elastic") else options.backend,
                   hybrid_domain_size=options.hybrid_domain_size if options.backend == "hybrid" else None,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
+                                    deepep_comm_sms=options.deepep_comm_sms,
+                                    fp8_active_quantization=options.fp8_active_quantization,
+                                    fp8_mn_major_scales=options.fp8_mn_major_scales,
+                                    fp8_async_weight_quantization=options.fp8_async_weights,
                                     fuse_fc1_activation=options.fuse_fc1_activation,
                                     fuse_dhidden_scores=options.fuse_dhidden_scores,
                                     transpose_free_dgrad=options.transpose_free_dgrad,
@@ -211,9 +215,13 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("collective", "peer", "persistent", "hybrid"), default="collective")
+    parser.add_argument("--backend", choices=("collective", "peer", "persistent", "hybrid", "elastic"), default="collective")
     parser.add_argument("--hybrid-domain-size", type=int, default=1)
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
+    parser.add_argument("--deepep-comm-sms", type=int, default=38)
+    parser.add_argument("--fp8-active-quantization", action="store_true")
+    parser.add_argument("--fp8-mn-major-scales", action="store_true")
+    parser.add_argument("--fp8-async-weights", action="store_true")
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--reference-check", action="store_true")
     parser.add_argument("--reference-fixed-routes", action="store_true",
@@ -258,8 +266,12 @@ def main():
         parser.error("input copy ILP requires --backend peer")
     if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend not in ("peer", "hybrid"):
         parser.error("DAG options require --backend peer")
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.fuse_dhidden_scores or options.transpose_free_dgrad or options.expert_local_grad or options.ring_rows is not None) and options.backend not in ("peer", "hybrid"):
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.fuse_dhidden_scores or options.transpose_free_dgrad or options.expert_local_grad) and options.backend not in ("peer", "hybrid"):
         parser.error("peer kernel options require --backend peer")
+    if (options.gemm_config or options.ring_rows is not None) and options.backend not in ("peer", "hybrid", "elastic"):
+        parser.error("GEMM/ring options require peer, hybrid or Elastic")
+    if (options.fp8_active_quantization or options.fp8_mn_major_scales or options.fp8_async_weights) and (options.backend != "elastic" or options.compute != "fp8"):
+        parser.error("FP8 adapter options require Elastic FP8 compute")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
         raise ValueError("experts and global batch must be divisible by EP size >=2")
@@ -279,7 +291,7 @@ def main():
     global_state = {name: value.detach().clone() for name, value in model.state_dict().items()}
     initial_hash = hashlib.sha256(b"".join(value.numpy().tobytes() for value in global_state.values())).hexdigest()
     local_experts, local_batch = config.experts // size, config.batch // size
-    classes = {"collective": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan}
+    classes = {"collective": NativeMoEPlan, "peer": PeerMoEPlan, "persistent": PersistentMoEPlan, "elastic": DeepEPMoEPlan}
     plan_options = dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout)
     if options.backend in ("peer", "hybrid"):
         plan_options.update(dispatch_cache_n=options.dispatch_cache_n,
@@ -305,6 +317,16 @@ def main():
             plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer_fc1_config:
             plan_options.setdefault("gemm_configs", {})["fc1"] = options.peer_fc1_config
+    if options.backend == "elastic":
+        os.environ["DEEPEP_NUM_MAX_ICN_PEERS"] = str(size)
+        plan_options.update(comm_sms=options.deepep_comm_sms, elastic_hybrid=True,
+                            fp8_active_quantization=options.fp8_active_quantization,
+                            fp8_mn_major_scales=options.fp8_mn_major_scales,
+                            fp8_async_weight_quantization=options.fp8_async_weights)
+        if options.ring_rows is not None:
+            plan_options["ring_rows"] = options.ring_rows
+        if options.gemm_config:
+            plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
     hybrid_groups = None
     if options.backend == "hybrid":
         metadata = dist.new_group(backend="gloo", timeout=timedelta(seconds=300))
@@ -420,6 +442,9 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         del ce, auxiliary, norm
         gc.collect()
+    if options.backend == "elastic":
+        torch.cuda.synchronize(device)
+        plan.close()
     del model, optimizer, reduction, plan, static_x, static_y, stream
     gc.collect()
     if hybrid_groups is not None:
