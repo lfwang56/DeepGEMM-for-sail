@@ -10614,3 +10614,64 @@ noninferiority or Qwen2.4T convergence. Artifacts iter65-fp8-paired-lm-quality.j
     "passed": true
   }
 ]
+
+
+## Iteration70 — blockwise FP8 GEMM with fused route return primitive
+
+69 passed actual EP8 mutable input/weight/route/zero-capacity gates,
+actual EP32 Qwen FP32 full-gradient and fullC4096 skew gates.
+Same-host complete routedFWD+rematBWD+FP32DW: FP8legacy121.898889ms,
+cachedfloat104.171484, cachedinteger101.986591, integerasync102.989990,
+BF16split/M128104.793848. Cachedinteger/serial is best FP8 baseline.
+69 is quantizer optimization, not FP8 peer fusion. Strongest prior
+BF16G8/M256 and exact three-graph profiles are independent diagnostics.
+
+Add an isolated FP8 return primitive using the native blockwise E4M3
+MGroupedNoPad mainloop and scheduler. Preserve group-specific weight and
+scale addressing and native FP32 accumulation. Direct BF16x2 register
+stores use the existing peer route permutation/address helper; optionally
+retain the same local BF16 output for rematerialized dScore/DW consumers.
+Pass PeerGemmParams as a separate kernel argument, preserving old native
+FP8/peer parameter ABIs. JIT specialization includes keep/discard behavior,
+with exact native declaration replacement checks and occupied-grid checks.
+GPU lengths remain mutable; host rejects unsupported group counts and
+invalid dtypes/shapes before launch. This primitive requires already
+packed and quantized local input; no input-communication fusion claim.
+
+Compare every local/route output byte and unused canaries to native
+FP8 GEMM followed by the existing scatter. Test balanced/masked/skew/
+empty/reversed/changed weights/input metadata in captured graphs, small
+and actual Qwen FC2/DX shapes. Four local fake owners on one GPU only;
+actual EP integration/quality and complete-step gains remain subsequent gates.
+
+{
+  "clean": false,
+  "reference_count": 1,
+  "every_reference_passed": false,
+  "measurements": [],
+  "scope": "isolated FP8 GEMM/return using four local fake owners; no actual EP or full-step speedup"
+}
+
+Failure tail:
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+deep_gemm/_C.cpython-312-x86_64-linux-gnu.so a908186949466b390193a80f75077feae17a65649ab88a92f0c98ce65739b442
+device_props.name:ZW-M890P
+{"case": "peer_fp8_gemm_provenance", "device": "ZW-M890P", "cus": 39, "extension_sha256": "a908186949466b390193a80f75077feae17a65649ab88a92f0c98ce65739b442", "recipe": "E4M3 activation row128/W128x128 FP32 scales; BF16 peer return; local packed input"}
+{"case": "peer_fp8_gemm_reference", "shape": [3, 256, 256], "capacity": 768, "pattern": "balanced", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": false, "local_bits": true, "status": true}, "passed": false}
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_gemm.py", line 114, in <module>
+    if __name__=='__main__':main()
+                            ^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_gemm.py", line 110, in main
+    fixture(*args)
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_gemm.py", line 83, in fixture
+    if not all(gates.values()):raise AssertionError(gates)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: {'peer_bits': False, 'local_bits': True, 'status': True}
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/run-peer-fp8-70.py", line 5, in <module>
+    subprocess.run([sys.executable,'tests/test_moe_peer_fp8_gemm.py'],cwd=root,check=True)
+  File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/usr/local/bin/python', 'tests/test_moe_peer_fp8_gemm.py']' returned non-zero exit status 1.
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1472933, "start_ticks": "16590949"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}

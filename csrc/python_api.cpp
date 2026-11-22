@@ -15,6 +15,7 @@
 #include "apis/gemm_comm.hpp"
 #include "apis/moe_training.hpp"
 #include "apis/peer_moe_training.hpp"
+#include "apis/peer_moe_fp8.hpp"
 #include "apis/peer_moe_ffn.hpp"
 #include "apis/peer_moe_dag.hpp"
 #include "apis/moe_training_pipeline.hpp"
@@ -41,6 +42,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     deep_gemm::gemm_comm::register_apis(m);
     deep_gemm::training::register_apis(m);
     deep_gemm::training::register_peer_apis(m);
+    deep_gemm::training::register_peer_fp8_apis(m);
     deep_gemm::training::register_peer_ffn_apis(m);
     deep_gemm::training::register_peer_dag_apis(m);
     deep_gemm::training::register_pipeline_apis(m);
