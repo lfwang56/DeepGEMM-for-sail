@@ -199,6 +199,11 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_return_pipeline = fp8_flag(None, "DG_MOE_FP8_RETURN_PIPELINE")
         self.fp8_return_ctas = helper_value(None, "DG_MOE_FP8_RETURN_CTAS", 4)
         self.fp8_return_threads = helper_value(None, "DG_MOE_FP8_RETURN_THREADS", 512)
+        self.fp8_return_store_bytes = helper_value(None, "DG_MOE_FP8_RETURN_STORE_BYTES", 4)
+        if self.fp8_return_store_bytes not in (4,16):
+            raise ValueError("FP8 return store width must be4or16bytes")
+        if self.fp8_return_store_bytes != 4 and (not self.fp8_peer_compute or not fuse_return or self.fp8_return_pipeline):
+            raise ValueError("wide FP8 return stores require direct fused FP8 return")
         if self.fp8_return_threads not in (256,512,1024):
             raise ValueError("FP8 return copy threads must be256,512or1024")
         if self.fp8_return_pipeline and (not self.fp8_peer_compute or not fuse_return or ring_rows is None):
@@ -406,7 +411,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -695,7 +700,8 @@ class PeerMoEPlan(NativeMoEPlan):
                     quantized_a, self.quantized[name], output, self.lengths, self.permutation,
                     self.pointer_tables[destination], self.chunk_tokens * self.k,
                     keep_local=self.reuse_forward_context and role == 'fc2' and not self._fp8_backward,
-                    compile_only=compile_only, config=() if config is None else config)
+                    compile_only=compile_only, config=() if config is None else config,
+                    return_store_bytes=self.fp8_return_store_bytes)
             options = {} if config is None else {"configs": (dg.get_num_sms(), self.block_m, *config, (0, 0, 0))}
             # Zero lengths make this a safe local warmup during preparation.
             dg.m_grouped_fp8_gemm_nt_nopad(quantized_a, self.quantized[name], output, self.group_ids,

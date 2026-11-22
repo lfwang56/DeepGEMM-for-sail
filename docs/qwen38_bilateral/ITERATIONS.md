@@ -40631,3 +40631,4404 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3098812, "start_ticks": "218336216"}, {"pid": 3163140, "start_ticks": "218361048"}, {"pid": 3164737, "start_ticks": "218361731"}, {"pid": 3166807, "start_ticks": "218362497"}, {"pid": 3168409, "start_ticks": "218363192"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration113 — direct 128-bit FP8 GEMM return epilogue
+
+Immutable111 actualEP32 is negative: baseline direct62.3920ms versus
+copy8/th51269.6747ms and copy10/th102471.3754ms; both shape references
+and all six host/rank audits pass. Rank0 profile identifies16.5609ms
+copy/producer overlap but4.17857ms copy-only tail and16.5989ms producer
+GEMM/publication union. Overlap percentage alone is not a speedup.
+
+Optional DG_MOE_FP8_RETURN_STORE_BYTES=16 keeps the full native GEMM grid.
+After MMA completion, round fragments to BF16 once into reused TSM,
+cache row destinations using a compile-time destination stride, then
+write contiguous16-byte peer vectors. When forward context needs the
+local output, write the same bits locally in this loop, avoiding a
+second conversion/epilogue. No global copy staging or auxiliary stream
+is involved. Reserve enough dynamic TSM for tiny-K configurations and
+query actual occupancy. Default4 is preserved; waiting-return/input
+modes cannot request this direct-return primitive. All ranks agree on
+the new width. Optional API argument preserves existing callers.
+
+Two widths each require54 every-element oracle/graph references and6
+component timings; four EP8 phases cover mutable routes, empty capacity,
+multiple chunks, and combination with the input producer. Promotion
+still requires matched real32 full-layer timings and CPU references.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 4.940097045898438,
+      "samples": [
+        4.940832901000976,
+        4.940097045898438,
+        4.939664840698242,
+        4.938626861572265,
+        4.941048812866211
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 4.814233016967774,
+      "samples": [
+        4.811491012573242,
+        4.814741134643555,
+        4.814233016967774,
+        4.812522125244141,
+        4.814556121826172
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 5.166611862182617,
+      "samples": [
+        5.161441040039063,
+        5.169607162475586,
+        5.162604141235351,
+        5.168741989135742,
+        5.166611862182617
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 7.26288070678711,
+      "samples": [
+        7.26288070678711,
+        7.2624763488769535,
+        7.273394775390625,
+        7.280011749267578,
+        7.262773895263672
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 7.955139923095703,
+      "samples": [
+        7.947724914550781,
+        7.957798767089844,
+        7.947112274169922,
+        7.955139923095703,
+        7.9585693359375
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 4,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 8.422028350830079,
+      "samples": [
+        8.416053009033202,
+        8.422598266601563,
+        8.420503997802735,
+        8.422678375244141,
+        8.422028350830079
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 4.9408519744873045,
+      "samples": [
+        4.940518951416015,
+        4.9408519744873045,
+        4.941521072387696,
+        4.9418388366699215,
+        4.940475845336914
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 4.362292098999023,
+      "samples": [
+        4.362292098999023,
+        4.362022018432617,
+        4.362462997436523,
+        4.364141845703125,
+        4.360837173461914
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 4.3783111572265625,
+      "samples": [
+        4.376559829711914,
+        4.379684066772461,
+        4.3783111572265625,
+        4.377804183959961,
+        4.378498077392578
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 7.277271270751953,
+      "samples": [
+        7.277271270751953,
+        7.2702796936035154,
+        7.283740234375,
+        7.278105163574219,
+        7.27367935180664
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 7.610520935058593,
+      "samples": [
+        7.609130096435547,
+        7.608666229248047,
+        7.610520935058593,
+        7.61248779296875,
+        7.613739776611328
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "return_store_bytes": 16,
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 7.5154670715332035,
+      "samples": [
+        7.516288757324219,
+        7.5154670715332035,
+        7.5189697265625,
+        7.512918853759766,
+        7.515432739257813
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-wide113-ep8-mode3-tiled2-direct16",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-wide113-ep8-multichunk-tiled2-direct16",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-wide113-ep8-mode3-tiled2-direct16-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-wide113-ep8-multichunk-tiled2-direct16-input32",
+      "returncode": 0
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_wide113_variant_start",
+      "return_store_bytes": 4
+    },
+    {
+      "case": "peer_fp8_gemm_provenance",
+      "device": "ZW-M890P",
+      "cus": 39,
+      "extension_sha256": "5fc082982dea46e00f5a647b9a7355d0afab8960c60493a23037e02d5cdc848d",
+      "recipe": "E4M3 activation row128/W128x128 FP32 scales; BF16 peer return; local packed input"
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 4.940097045898438,
+      "samples": [
+        4.940832901000976,
+        4.940097045898438,
+        4.939664840698242,
+        4.938626861572265,
+        4.941048812866211
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 4.814233016967774,
+      "samples": [
+        4.811491012573242,
+        4.814741134643555,
+        4.814233016967774,
+        4.812522125244141,
+        4.814556121826172
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 5.166611862182617,
+      "samples": [
+        5.161441040039063,
+        5.169607162475586,
+        5.162604141235351,
+        5.168741989135742,
+        5.166611862182617
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 7.26288070678711,
+      "samples": [
+        7.26288070678711,
+        7.2624763488769535,
+        7.273394775390625,
+        7.280011749267578,
+        7.262773895263672
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 7.955139923095703,
+      "samples": [
+        7.947724914550781,
+        7.957798767089844,
+        7.947112274169922,
+        7.955139923095703,
+        7.9585693359375
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 8.422028350830079,
+      "samples": [
+        8.416053009033202,
+        8.422598266601563,
+        8.420503997802735,
+        8.422678375244141,
+        8.422028350830079
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "fp8_wide113_variant_finish",
+      "return_store_bytes": 4,
+      "returncode": 0
+    },
+    {
+      "case": "fp8_wide113_variant_start",
+      "return_store_bytes": 16
+    },
+    {
+      "case": "peer_fp8_gemm_provenance",
+      "device": "ZW-M890P",
+      "cus": 39,
+      "extension_sha256": "5fc082982dea46e00f5a647b9a7355d0afab8960c60493a23037e02d5cdc848d",
+      "recipe": "E4M3 activation row128/W128x128 FP32 scales; BF16 peer return; local packed input"
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        3,
+        256,
+        256
+      ],
+      "capacity": 768,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 4.9408519744873045,
+      "samples": [
+        4.940518951416015,
+        4.9408519744873045,
+        4.941521072387696,
+        4.9418388366699215,
+        4.940475845336914
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 4.362292098999023,
+      "samples": [
+        4.362292098999023,
+        4.362022018432617,
+        4.362462997436523,
+        4.364141845703125,
+        4.360837173461914
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 4.3783111572265625,
+      "samples": [
+        4.376559829711914,
+        4.379684066772461,
+        4.3783111572265625,
+        4.377804183959961,
+        4.378498077392578
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "balanced",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "masked",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "skew",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "empty",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "reversed",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_scatter_oracle_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "reference": "Torch index_copy of native BF16 output",
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": true,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_reference",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "pattern": "updated",
+      "keep_local": false,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "peer_bits": true,
+        "local_bits": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 7.277271270751953,
+      "samples": [
+        7.277271270751953,
+        7.2702796936035154,
+        7.283740234375,
+        7.278105163574219,
+        7.27367935180664
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 7.610520935058593,
+      "samples": [
+        7.609130096435547,
+        7.608666229248047,
+        7.610520935058593,
+        7.61248779296875,
+        7.613739776611328
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 7.5154670715332035,
+      "samples": [
+        7.516288757324219,
+        7.5154670715332035,
+        7.5189697265625,
+        7.512918853759766,
+        7.515432739257813
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "fp8_wide113_variant_finish",
+      "return_store_bytes": 16,
+      "returncode": 0
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3307887,
+          "start_ticks": "218417128"
+        },
+        {
+          "pid": 3350813,
+          "start_ticks": "218433387"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Raw tail:
+```
+ 2048], "capacity": 65536, "variant": "fused_return_keep", "median_event_ms": 4.3783111572265625, "samples": [4.376559829711914, 4.379684066772461, 4.3783111572265625, 4.377804183959961, 4.378498077392578], "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"}
+{"case": "peer_fp8_scatter_oracle_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "balanced", "reference": "Torch index_copy of native BF16 output", "every_element": true, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "balanced", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "balanced", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_scatter_oracle_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "masked", "reference": "Torch index_copy of native BF16 output", "every_element": true, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "masked", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "masked", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_scatter_oracle_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "skew", "reference": "Torch index_copy of native BF16 output", "every_element": true, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "skew", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "skew", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_scatter_oracle_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "empty", "reference": "Torch index_copy of native BF16 output", "every_element": true, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "empty", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "empty", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_scatter_oracle_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "reversed", "reference": "Torch index_copy of native BF16 output", "every_element": true, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "reversed", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "reversed", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_scatter_oracle_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "updated", "reference": "Torch index_copy of native BF16 output", "every_element": true, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "updated", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_reference", "shape": [16, 8192, 4096], "capacity": 65536, "pattern": "updated", "keep_local": false, "graph": true, "every_element": true, "gates": {"peer_bits": true, "local_bits": true, "status": true}, "passed": true}
+{"case": "peer_fp8_gemm_signal", "shape": [16, 8192, 4096], "capacity": 65536, "variant": "native_plus_scatter", "median_event_ms": 7.277271270751953, "samples": [7.277271270751953, 7.2702796936035154, 7.283740234375, 7.278105163574219, 7.27367935180664], "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"}
+{"case": "peer_fp8_gemm_signal", "shape": [16, 8192, 4096], "capacity": 65536, "variant": "fused_return_discard", "median_event_ms": 7.610520935058593, "samples": [7.609130096435547, 7.608666229248047, 7.610520935058593, 7.61248779296875, 7.613739776611328], "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"}
+{"case": "peer_fp8_gemm_signal", "shape": [16, 8192, 4096], "capacity": 65536, "variant": "fused_return_keep", "median_event_ms": 7.5154670715332035, "samples": [7.516288757324219, 7.5154670715332035, 7.5189697265625, 7.512918853759766, 7.515432739257813], "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"}
+{"case": "fp8_wide113_variant_finish", "return_store_bytes": 16, "returncode": 0}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3307887, "start_ticks": "218417128"}, {"pid": 3350813, "start_ticks": "218433387"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

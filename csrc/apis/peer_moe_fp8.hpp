@@ -20,11 +20,13 @@ public:
         bool output_mode;
         bool copy_only;
         int copy_threads;
+        int return_store_bytes;
     };
     static auto compile_key(const Args& args) {
         return std::make_tuple(FP8GemmRuntime::compile_key(
             {args.launch_info, args.launch_args, args.kernel_params}), args.keep_local, args.input_mode, args.output_mode, args.copy_only,
-            args.copy_only ? args.copy_threads : 0, args.copy_only ? args.peers.destination_rows_per_rank : 0);
+            args.copy_only ? args.copy_threads : 0, args.return_store_bytes,
+            args.copy_only || args.return_store_bytes==16 ? args.peers.destination_rows_per_rank : 0);
     }
     static std::string generate_impl(const Args& args) {
         auto source = FP8GemmRuntime::generate_impl({args.launch_info, args.launch_args, args.kernel_params});
@@ -49,8 +51,8 @@ public:
         }
         replace("typename GemmKernel::Params params", "typename GemmKernel::Params params, const deep_gemm::training::PeerGemmParams peers, const deep_gemm::training::PeerDispatchPipeline input, const deep_gemm::training::PeerDispatchPipeline output");
         replace("op(params, smem);", "op(params, peers, input, output, smem);");
-        return fmt::format("#define DG_TRAINING_FP8_PEER_KEEP_LOCAL {}\n#define DG_TRAINING_FP8_PEER_INPUT {}\n#define DG_TRAINING_FP8_RETURN_PIPELINE {}\n#define DG_TRAINING_FP8_RETURN_STRIDE {}\n",
-                           int(args.keep_local), int(args.input_mode), int(args.output_mode), args.peers.destination_rows_per_rank) + source;
+        return fmt::format("#define DG_TRAINING_FP8_PEER_KEEP_LOCAL {}\n#define DG_TRAINING_FP8_PEER_INPUT {}\n#define DG_TRAINING_FP8_RETURN_PIPELINE {}\n#define DG_TRAINING_FP8_RETURN_STRIDE {}\n#define DG_TRAINING_FP8_RETURN_STORE_BYTES {}\n",
+                           int(args.keep_local), int(args.input_mode), int(args.output_mode), args.peers.destination_rows_per_rank, args.return_store_bytes) + source;
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.peers, args.input, args.output));
@@ -66,7 +68,8 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
                            int destination_rows_per_rank, bool keep_local, bool compile_only,
                            const std::vector<int>& config,
                            const std::vector<torch::Tensor>& input_control, int reserved_input_ctas,
-                           const std::vector<torch::Tensor>& return_control, int reserved_return_ctas, bool copy_only, int copy_threads) {
+                           const std::vector<torch::Tensor>& return_control, int reserved_return_ctas, bool copy_only, int copy_threads,
+                           int return_store_bytes) {
     const auto& a = lhs.first;
     const auto& b = rhs.first;
     const auto& sa = lhs.second;
@@ -98,6 +101,8 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     PeerDispatchPipeline input{}, output{};
     const bool output_mode = !return_control.empty();
     DG_HOST_ASSERT(!(input_mode && output_mode) && (!copy_only || output_mode));
+    DG_HOST_ASSERT(return_store_bytes==4 || return_store_bytes==16);
+    DG_HOST_ASSERT(return_store_bytes==4 || (!input_mode && !output_mode));
     DG_HOST_ASSERT(copy_threads==256 || copy_threads==512 || copy_threads==1024);
     if (input_mode) {
         TORCH_CHECK(input_control.size() == 2 && keep_local,
@@ -170,14 +175,19 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     peers.destination_peers = reinterpret_cast<const uint64_t*>(destinations.data_ptr<int64_t>());
     peers.destination_rows_per_rank = destination_rows_per_rank;
     peers.num_ranks = destinations.numel();
-    const std::string name = copy_only ? "fp8_training_peer_return_copy" : output_mode ? "fp8_training_peer_return_pipeline" : input_mode ? "fp8_training_peer_input" :
+    const std::string name = return_store_bytes==16 ? "fp8_training_peer_return_wide16" : copy_only ? "fp8_training_peer_return_copy" : output_mode ? "fp8_training_peer_return_pipeline" : input_mode ? "fp8_training_peer_input" :
         keep_local ? "fp8_training_peer_return_keep" : "fp8_training_peer_return_discard";
     auto args = PeerFp8ReturnRuntime::Args{
         .launch_info = {bm, bn, bk, wm, wn, int(groups), stages, "MGroupedNoPad", "Default", name, false},
         .launch_args = {get_grid_shape(sms), dim3((bm / wm) * (bn / wn) * 32), std::get<0>(smem)},
         .kernel_params = FP8GemmRuntime::to_underlying_arguments_rtc(gemm, nullptr),
         .peers = peers, .keep_local = keep_local, .input = input, .input_mode = input_mode,
-        .output = output, .output_mode = output_mode, .copy_only = copy_only, .copy_threads = copy_threads};
+        .output = output, .output_mode = output_mode, .copy_only = copy_only, .copy_threads = copy_threads,
+        .return_store_bytes = return_store_bytes};
+    if(return_store_bytes==16) {
+        args.launch_args.smem_size=std::max<size_t>(args.launch_args.smem_size,size_t(bm)*(bn+16)*sizeof(cutlass::bfloat16_t));
+        DG_HOST_ASSERT(args.launch_args.smem_size+size_t(bm)*sizeof(uint64_t)+8<=256*1024);
+    }
     if(copy_only) { args.launch_args.block_dim.x=copy_threads; args.launch_args.smem_size=0; }
     const auto runtime = compiler->build(name, PeerFp8ReturnRuntime::generate(args));
     int occupancy = 0;
@@ -204,7 +214,8 @@ static void register_peer_fp8_apis(pybind11::module_& m) {
           py::arg("reserved_input_ctas") = 0,
           py::arg("return_control") = std::vector<torch::Tensor>{},
           py::arg("reserved_return_ctas") = 0,
-          py::arg("copy_only") = false, py::arg("copy_threads") = 512);
+          py::arg("copy_only") = false, py::arg("copy_threads") = 512,
+          py::arg("return_store_bytes") = 4);
 }
 
 } // namespace deep_gemm::training

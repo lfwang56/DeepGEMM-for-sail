@@ -192,11 +192,61 @@ public:
       const uint32_t row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
       const uint32_t valid_rows = uint32_t(cute::min(int(size<0>(TileShape{})), int(M) - int(m_coord) * int(size<0>(TileShape{}))));
 #if !DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_RETURN_PIPELINE
+#if DG_TRAINING_FP8_RETURN_STORE_BYTES == 16
+      // The Tensor Cell mainloop is finished. Reuse its TSM for one rounded
+      // BF16 tile, then issue contiguous local/peer 128-bit stores. No extra
+      // global output staging buffer or copy kernel is needed.
+      constexpr uint32_t BM=size<0>(TileShape{}),BN=size<1>(TileShape{}),StageN=BN+16;
+      constexpr uint32_t Width=TileScheduler::SHAPE_N,Stride=DG_TRAINING_FP8_RETURN_STRIDE;
+      static_assert(BN%8==0 && Width%8==0 && Stride>0);
+      auto* stage=reinterpret_cast<cutlass::bfloat16_t*>(smem_buf);
+      __shared__ uint64_t return_destinations[BM];
+      __syncthreads();
+      for(uint32_t row=threadIdx.x;row<valid_rows;row+=blockDim.x) {
+        const int route=__ldg(peers.permutation+row_base+row);
+        uint64_t address=0;
+        if(route>=0 && uint64_t(route)<uint64_t(Stride)*peers.num_ranks) {
+          address=__ldg(peers.destination_peers+uint32_t(route)/Stride)+
+              (uint64_t(uint32_t(route)%Stride)*Width+uint32_t(n_coord)*BN)*sizeof(cutlass::bfloat16_t);
+        }
+        return_destinations[row]=address;
+      }
+      CUTLASS_PRAGMA_UNROLL
+      for(int wm=0;wm<cute::size<1>(coordinates);++wm) {
+        CUTLASS_PRAGMA_UNROLL
+        for(int mm=0;mm<cute::size<0,1>(coordinates);++mm) {
+          const uint32_t row=cute::get<0>(coordinates(cute::make_coord(cute::_0{},mm,cute::_0{}),wm,cute::_0{}));
+          if(row>=valid_rows)continue;
+          CUTLASS_PRAGMA_UNROLL
+          for(int wn=0;wn<cute::size<2>(coordinates);++wn) {
+            CUTLASS_PRAGMA_UNROLL
+            for(int mn=0;mn<cute::size<0,2>(coordinates);++mn) {
+              const uint32_t column=cute::get<1>(coordinates(cute::make_coord(cute::_0{},mm,mn),wm,wn));
+              const auto* values=cute::raw_pointer_cast(accumulators(cute::make_coord(cute::_,mm,mn),wm,wn).data());
+              *reinterpret_cast<uint32_t*>(stage+uint64_t(row)*StageN+column)=tix::cvt_rte_bf16x2_f32(values[1],values[0]);
+            }
+          }
+        }
+      }
+      __syncthreads();
+      for(uint32_t index=threadIdx.x;index<valid_rows*(BN/8);index+=blockDim.x) {
+        const uint32_t row=index/(BN/8),column=(index%(BN/8))*8;
+        if(uint32_t(n_coord)*BN+column>=Width)continue;
+        const uint4 value=*reinterpret_cast<const uint4*>(stage+uint64_t(row)*StageN+column);
+        if(return_destinations[row])
+          *reinterpret_cast<uint4*>(return_destinations[row]+column*sizeof(cutlass::bfloat16_t))=value;
+#if DG_TRAINING_FP8_PEER_KEEP_LOCAL
+        *reinterpret_cast<uint4*>(params.epilogue.ptr_D+uint64_t(row_base+row)*Width+uint32_t(n_coord)*BN+column)=value;
+#endif
+      }
+      __syncthreads();
+#else
       training::scatter_peer_output<cutlass::bfloat16_t, TileScheduler::SHAPE_N, false>(
           accumulators, coordinates, peers, row_base, valid_rows,
           uint32_t(n_coord) * size<1>(TileShape{}));
 #endif
-#if DG_TRAINING_FP8_PEER_KEEP_LOCAL
+#endif
+#if DG_TRAINING_FP8_PEER_KEEP_LOCAL && DG_TRAINING_FP8_RETURN_STORE_BYTES != 16
       // update params.epilogue for ptrC and ptrD
       auto params_epilogue_local = params.epilogue;
       params_epilogue_local.ptr_D += deep_scheduler.curr_offset_c(cute::get<2>(params_epilogue_local.dD));

@@ -1,5 +1,5 @@
 """Native blockwise FP8 GEMM versus the same GEMM with fused BF16 return."""
-import hashlib,json,math,statistics
+import hashlib,json,math,os,statistics
 from pathlib import Path
 import torch
 import deep_gemm as dg
@@ -38,7 +38,8 @@ def fixture(groups, n, k, capacity):
 
     def fused(keep):
         dg._C._moe_training_peer_fp8_gemm((qx,sx),(qw,sw),actual,lengths,permutation,
-                                          actual_ptrs,destination_rows,keep_local=keep)
+                                          actual_ptrs,destination_rows,keep_local=keep,
+                                          return_store_bytes=int(os.getenv('DG_TEST_FP8_RETURN_STORE_BYTES','4')))
 
     def reset(output,destinations):
         output.fill_(-7)
