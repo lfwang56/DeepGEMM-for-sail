@@ -39,6 +39,92 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     const int warp = thread >> 5;
     const int64_t index = block_index * blockDim.x + thread;
 
+    if constexpr (Op == Operation::PackFp8WeightGradients) {
+        // Per-expert feature scales over actual token K. First pass reduces
+        // coalesced token-major BF16 reads. Second pass transposes through
+        // swizzled TSM into the native FP8 non-transposed MMA panels.
+        __shared__ uint32_t maxima[8][128];
+        __shared__ float scales[128];
+        __shared__ uint32_t tile[128][64];
+        const int gcount=p.dim[0],capacity=p.dim[1],m=p.dim[2],n=p.dim[3];
+        const int per_group=(m+n)/128;
+        for(int work=block_index;work<gcount*per_group;work+=gridDim.x) {
+            const int g=work/per_group,local=work%per_group;
+            const bool left=local<m/128;
+            const int width=left?m:n,feature_base=(left?local:local-m/128)*128;
+            const int count=__ldg(pointer<int32_t>(p,6)+g);
+            const int start=__ldg(pointer<int32_t>(p,7)+g),end=__ldg(pointer<int32_t>(p,7)+g+1);
+            if(count<0 || start<0 || start%128 || end<start || end>capacity ||
+                    int64_t(start)+((int64_t(count)+127)/128)*128>end) {
+                if(thread==0)atomicOr(pointer<int32_t>(p,8),2);
+                continue;
+            }
+            const int padded=(count+127)/128*128;
+            const auto* source=pointer<Bf16>(p,left?0:1);
+            auto* destination=pointer<uint8_t>(p,left?2:4);
+            auto* sf=pointer<float>(p,left?3:5);
+            unsigned maximum[4]{};
+            for(int token=warp;token<count;token+=8) {
+                const int64_t at=(int64_t(start)+token)*width+feature_base+lane*4;
+                const uint2 values=*reinterpret_cast<const uint2*>(source+at);
+                const unsigned bits[4]={values.x&65535u,values.x>>16,values.y&65535u,values.y>>16};
+                #pragma unroll
+                for(int j=0;j<4;++j) {
+                    const unsigned positive=bits[j]&0x7fffu;
+                    if(positive<=0x7f80u && positive>maximum[j])maximum[j]=positive;
+                }
+            }
+            #pragma unroll
+            for(int j=0;j<4;++j)maxima[warp][lane*4+j]=maximum[j];
+            __syncthreads();
+            if(warp==0) {
+                float values[4];
+                #pragma unroll
+                for(int j=0;j<4;++j) {
+                    unsigned maximum=0;
+                    #pragma unroll
+                    for(int w=0;w<8;++w) maximum=max(maximum,maxima[w][lane*4+j]);
+                    values[j]=fmaxf(__uint_as_float(maximum<<16),1e-4f)/448.f;
+                    scales[lane*4+j]=values[j];
+                }
+                *reinterpret_cast<float4*>(sf+int64_t(g)*width+feature_base+lane*4)=
+                    make_float4(values[0],values[1],values[2],values[3]);
+            }
+            __syncthreads();
+            for(int base=0;base<padded;base+=128) {
+                #pragma unroll
+                for(int v=thread;v<4096;v+=256) {
+                    const int token=v/32,feature=(v%32)*4;
+                    uint2 values=make_uint2(0,0);
+                    if(base+token<count) {
+                        const int64_t at=(int64_t(start)+base+token)*width+feature_base+feature;
+                        values=*reinterpret_cast<const uint2*>(source+at);
+                    }
+                    tile[token][(feature/2)^(token>>2)]=values.x;
+                    tile[token][(feature/2+1)^(token>>2)]=values.y;
+                }
+                __syncthreads();
+                #pragma unroll
+                for(int j=0;j<16;++j) {
+                    const int feature=warp*16+j;
+                    float values[4];
+                    #pragma unroll
+                    for(int byte=0;byte<4;++byte) {
+                        const int token=lane*4+byte;
+                        const unsigned word=tile[token][(feature/2)^(token>>2)];
+                        const unsigned raw=(word>>(16*(feature&1)))&65535u;
+                        values[byte]=__uint_as_float(raw<<16)/scales[feature];
+                    }
+                    const unsigned lo=epilogue::quant::fp8_pair(values[0],values[1]);
+                    const unsigned hi=epilogue::quant::fp8_pair(values[2],values[3]);
+                    const int64_t at=int64_t(start)*width+int64_t(feature_base+feature)*padded+base+lane*4;
+                    *reinterpret_cast<unsigned*>(destination+at)=lo|(hi<<16);
+                }
+                __syncthreads();
+            }
+        }
+        return;
+    }
     if constexpr (Op == Operation::TransposeQuantizedWeights) {
         // The 128x128 quantization grid is closed under transpose. Transfer
         // E4M3 bytes and FP32 scale bits without re-quantizing BF16 weights.

@@ -18144,3 +18144,324 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2440114, "start_ticks": "18485297"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration99 — producer-inclusive FP8 weight gradients
+
+98 closed92a3a33efe. All CPU/native/mutable/guard gates clean. Qwen
+prequantized DW1 9.6142->7.7534ms and DW2 4.9974->3.9087ms, only
+1.24/1.28x and excluding panel preparation. No whole-step claim.
+
+Add GPU-only per-expert feature maxima and quantize-transpose panels.
+Two passes over actual K; finite BF16 magnitude integer reduction;
+second pass transposes through 32KB swizzled TSM. Both operands and
+scales produced without host count reads. Empty/tail/gapped/invalid
+metadata respected. Preserve current training plans unchanged.
+
+Gate every active byte and SF bit against CPU quantization, every
+small DW output, mutable captured producer+GEMM, invalid metadata and
+both Qwen shapes. Timings include producer; compute-only separately.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 128,
+      "n": 128,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.0001858527393778786,
+        0.0003025949699804187,
+        0.0003257786447647959
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 256,
+      "n": 384,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018577766604721546,
+        0.0002972701913677156,
+        0.0003383176517672837
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 384,
+      "n": 512,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018583044584374875,
+        0.0002990802749991417,
+        0.00033819544478319585
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_with_preparation",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw1",
+      "m": 4096,
+      "n": 8192,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 9.595108032226562,
+      "fp8_ms": 12.921272277832031,
+      "speedup": 0.7425822957610841,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0007071438012644649,
+        0.0008246827055700123,
+        0.0008484183344990015
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "compute_only_ms": 8.226824188232422,
+      "panel_preparation_ms": 4.537738037109375,
+      "scope": "DW including GPU panel quantization and transpose; not a whole-step result",
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_with_preparation",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw2",
+      "m": 8192,
+      "n": 2048,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 5.06556396484375,
+      "fp8_ms": 8.061827850341796,
+      "speedup": 0.6283393864121009,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0008878387743607163,
+        0.0008948149625211954,
+        0.0008500320254825056
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "compute_only_ms": 4.043378067016602,
+      "panel_preparation_ms": 4.005028152465821,
+      "scope": "DW including GPU panel quantization and transpose; not a whole-step result",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 128,
+      "n": 128,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.0001858527393778786,
+        0.0003025949699804187,
+        0.0003257786447647959
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 256,
+      "n": 384,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018577766604721546,
+        0.0002972701913677156,
+        0.0003383176517672837
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 384,
+      "n": 512,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018583044584374875,
+        0.0002990802749991417,
+        0.00033819544478319585
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_with_preparation",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw1",
+      "m": 4096,
+      "n": 8192,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 9.595108032226562,
+      "fp8_ms": 12.921272277832031,
+      "speedup": 0.7425822957610841,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0007071438012644649,
+        0.0008246827055700123,
+        0.0008484183344990015
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "compute_only_ms": 8.226824188232422,
+      "panel_preparation_ms": 4.537738037109375,
+      "scope": "DW including GPU panel quantization and transpose; not a whole-step result",
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_with_preparation",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw2",
+      "m": 8192,
+      "n": 2048,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 5.06556396484375,
+      "fp8_ms": 8.061827850341796,
+      "speedup": 0.6283393864121009,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0008878387743607163,
+        0.0008948149625211954,
+        0.0008500320254825056
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "compute_only_ms": 4.043378067016602,
+      "panel_preparation_ms": 4.005028152465821,
+      "scope": "DW including GPU panel quantization and transpose; not a whole-step result",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 2609705,
+          "start_ticks": "18551592"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "fp8_k_grouped_dw_cpu_reference", "row_scales": true, "compact_panels": true, "m": 128, "n": 128, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.0001858527393778786, 0.0003025949699804187, 0.0003257786447647959], "per_element_sum_absolute_product_error_bound": 0.001, "native_fp8_bf16_boundary_bitwise": true, "passed": true}
+{"case": "fp8_k_grouped_dw_cpu_reference", "row_scales": true, "compact_panels": true, "m": 256, "n": 384, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.00018577766604721546, 0.0002972701913677156, 0.0003383176517672837], "per_element_sum_absolute_product_error_bound": 0.001, "native_fp8_bf16_boundary_bitwise": true, "passed": true}
+{"case": "fp8_k_grouped_dw_cpu_reference", "row_scales": true, "compact_panels": true, "m": 384, "n": 512, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.00018583044584374875, 0.0002990802749991417, 0.00033819544478319585], "per_element_sum_absolute_product_error_bound": 0.001, "native_fp8_bf16_boundary_bitwise": true, "passed": true}
+{"case": "qwen_fp8_dw_with_preparation", "row_scales": true, "compact_panels": true, "role": "dw1", "m": 4096, "n": 8192, "groups": 16, "k_per_group": 2560, "capacity": 65536, "bf16_ms": 9.595108032226562, "fp8_ms": 12.921272277832031, "speedup": 0.7425822957610841, "fp32_accumulation": true, "sampled_reference_errors": [0.0007071438012644649, 0.0008246827055700123, 0.0008484183344990015], "quantization": "one scale per expert feature across token K", "compute_only_ms": 8.226824188232422, "panel_preparation_ms": 4.537738037109375, "scope": "DW including GPU panel quantization and transpose; not a whole-step result", "passed": true}
+{"case": "qwen_fp8_dw_with_preparation", "row_scales": true, "compact_panels": true, "role": "dw2", "m": 8192, "n": 2048, "groups": 16, "k_per_group": 2560, "capacity": 65536, "bf16_ms": 5.06556396484375, "fp8_ms": 8.061827850341796, "speedup": 0.6283393864121009, "fp32_accumulation": true, "sampled_reference_errors": [0.0008878387743607163, 0.0008948149625211954, 0.0008500320254825056], "quantization": "one scale per expert feature across token K", "compute_only_ms": 4.043378067016602, "panel_preparation_ms": 4.005028152465821, "scope": "DW including GPU panel quantization and transpose; not a whole-step result", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2609705, "start_ticks": "18551592"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

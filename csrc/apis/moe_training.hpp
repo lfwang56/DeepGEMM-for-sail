@@ -52,7 +52,7 @@ __global__ void {}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeQuantizedWeights));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::PackFp8WeightGradients));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -71,6 +71,18 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
     constexpr auto fp = torch::kFloat, f8 = torch::kFloat8_e4m3fn;
     int64_t work = 0, blocks = -1;
     switch (static_cast<Operation>(operation)) {
+        case Operation::PackFp8WeightGradients: {
+            schema(9, 4);
+            const auto g=dims[0],r=dims[1],m=dims[2],n=dims[3];
+            DG_HOST_ASSERT(g>0 && g<128 && r>0 && r%128==0 && m>0 && n>0 && m%128==0 && n%128==0);
+            DG_HOST_ASSERT(r*m<=INT32_MAX && r*n<=INT32_MAX);
+            expect(0,r*m,bf);expect(1,r*n,bf);expect(2,r*m,f8);expect(3,g*m,fp);
+            expect(4,r*n,f8);expect(5,g*n,fp);expect(6,g,i32);expect(7,g+1,i32);expect(8,1,i32);
+            for(const auto index:{0,1}) DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[index].data_ptr())%8==0);
+            for(const auto index:{2,4}) DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[index].data_ptr())%4==0);
+            blocks=std::min<int64_t>(g*((m+n)/128),int64_t(get_num_sms())*4);
+            break;
+        }
         case Operation::TransposeQuantizedWeights: {
             schema(8, 3);
             const auto e = dims[0], h = dims[1], i = dims[2];
