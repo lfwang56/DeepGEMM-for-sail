@@ -23,7 +23,8 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
           uint32_t WarpMap = 0, bool AiuBeforeTsm = true>
-__device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args) {
+__device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args,
+        uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u) {
     static_assert(is_k_grouped_contiguous(kGemmType), "K-grouped GEMM type required");
     static_assert(kWithAccumulation, "K-grouped wgrad requires beta=1");
     static_assert(SHAPE_M > 0 and SHAPE_N > 0 and kNumGroups > 0, "M, N and groups must be positive");
@@ -147,7 +148,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
     // Block scheduler, following fused_moe_gemm.cuh.
     uint32_t curr_group_idx, m_block_idx, n_block_idx;
-    TileScheduler scheduler(args.grouped_layout, SHAPE_M);
+    TileScheduler scheduler(args.grouped_layout, SHAPE_M, first_output_tile, end_output_tile);
     while (scheduler.fetch_next_work(curr_group_idx, m_block_idx, n_block_idx)) {
         const uint32_t group_k = scheduler.current_shape_k;
         gmem_tiled_copy_A.desc_.dim_h = group_k;

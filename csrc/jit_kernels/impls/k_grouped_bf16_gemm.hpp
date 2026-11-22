@@ -31,6 +31,7 @@ public:
         bool aiu_before_tsm;
         std::string kernel_name;
         bool cta_probe = false;
+        bool output_tile_range = false;
     };
 
     struct Args {
@@ -38,6 +39,7 @@ public:
         LaunchArgs launch_args;
         KGroupedGemmArgs kernel_params;
         void* cta_probe_ptr = nullptr;
+        uint2 output_tile_range{};
     };
 
     static std::string generate_impl(const Args& args) {
@@ -69,7 +71,7 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
         SHAPE_M, SHAPE_N, NUM_GROUPS,
         BLOCK_M, BLOCK_N, BLOCK_K, WARP_M, WARP_N, BLOCK_SIZE, NUM_STAGES, true,
         WARP_MAP, AIU_BEFORE_TSMLD
-    >(args);
+    >(args{});
     {}
 }}
 
@@ -87,8 +89,10 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
             args.launch_info.warp_map,
             args.launch_info.aiu_before_tsm,
             args.launch_info.kernel_name,
-            args.launch_info.cta_probe ? ", unsigned long long* cta_probe" : "",
+            args.launch_info.cta_probe ? ", unsigned long long* cta_probe"
+                : args.launch_info.output_tile_range ? ", const uint2 tile_range" : "",
             args.launch_info.cta_probe ? "const unsigned long long cta_begin = __ppu_read_clock64();" : "",
+            args.launch_info.output_tile_range ? ", tile_range.x, tile_range.y" : "",
             args.launch_info.cta_probe ?
                 "__syncthreads(); if (threadIdx.x == 0) { "
                 "cta_probe[2 * blockIdx.x] = cta_begin; "
@@ -96,7 +100,9 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
     }
 
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        if (args.launch_info.cta_probe)
+        if (args.launch_info.output_tile_range)
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.output_tile_range));
+        else if (args.launch_info.cta_probe)
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.cta_probe_ptr));
         else
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params));
@@ -111,6 +117,11 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const bool device_lengths = false,
     const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
+    const int tile_chunk = device_lengths ? get_env<int>("DG_BF16_WGRAD_TILE_CHUNK", 0) : 0;
+    DG_HOST_ASSERT(tile_chunk >= 0 && tile_chunk <= 1 << 20);
+    // A single probe buffer cannot represent several launches. Reject before
+    // any output mutation; the original diagnostic remains unchanged at0.
+    DG_HOST_ASSERT(tile_chunk == 0 || !cta_probe.has_value());
     // Follow upstream: choose the config using the largest group's K.
     const auto max_k = *std::max_element(ks_cpu.begin(), ks_cpu.end());
     const auto [num_sms, block_m, block_n, block_k, warp_m, warp_n, num_stages, _smem_config] =
@@ -126,12 +137,12 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const int block_size = 32 * (block_m / warp_m) * (block_n / warp_n);
     const int smem_size = static_cast<int>(gemm_smem_total_size(
         2, num_stages, block_m, block_n, block_k));
-    const std::string kernel_name = cta_probe.has_value()
-        ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
+    const std::string kernel_name = tile_chunk ? "bf16_k_grouped_gemm_tile_range"
+        : cta_probe.has_value() ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,
-                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value()},
+                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0},
         .launch_args = {get_grid_shape(num_sms), dim3(block_size), smem_size},
         .kernel_params = {
             .a_ptr = a.data_ptr(),
@@ -173,7 +184,16 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     if (device_lengths) {
         // The internal profiler's CPU K list cannot describe a dynamic device
         // layout. External profilers still observe the actual kernel normally.
-        Bf16KGroupedRuntime::launch(runtime, args);
+        if (tile_chunk) {
+            const uint64_t tiles = uint64_t(num_groups) * math::ceil_div(m, block_m) * math::ceil_div(n, block_n);
+            DG_HOST_ASSERT(tiles <= UINT32_MAX);
+            for (uint64_t first = 0; first < tiles; first += tile_chunk) {
+                args.output_tile_range = make_uint2(uint32_t(first), uint32_t(std::min(tiles, first + tile_chunk)));
+                Bf16KGroupedRuntime::launch(runtime, args);
+            }
+        } else {
+            Bf16KGroupedRuntime::launch(runtime, args);
+        }
     } else {
         auto profiling_guard = deep_gemm::show_gemm_ut(dg_prof_params);
         Bf16KGroupedRuntime::launch(runtime, args);

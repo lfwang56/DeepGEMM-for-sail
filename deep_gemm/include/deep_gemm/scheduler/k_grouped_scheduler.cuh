@@ -22,6 +22,8 @@ struct KGroupedScheduler {
 
     const int32_t* grouped_layout;
     uint32_t current_iter = 0;
+    uint32_t first_output_tile = 0;
+    uint32_t end_output_tile = ~0u;
     uint32_t num_blocks;
     uint32_t num_m_blocks;
     uint32_t curr_group_idx = 0;
@@ -29,8 +31,9 @@ struct KGroupedScheduler {
     uint32_t current_k_start = 0;
     bool group_loaded = false;
 
-    __device__ __forceinline__ explicit KGroupedScheduler(const int32_t* grouped_layout_, uint32_t shape_m)
-        : grouped_layout(grouped_layout_) {
+    __device__ __forceinline__ explicit KGroupedScheduler(const int32_t* grouped_layout_, uint32_t shape_m,
+            uint32_t first_tile = 0, uint32_t end_tile = ~0u)
+        : grouped_layout(grouped_layout_), first_output_tile(first_tile), end_output_tile(end_tile) {
         num_m_blocks = math::ceil_div(shape_m, BLOCK_M);
         num_blocks = kNumGroups * num_m_blocks * NUM_N_BLOCKS;
     }
@@ -65,8 +68,8 @@ struct KGroupedScheduler {
     __device__ __forceinline__ bool fetch_next_work(uint32_t& group_idx, uint32_t& m_block_idx, uint32_t& n_block_idx) {
         const uint32_t blocks_per_group = num_m_blocks * NUM_N_BLOCKS;
         while (true) {
-            const auto next_block_idx = (current_iter++) * gridDim.x + blockIdx.x;
-            if (next_block_idx >= num_blocks) {
+            const auto next_block_idx = first_output_tile + (current_iter++) * gridDim.x + blockIdx.x;
+            if (next_block_idx >= num_blocks || next_block_idx >= end_output_tile) {
                 return false;
             }
 

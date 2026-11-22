@@ -3700,3 +3700,31 @@ Timing records (partial and rejected phases retained in provenance):
 ]
 
 Preflights: native4df7f1fbd8f4 built clean218. Initial new harness bound the plan to a different stream (correctly rejected); fixed the harness to warm and capture on one stream. Initial full-shape preflight caught an incorrect score-partial width using H instead of I; corrected before timing. Unchanged production FP32 limits retained. Dedicated serial/both dynamic checks each passed all six patterns, including valid zero/tiny/negative scores, updated weights, and backward-only replay. FullH8192/I2048/E16/K10 single-device every-element references passed balanced+duplicate patterns, RMS0.0020–0.0038. Logs retained under work/qwen38-r2-dhidden46-*.log.
+
+
+## Iteration47 — short output-tile WGrad launches with full CTA grids
+
+The matched CTA clocks show far less in-CTA elapsed growth than kernel spans
+under full-grid concurrency. Test short complete-K output-tile intervals,
+letting dGrad/communication dispatch between WGrad launches without cutting
+its persistent grid. DG_BF16_WGRAD_TILE_CHUNK0(default) retains the prior
+launch; positive1..2^20 partitions only device-length WGrad output tiles.
+A distinct _tile_range kernel gets a separate uint2 argument, preserving
+KGroupedGemmArgs. Every tile has the original complete K accumulation order
+and beta=1; no work, precision, gradient or route is omitted.
+Reject negative/oversized chunks and multi-launch CTA-probe ambiguity before
+output mutation. Static CPU-length APIs retain their original behavior.
+The first CPU build on215 encountered foreign GPU work and was excluded by
+its whole-node gate; switch to218 for clean build and PPU preflights. No
+foreign task was stopped. Frozen iteration46 LM quality runs are isolated.
+
+Complete H8192/I2048/E512/K10,T4096/C4096,ring65536,G8,BM256,MGroup/WGrad3.
+Strong Elastic38 early-DY denominator and all-rank audits remain unchanged.
+Raw dHidden score fusion46 is kept constant in all Peer cases. Serial chunks
+control launch overhead versus concurrency. Timings including failed/partial
+phases are retained in provenance; only clean complete steps count.
+
+Timing records:
+[]
+
+Candidate blocked before distributed timing: new full-Qwen identical-input chunk reference failed bitwise comparison (3.2% elements, maxabs0.007013624); small shapes had passed. No speedup accepted. Preserve work/qwen38-r2-wgchunk47-preflight.log. Investigate implementation and test stream ordering after closing this attempt.
