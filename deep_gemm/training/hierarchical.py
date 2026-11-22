@@ -156,6 +156,8 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             raise ValueError('deferred tail DW currently requires BF16 compute')
         if share_fp8_weights and (compute!='fp8' or not source_pipeline):
             raise ValueError('shared FP8 weights require the native FP8 source pipeline')
+        if share_fp8_weights and os.environ.get('DG_MOE_FP8_FUSED_WEIGHT_PREPARE','0')!='1':
+            raise ValueError('shared FP8 weights require fused Q/QT preparation')
         factor=1 if source_pipeline else 2
         self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, factor * max_tokens,
                                  chunk_tokens=factor * chunk_tokens, group=groups.domain,
@@ -170,8 +172,6 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             self.remote_inner=PeerMoEPlan(hidden,intermediate,local_experts,topk,max_tokens,
                 chunk_tokens=chunk_tokens,group=groups.domain,device=self.device,compute=compute,check_errors=False,**peer_options)
             if share_fp8_weights:
-                if not self.inner.fp8_fused_weight_prepare:
-                    raise ValueError('shared FP8 weights require fused Q/QT preparation')
                 # Both source plans execute serially on the caller stream.
                 # The owning plan refreshes these weights on every invocation.
                 for name in ('w1','w2','w1_t','w2_t'):

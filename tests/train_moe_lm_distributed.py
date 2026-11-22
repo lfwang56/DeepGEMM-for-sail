@@ -438,10 +438,28 @@ def main():
                 graph.replay()
             if (iteration + 1) % options.eval_interval == 0 or iteration + 1 == options.steps:
                 for layer_plan in plans:layer_plan.check()
-                reused_windows = ([int(layer_plan.forward_context_reused_windows.item()) for layer_plan in plans]
-                                  if getattr(plan, 'reuse_forward_context', False) else [])
-                if reused_windows and not all(count > 0 for count in reused_windows):
-                    raise AssertionError('every context-enabled layer must reuse its own forward window')
+                reused_windows=[];global_reused_windows=[];source_reused_windows=[]
+                if getattr(plan,'reuse_forward_context',False):
+                    active_without_reuse=False
+                    for layer_plan in plans:
+                        sources=([layer_plan.inner,layer_plan.remote_inner] if getattr(layer_plan,'hybrid_source_pipeline',False)
+                                 else [layer_plan])
+                        counts=[int(source.forward_context_reused_windows.item()) for source in sources]
+                        source_reused_windows.append(counts);reused_windows.append(sum(counts))
+                        for source,count in zip(sources,counts):
+                            # A rank/source with no routed expert rows has no
+                            # window to replay. Active sources must still reuse.
+                            if int(source.global_lengths.sum().item())>0 and count==0:
+                                active_without_reuse=True
+                        if hasattr(layer_plan,'hybrid_pair_forward_reused_last_backward') and not layer_plan.hybrid_pair_forward_reused_last_backward:
+                            active_without_reuse=True
+                    agreement=torch.tensor([int(active_without_reuse)],device=device,dtype=torch.int64)
+                    dist.all_reduce(agreement,op=dist.ReduceOp.MAX)
+                    totals=torch.tensor(reused_windows,device=device,dtype=torch.int64)
+                    dist.all_reduce(totals,op=dist.ReduceOp.SUM)
+                    global_reused_windows=totals.cpu().tolist()
+                    if agreement.item() or not all(count>0 for count in global_reused_windows):
+                        raise AssertionError('active sources and every global layer must reuse live forward windows')
                 last_validation = evaluate(model, validation, config, rank, size, device, options.eval_batches)
                 metrics = torch.stack((ce.detach(), auxiliary.detach(), norm.detach()))
                 dist.all_reduce(metrics)
@@ -454,7 +472,9 @@ def main():
                                       "train_cross_entropy": values[0] / size, "auxiliary_loss": values[1] / size,
                                       "gradient_norm": values[2] / size, "validation_loss": last_validation,
                                       "elapsed_seconds": time.perf_counter() - begin,
-                                      "context_reused_windows_by_layer": reused_windows}), flush=True)
+                                      "context_reused_windows_by_layer": reused_windows,
+                                      "context_reused_windows_by_source_and_layer": source_reused_windows,
+                                      "global_context_reused_windows_by_layer": global_reused_windows}), flush=True)
         save_checkpoints(model, optimizer, config, manifest, options, generator, rank, size, last_validation, initial_loss)
         torch.cuda.synchronize(device)
         print(json.dumps({"case": "distributed_lm_finished", "rank": rank, "ep_size": size,

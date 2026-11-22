@@ -94801,3 +94801,31 @@ and an eight-rank12-update/full-model gradient-check smoke test.
   ],
   "raw_sha256": "0b717ef5860c8f486284dc4db9c8a7e6cda15e1b3ab61b934b6881133d341270"
 }
+
+## Iteration131 — audit active source contexts without rejecting empty experts
+
+130passed408operator/reference records and all eight full-model gradient
+oracles (overall relative L2 about.0061),but its12-update EP8smoke failed
+the training harness's strict per-rank positive-window assertion. A source
+with no expert rows legitimately has zero replay windows. The assertion
+also observed only one of the two independent source plans.
+
+Audit both source plans. Require every source with active expert rows to
+have reused windows,globally agree on failure,and require positive summed
+reuse for every model layer across EP. Record local/source/global counts
+explicitly. Keep one plan per layer and mutation/fallback checks unchanged.
+Move the shared-weight fused-preparation requirement before plan allocation.
+No numerical kernel or dataflow changes. Re-run all seven130gates,including
+independent FP32/native oracles,BF16 tail regressions and full-model smoke.
+
+{
+  "passed": true,
+  "focused": 288,
+  "independent_reference_records": 120,
+  "lm_finished": 8,
+  "lm_references": 8,
+  "clean_lm": true,
+  "accepted": 7,
+  "excluded": [],
+  "raw_sha256": "7ca4fd77ec36dbe568937538f523be7db5a85e63819c2fb01a15d33c40b7266d"
+}
