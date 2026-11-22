@@ -304,8 +304,8 @@ class NativeMoEPlan:
         self._gemm(self.packed_dy, self.w2_t, self.hidden, "w2_t")
         self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
         if self.compute == "fp8" and self.fuse_activation_quant:
-            _launch(14, [self.gate_up, self.hidden, *self.quantized[self.i]], [self.rows, self.i])
-            _launch(15, [self.gate_up, self.hidden, self.gate_up, *self.quantized[2 * self.i]], [self.rows, self.i])
+            self._activation()
+            self._activation(backward=True)
         dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x,
                                        torch.zeros_like(w1, dtype=torch.float32), self.lengths, self.rows)
         dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden,

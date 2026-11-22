@@ -38,6 +38,9 @@ enum class Operation : int {
     DeepEPReduceRows,
     DeepEPBackwardRows,
     DeepEPReduceWindowRows,
+    QuantizeRowsDeviceRows,
+    ActivationQuantizeDeviceRows,
+    ActivationBackwardQuantizeDeviceRows,
 };
 
 }  // namespace deep_gemm::training

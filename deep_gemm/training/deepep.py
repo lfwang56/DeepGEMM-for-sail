@@ -5,6 +5,8 @@ only the expert rows needed by the grouped GEMMs. All receive capacities are
 bounded and all routing counts remain on device during graph replay.
 """
 
+import os
+
 import torch
 import torch.distributed as dist
 
@@ -16,7 +18,23 @@ from .routed_rows import allocate_route_windows, set_route_window
 class DeepEPMoEPlan(NativeMoEPlan):
     transport = "deepep"
 
-    def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None, **kwargs):
+    def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None,
+                 fp8_active_quantization=None, fp8_mn_major_scales=None, **kwargs):
+        def quant_flag(value, key):
+            if value is None:
+                raw = os.environ.get(key, "0")
+                if raw not in ("0", "1"):
+                    raise ValueError(key + " must be0or1")
+                value = raw == "1"
+            if type(value) is not bool:
+                raise TypeError(key + " must be bool")
+            return value
+        self.fp8_active_quantization = quant_flag(fp8_active_quantization, "DG_MOE_FP8_ACTIVE_QUANTIZATION")
+        self.fp8_mn_major_scales = quant_flag(fp8_mn_major_scales, "DG_MOE_FP8_MN_MAJOR_SCALES")
+        if self.fp8_mn_major_scales and not self.fp8_active_quantization:
+            raise ValueError("MN-major FP8 scales require active-row quantization")
+        if self.fp8_active_quantization and kwargs.get("compute", "bf16") != "fp8":
+            raise ValueError("active FP8 quantization requires FP8 expert compute")
         if kwargs.get("compute", "bf16") == "fp8" and kwargs.get("m_schedule", "nopad") != "nopad":
             raise ValueError("DeepEP FP8 GEMMs require the nopad expert schedule")
         if kwargs.get("group") is None:
@@ -28,6 +46,25 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.ring_rows = ring_rows
         self.communication_dtype = "bf16"
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales)
+        recipes = [None] * self.size
+        dist.all_gather_object(recipes, recipe, group=self.group)
+        if any(other != recipe for other in recipes):
+            raise ValueError("DeepEP ranks disagree on FP8 quantization layout")
+        self.quantized_scale_storage = {}
+        if self.compute == "fp8":
+            for width in (self.h, self.i, 2 * self.i):
+                if width in self.quantized_scale_storage:
+                    continue
+                if self.fp8_mn_major_scales:
+                    storage = self._allocate("activation_scale_mn_" + str(width),
+                                             (width // 128, self.rows), torch.float32)
+                    data = self.quantized[width][0]
+                    self.quantized[width] = (data, storage.t())
+                    self.buffers.pop("activation_scale_" + str(width))
+                else:
+                    storage = self.quantized[width][1]
+                self.quantized_scale_storage[width] = storage
         if ring_rows is not None and (self.k > 32 or self.size * self.chunk_tokens * self.h > 2**31 - 1):
             raise ValueError("DeepEP routed-row windows require topk<=32 and an int32-bounded receive matrix")
         # Preserve forward Hidden for concurrent DW2; dHidden uses a distinct
@@ -82,10 +119,31 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.buffers[name] = value
         return value
 
+    def _prepare_local(self, w1, w2):
+        if self.fp8_active_quantization:
+            # Native warming zeros lengths but normally never reads offsets.
+            # Active quantizers consume this GPU scalar even during warming.
+            self.offsets.zero_()
+        return super()._prepare_local(w1, w2)
+
+    def _activation(self, backward=False, hidden=None):
+        if not (self.fp8_active_quantization and self.fuse_activation_quant):
+            return super()._activation(backward=backward, hidden=hidden)
+        hidden = self.hidden if hidden is None else hidden
+        width = 2 * self.i if backward else self.i
+        tensors = [self.gate_up, hidden] + ([self.gate_up] if backward else [])
+        tensors.extend((self.quantized[width][0], self.quantized_scale_storage[width],
+                        self.current_rows, self.status))
+        _launch(28 if backward else 27, tensors,
+                [self.rows, self.i, int(self.fp8_mn_major_scales)])
+        return True
+
     def _prepare_pointwise(self):
         operations = [0, 1, 2, 7, 8, 13, 16, 19, 20, 23, 24]
         if self.compute == "fp8":
             operations.extend((9, 10, 14, 15))
+            if self.fp8_active_quantization:
+                operations.extend((26, 27, 28))
         if self.fast_weight_transpose:
             operations.append(22)
         if self.ring_rows is not None:
@@ -100,7 +158,12 @@ class DeepEPMoEPlan(NativeMoEPlan):
         if self.compute == "fp8":
             quantized_a = self.quantized[a.shape[1]]
             if not prequantized:
-                _launch(9, [a, *quantized_a], list(a.shape))
+                if self.fp8_active_quantization:
+                    _launch(26, [a, quantized_a[0], self.quantized_scale_storage[a.shape[1]],
+                                 self.current_rows, self.status],
+                            [self.rows, a.shape[1], int(self.fp8_mn_major_scales)])
+                else:
+                    _launch(9, [a, *quantized_a], list(a.shape))
             dg.m_grouped_fp8_gemm_nt_nopad(
                 quantized_a, self.quantized[name], output, self.group_ids,
                 m_rows=self.lengths, disable_ue8m0_cast=True, **options)

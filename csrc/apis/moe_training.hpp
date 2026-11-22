@@ -20,14 +20,21 @@ public:
         Params params;
     };
 
+    static std::string kernel_name(const Args& args) {
+        const auto name = fmt::format("moe_training_{}", args.operation);
+        if (args.operation < int(Operation::QuantizeRowsDeviceRows)) return name;
+        return name + (args.params.dim[2] ? "_mn_scales" : "_row_scales");
+    }
+
     static std::string generate_impl(const Args& args) {
         return fmt::format(R"(
 #include <deep_gemm/impls/moe_training.cuh>
 extern "C" __launch_bounds__(256, 1)
-__global__ void moe_training_{}(const deep_gemm::training::Params params) {{
-    deep_gemm::training::run<static_cast<deep_gemm::training::Operation>({})>(params);
+__global__ void {}(const deep_gemm::training::Params params) {{
+    deep_gemm::training::run<static_cast<deep_gemm::training::Operation>({}){}>(params);
 }}
-)", args.operation, args.operation);
+)", kernel_name(args), args.operation,
+       args.operation < int(Operation::QuantizeRowsDeviceRows) ? "" : args.params.dim[2] ? ", true" : ", false");
     }
 
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -40,7 +47,7 @@ __global__ void moe_training_{}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPReduceWindowRows));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantizeDeviceRows));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -140,6 +147,25 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(backward ? 3 : 2, m * output_width, f8);
             expect(backward ? 4 : 3, m * (output_width / 128), fp);
             blocks = (m * (width / 128) + 7) / 8;
+            break;
+        }
+        case Operation::QuantizeRowsDeviceRows:
+        case Operation::ActivationQuantizeDeviceRows:
+        case Operation::ActivationBackwardQuantizeDeviceRows: {
+            const bool row = static_cast<Operation>(operation) == Operation::QuantizeRowsDeviceRows;
+            const bool backward = static_cast<Operation>(operation) == Operation::ActivationBackwardQuantizeDeviceRows;
+            const size_t count_index = row ? 3 : backward ? 5 : 4;
+            schema(count_index + 2, 3);
+            const auto m = dims[0], width = dims[1];
+            DG_HOST_ASSERT(m > 0 && width > 0 && width % 128 == 0 && dims[2] <= 1);
+            expect(0, m * width * (row ? 1 : 2), bf);
+            if (!row) expect(1, m * width, bf);
+            if (backward) expect(2, m * 2 * width, bf);
+            const auto output_width = backward ? 2 * width : width;
+            expect(row ? 1 : backward ? 3 : 2, m * output_width, f8);
+            expect(row ? 2 : backward ? 4 : 3, m * (output_width / 128), fp);
+            expect(count_index, 1, i32); expect(count_index + 1, 1, i32);
+            blocks = int64_t(get_num_sms()) * 4;
             break;
         }
         case Operation::QuantizeWeights:
@@ -267,7 +293,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
     for (size_t i = 0; i < dims.size(); ++i) params.dim[i] = dims[i];
     Runtime::Args args{operation, {dim3(blocks), dim3(256), 0}, params};
     const auto code = Runtime::generate(args);
-    const auto runtime = compiler->build(fmt::format("moe_training_{}", operation), code);
+    const auto runtime = compiler->build(Runtime::kernel_name(args), code);
     Runtime::launch(runtime, args);
 }
 
@@ -276,9 +302,13 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::DeepEPReduceWindowRows));
-        Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
-        compiler->build(fmt::format("moe_training_{}", operation), Runtime::generate(args));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantizeDeviceRows));
+        const int variants = operation >= int(Operation::QuantizeRowsDeviceRows) ? 2 : 1;
+        for (int layout = 0; layout < variants; ++layout) {
+            Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
+            args.params.dim[2] = layout;
+            compiler->build(Runtime::kernel_name(args), Runtime::generate(args));
+        }
     }
 }
 

@@ -31,7 +31,7 @@ __device__ __forceinline__ float warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-template <Operation Op>
+template <Operation Op, bool MnMajorScales = false>
 __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int thread = threadIdx.x;
@@ -39,7 +39,29 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     const int warp = thread >> 5;
     const int64_t index = block_index * blockDim.x + thread;
 
-    if constexpr (Op == Operation::CountRoutes) {
+    if constexpr (Op == Operation::QuantizeRowsDeviceRows ||
+                  Op == Operation::ActivationQuantizeDeviceRows ||
+                  Op == Operation::ActivationBackwardQuantizeDeviceRows) {
+        constexpr Operation Base = Op == Operation::QuantizeRowsDeviceRows ? Operation::QuantizeRows :
+            Op == Operation::ActivationQuantizeDeviceRows ? Operation::ActivationQuantize :
+            Operation::ActivationBackwardQuantize;
+        constexpr int count_index = Op == Operation::QuantizeRowsDeviceRows ? 3 :
+            Op == Operation::ActivationQuantizeDeviceRows ? 4 : 5;
+        const int32_t rows = __ldg(pointer<int32_t>(p, count_index));
+        if (rows < 0 || int64_t(rows) > p.dim[0]) {
+            if (thread == 0 && blockIdx.x == 0)
+                atomicOr(pointer<int32_t>(p, count_index + 1), 2);
+            return;
+        }
+        Params active = p;
+        active.dim[0] = rows;
+        active.dim[2] = MnMajorScales ? p.dim[0] : 0;
+        const int64_t blocks = (int64_t(rows) * (p.dim[1] / 128) + 7) / 8;
+        // The reused arithmetic is warp-local. Its last partial warp returns
+        // uniformly without touching inactive rows or requiring a CTA barrier.
+        for (int64_t block = block_index; block < blocks; block += gridDim.x)
+            run<Base, MnMajorScales>(active, block);
+    } else if constexpr (Op == Operation::CountRoutes) {
         // ids, counts, route expert, within-expert row, status.
         // dims: route count, local experts, rank, number of ranks.
         if (index >= p.dim[0]) return;
@@ -186,14 +208,20 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         const float scale_first = fmaxf(warp_max(maximum_first), 1e-4f) / 448.f;
         auto* quantized = pointer<uint16_t>(p, backward ? 3 : 2);
         auto* scales = pointer<float>(p, backward ? 4 : 3);
-        if (lane == 0) scales[output_base / 128] = scale_first;
+        if (lane == 0) {
+            if constexpr (MnMajorScales) scales[segment * p.dim[2] + row] = scale_first;
+            else scales[output_base / 128] = scale_first;
+        }
         #pragma unroll
         for (int pair = 0; pair < 2; ++pair)
             quantized[output_base / 2 + lane + pair * 32] = epilogue::quant::fp8_pair(
                 first[2 * pair] / scale_first, first[2 * pair + 1] / scale_first);
         if constexpr (backward) {
             const float scale_second = fmaxf(warp_max(maximum_second), 1e-4f) / 448.f;
-            if (lane == 0) scales[(output_base + p.dim[1]) / 128] = scale_second;
+            if (lane == 0) {
+                if constexpr (MnMajorScales) scales[(segment + segments) * p.dim[2] + row] = scale_second;
+                else scales[(output_base + p.dim[1]) / 128] = scale_second;
+            }
             #pragma unroll
             for (int pair = 0; pair < 2; ++pair)
                 quantized[(output_base + p.dim[1]) / 2 + lane + pair * 32] = epilogue::quant::fp8_pair(
@@ -213,7 +241,12 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         }
         maximum = warp_max(maximum);
         const float scale = fmaxf(maximum, 1e-4f) / 448.f;
-        if (lane == 0) pointer<float>(p, 2)[group] = scale;
+        if (lane == 0) {
+            if constexpr (MnMajorScales) {
+                const int64_t segments = p.dim[1] / 128;
+                pointer<float>(p, 2)[(group % segments) * p.dim[2] + group / segments] = scale;
+            } else pointer<float>(p, 2)[group] = scale;
+        }
         auto* output = pointer<uint16_t>(p, 1);
         #pragma unroll
         for (int pair = 0; pair < 2; ++pair)

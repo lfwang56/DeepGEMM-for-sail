@@ -8482,3 +8482,470 @@ is reported as a same-precision fusion speedup.
     "passed": true
   }
 ]
+
+
+## Iteration62 — persistent active FP8 quantization and direct scale layout
+
+61 exact rank0 three-graph profile spans519.875602ms: row quantization
+243.934170, activation+quantization156.166241, weight quantization26.907956,
+FP8 forward/input GEMM24.671306, BF16 DW15.429916, scale layout10.584852.
+The first400.100411ms is about77% of the graph. Physical ring65536 covers
+21 windows at EP32/T4096, but most windows are empty for balanced routing.
+Unprofiled best FP8 default519.723828ms versus BF16105.361597; no FP8
+speedup claimed. Source-backed scale helper copies a full SF matrix unless
+its strides are(1,m), even when the GEMM has zero active rows.
+
+Append three operations26/27/28: a bounded156-CTA grid reads GPU active
+rows, validates capacity, and loops over only active warp groups. Reuse the
+original9/14/15 arithmetic with compile-time MN scale indexing; old default
+paths retain their scale arithmetic and existing Params ABI. Distinct positive
+row/MN kernel names and both precompiled variants protect warmup. Optional
+DeepEP flags allow separate active-only and active+MN-layout ablations.
+Direct SF storage is physically[segments,capacity], viewed as[capacity,segments]
+with strides(1,capacity), eliminating native layout copies. Default flags false.
+Initialize cold-preparation row counts and dispatch activation warmup through
+the plan method so the opted-in noncontiguous SF view is never passed to
+the legacy contiguous quantizer API. No quantization recipe or precision
+boundary changes; no token or gradient reduction.
+
+Require all-buffer bitwise comparison with old quantizers, inactive canaries,
+mutable row/input graph replay, counts0/1/17/tail/full and invalid negative/
+over-capacity status with no writes. Test small and full Qwen ring shapes.
+Isolated quantizer events are screening signals, not EP/full-layer speedups.
+
+Whole-host-clean local signal: True.
+
+[
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": false,
+    "rows": 0,
+    "variant": "full_capacity_control",
+    "median_event_ms": 3.001832962036133,
+    "samples": [
+      3.001832962036133,
+      3.0021400451660156,
+      3.00177059173584,
+      3.002101516723633,
+      3.001813507080078
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": false,
+    "rows": 0,
+    "variant": "active_rows",
+    "median_event_ms": 0.004498500004410743,
+    "samples": [
+      0.004620499908924103,
+      0.004509500041604042,
+      0.0044824998825788494,
+      0.004475999996066094,
+      0.004498500004410743
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": false,
+    "rows": 40960,
+    "variant": "full_capacity_control",
+    "median_event_ms": 3.001811408996582,
+    "samples": [
+      3.0014930725097657,
+      3.001811408996582,
+      3.001470947265625,
+      3.001910591125488,
+      3.0019079208374024
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": false,
+    "rows": 40960,
+    "variant": "active_rows",
+    "median_event_ms": 2.2939594268798826,
+    "samples": [
+      2.2939594268798826,
+      2.293613052368164,
+      2.292753982543945,
+      2.2940305709838866,
+      2.2940635681152344
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": true,
+    "rows": 0,
+    "variant": "full_capacity_control",
+    "median_event_ms": 3.0021120071411134,
+    "samples": [
+      3.00179443359375,
+      3.0021120071411134,
+      3.001832962036133,
+      3.0021520614624024,
+      3.002161979675293
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": true,
+    "rows": 0,
+    "variant": "active_rows",
+    "median_event_ms": 0.004453499987721443,
+    "samples": [
+      0.004453499987721443,
+      0.004368999972939491,
+      0.004475999996066094,
+      0.004462499916553497,
+      0.004351500049233436
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": true,
+    "rows": 40960,
+    "variant": "full_capacity_control",
+    "median_event_ms": 3.0013425827026365,
+    "samples": [
+      3.001077079772949,
+      3.0015470504760744,
+      3.0010515213012696,
+      3.001417541503906,
+      3.0013425827026365
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 8192,
+    "old_operation": 9,
+    "mn_major": true,
+    "rows": 40960,
+    "variant": "active_rows",
+    "median_event_ms": 2.6347335815429687,
+    "samples": [
+      2.6343870162963867,
+      2.6360040664672852,
+      2.633822441101074,
+      2.6352054595947267,
+      2.6347335815429687
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": false,
+    "rows": 0,
+    "variant": "full_capacity_control",
+    "median_event_ms": 1.6221115112304687,
+    "samples": [
+      1.621728515625,
+      1.6223539352416991,
+      1.621983528137207,
+      1.622126007080078,
+      1.6221115112304687
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": false,
+    "rows": 0,
+    "variant": "active_rows",
+    "median_event_ms": 0.004450000077486038,
+    "samples": [
+      0.004526999965310097,
+      0.004450000077486038,
+      0.004484000056982041,
+      0.0043969999998807905,
+      0.004411499947309494
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": false,
+    "rows": 40960,
+    "variant": "full_capacity_control",
+    "median_event_ms": 1.622074508666992,
+    "samples": [
+      1.6217395782470703,
+      1.622074508666992,
+      1.6220384597778321,
+      1.6220855712890625,
+      1.6221139907836915
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": false,
+    "rows": 40960,
+    "variant": "active_rows",
+    "median_event_ms": 1.33503999710083,
+    "samples": [
+      1.334689998626709,
+      1.33503999710083,
+      1.3349069595336913,
+      1.3352785110473633,
+      1.33518648147583
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": true,
+    "rows": 0,
+    "variant": "full_capacity_control",
+    "median_event_ms": 1.622307586669922,
+    "samples": [
+      1.6218965530395508,
+      1.6223464965820313,
+      1.622307586669922,
+      1.6223054885864259,
+      1.6223129272460937
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": true,
+    "rows": 0,
+    "variant": "active_rows",
+    "median_event_ms": 0.004473999887704849,
+    "samples": [
+      0.004473999887704849,
+      0.00451049990952015,
+      0.0044755000621080395,
+      0.004407500103116036,
+      0.004469000175595284
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": true,
+    "rows": 40960,
+    "variant": "full_capacity_control",
+    "median_event_ms": 1.622085952758789,
+    "samples": [
+      1.6220365524291993,
+      1.622085952758789,
+      1.6221920013427735,
+      1.6220844268798829,
+      1.622185516357422
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 14,
+    "mn_major": true,
+    "rows": 40960,
+    "variant": "active_rows",
+    "median_event_ms": 1.2823499679565429,
+    "samples": [
+      1.2823499679565429,
+      1.2820605278015136,
+      1.2819464683532715,
+      1.2830109596252441,
+      1.2826279640197753
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": false,
+    "rows": 0,
+    "variant": "full_capacity_control",
+    "median_event_ms": 2.485993576049805,
+    "samples": [
+      2.485760498046875,
+      2.4857610702514648,
+      2.485993576049805,
+      2.4860464096069337,
+      2.4861644744873046
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": false,
+    "rows": 0,
+    "variant": "active_rows",
+    "median_event_ms": 0.004493999853730201,
+    "samples": [
+      0.004500000178813935,
+      0.004491500183939933,
+      0.004619999974966049,
+      0.004446500167250633,
+      0.004493999853730201
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": false,
+    "rows": 40960,
+    "variant": "full_capacity_control",
+    "median_event_ms": 2.485722541809082,
+    "samples": [
+      2.485626983642578,
+      2.4856164932250975,
+      2.4858095169067385,
+      2.485894966125488,
+      2.485722541809082
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": false,
+    "rows": 40960,
+    "variant": "active_rows",
+    "median_event_ms": 2.2038810729980467,
+    "samples": [
+      2.2037450790405275,
+      2.2046749114990236,
+      2.2045360565185548,
+      2.2036890029907226,
+      2.2038810729980467
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": true,
+    "rows": 0,
+    "variant": "full_capacity_control",
+    "median_event_ms": 2.485866928100586,
+    "samples": [
+      2.485866928100586,
+      2.486200523376465,
+      2.4856950759887697,
+      2.4858169555664062,
+      2.4862285614013673
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": true,
+    "rows": 0,
+    "variant": "active_rows",
+    "median_event_ms": 0.004456000030040741,
+    "samples": [
+      0.0044824998825788494,
+      0.004452500119805336,
+      0.004619999974966049,
+      0.004441500082612038,
+      0.004456000030040741
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": true,
+    "rows": 40960,
+    "variant": "full_capacity_control",
+    "median_event_ms": 2.4859460830688476,
+    "samples": [
+      2.48584098815918,
+      2.485960578918457,
+      2.485726547241211,
+      2.4859460830688476,
+      2.486136054992676
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  },
+  {
+    "case": "active_fp8_quantization_signal",
+    "capacity": 65536,
+    "width": 2048,
+    "old_operation": 15,
+    "mn_major": true,
+    "rows": 40960,
+    "variant": "active_rows",
+    "median_event_ms": 2.120042419433594,
+    "samples": [
+      2.1198034286499023,
+      2.1196830749511717,
+      2.121517562866211,
+      2.120042419433594,
+      2.1201820373535156
+    ],
+    "scope": "isolated quantizer; no EP/full-step speedup"
+  }
+]
