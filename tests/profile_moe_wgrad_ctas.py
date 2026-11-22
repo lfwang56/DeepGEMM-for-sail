@@ -47,7 +47,19 @@ def main():
  with torch.cuda.stream(stream):
   for _ in range(3):reference=step(normal,accum[0]);actual=step(probed,accum[1])
   stream.synchronize()
-  for a,b in zip(reference,actual):torch.testing.assert_close(a,b,rtol=0,atol=0)
+  # Route packing uses atomics: two uninstrumented plans also change FP32
+  # accumulation order. Keep the existing full-layer1e-5 RMS gate; the API
+  # probe test separately demands bitwise equality on IDENTICAL packed inputs.
+  def check_layer():
+   errors=[]
+   for index,(a,b) in enumerate(zip(reference,actual)):
+    if index not in (2,3):torch.testing.assert_close(a,b,rtol=0,atol=0)
+    av,bv=a.float(),b.float()
+    error=float((av-bv).square().sum().sqrt()/av.square().sum().sqrt().clamp_min(1e-20))
+    assert error<1e-5,error
+    errors.append(error)
+   return errors
+  layer_errors=check_layer()
   graph=torch.cuda.CUDAGraph()
   with torch.cuda.graph(graph,stream=stream):actual=step(probed,accum[1])
   for _ in range(3):graph.replay()
@@ -56,7 +68,7 @@ def main():
   torch.cuda.synchronize();torch.cuda.profiler.start()
   for _ in range(args.steps):graph.replay()
   stream.synchronize();torch.cuda.profiler.stop()
-  for a,b in zip(reference,actual):torch.testing.assert_close(a,b,rtol=0,atol=0)
+  layer_errors=check_layer()
   probed.check()
  if rank==0:
   records=[]
@@ -64,7 +76,7 @@ def main():
    active=clocks[clocks[:,0]>=0];assert active.numel() and bool((active[:,1]>active[:,0]).all())
    delta=active[:,1]-active[:,0]
    records.append(dict(call=call,role='dw2' if call%2==0 else 'dw1',ctas=len(active),min_cycles=int(delta.min()),median_cycles=int(delta.median()),max_cycles=int(delta.max()),clocks=active.tolist()))
-  print(json.dumps(dict(case='wgrad_cta_clock_diagnostic',rank=rank,ranks=size,shape=[h,i,e,k,t],wgrad_budget=os.environ.get('DG_BF16_WGRAD_COMPUTE_CUS','0'),dgrad_budget=args.dgrad_compute_cus,overlap=args.wgrad_overlap,records=records,graph_replays=args.steps,bitwise_equal_to_uninstrumented=True,clock='SDK2.2 __ppu_read_clock64 per-CTA elapsed; no cross-CU timestamp comparison',scope='diagnostic only; CTA clocks include execution stalls and preemption after entry; instrumentation is not an optimization',passed=True)),flush=True)
+  print(json.dumps(dict(case='wgrad_cta_clock_diagnostic',rank=rank,ranks=size,shape=[h,i,e,k,t],wgrad_budget=os.environ.get('DG_BF16_WGRAD_COMPUTE_CUS','0'),dgrad_budget=args.dgrad_compute_cus,overlap=args.wgrad_overlap,records=records,graph_replays=args.steps,relative_rms_to_uninstrumented=layer_errors,layer_rms_gate=1e-5,identical_layout_bitwise_gate='tests/test_moe_wgrad_cta_probe.py',clock='SDK2.2 __ppu_read_clock64 per-CTA elapsed; no cross-CU timestamp comparison',scope='diagnostic only; CTA clocks include execution stalls and preemption after entry; instrumentation is not an optimization',passed=True)),flush=True)
  if size>1:dist.barrier()
  del graph,actual,reference
  del normal,probed

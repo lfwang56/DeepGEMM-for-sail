@@ -3558,3 +3558,96 @@ modelwork, strong baselineorproductionrecipe. Wholehostauditsgovernacceptance.
 
 Closure records:
 []
+
+
+### Iteration45 diagnostic follow-up
+
+The firstdistributedlaunchwasrejectedbeforeGPUworkbecause219becameforeign;
+switchedto220216217218. Retryr2failedbeforetheprofilerAPI: the newdiagnostic
+harnessincorrectlyrequiredbitwiseFP32DWacrossseparatelyrebuiltatomicroute
+permutations. Rank1usedTWOuninstrumentedPeerplansandfailedthesameassertion
+(91.5% ofDW1elementsdiffered,maxabs7.08e-8). Thus this was an invalidcontrol,
+not evidenceofprobe arithmeticerrors. The dedicatedsame-packed-layoutprobe
+APItestkeepsbitwiseequality and is extendedtoBOTHfullQwenwgradtemplates.
+The full-layerdiagnosticuses the PRE-EXISTING1e-5RMSgraph/ablationcontract;
+no existing numericaltest, thresholdorindependentFP32oracle was changed.
+Allfailedlogsarepreserved; no timingswere accepted fromr2.
+
+
+### Iteration45 completed validation
+
+SinglePPUidentical-packed-inputchecksPASSbitwiseforbothactualQwenDWtemplates,
+plusdynamiclength/inputgraphandfiveinvalidprobe/aliascases. Retriedactual32
+on220216217218afterthe218singlePPUpreflightfinished(r3gatecorrectlydeniedthe
+occupiedhostbeforelaunch). Allfourr4profilephasespassedall32ranksand4wholehost
+audits. Y/DX/dScorebitwisechecksremain; FP32DWusesexisting1e-5RMSbecauseatomic
+routepackingchangesKsumorderbetweenseparateplans. Numericalthresholdsinall
+existingtestsareunchanged. Runtime4b5e0c6aaf9203585925e73ea2e4fd9bb5a8814418a7f3ef58b3a8fe548261aa.
+
+CTAclockaggregates(toalignwithAsyslastgraphnext;notactiveMMAcycles):
+[
+  {
+    "phase": "qwen38-r2-cta45-profile-capped-parallel-r4",
+    "dw1_max_cta_cycles": 32284770,
+    "dw2_max_cta_cycles": 16220116,
+    "cta_counts": [
+      16
+    ],
+    "layer_rms": [
+      0.0,
+      0.0,
+      3.543921138771111e-07,
+      3.5421322763795615e-07,
+      0.0
+    ],
+    "clean": true
+  },
+  {
+    "phase": "qwen38-r2-cta45-profile-capped-serial-r4",
+    "dw1_max_cta_cycles": 32606572,
+    "dw2_max_cta_cycles": 16528126,
+    "cta_counts": [
+      16
+    ],
+    "layer_rms": [
+      0.0,
+      0.0,
+      3.6304953709986876e-07,
+      3.62731725545018e-07,
+      0.0
+    ],
+    "clean": true
+  },
+  {
+    "phase": "qwen38-r2-cta45-profile-full-parallel-r4",
+    "dw1_max_cta_cycles": 14101880,
+    "dw2_max_cta_cycles": 7004562,
+    "cta_counts": [
+      39
+    ],
+    "layer_rms": [
+      0.0,
+      0.0,
+      3.4575123208924197e-07,
+      3.4556069294922054e-07,
+      0.0
+    ],
+    "clean": true
+  },
+  {
+    "phase": "qwen38-r2-cta45-profile-full-serial-r4",
+    "dw1_max_cta_cycles": 13716536,
+    "dw2_max_cta_cycles": 6893144,
+    "cta_counts": [
+      39
+    ],
+    "layer_rms": [
+      0.0,
+      0.0,
+      3.468078659807361e-07,
+      3.4659564107641927e-07,
+      0.0
+    ],
+    "clean": true
+  }
+]

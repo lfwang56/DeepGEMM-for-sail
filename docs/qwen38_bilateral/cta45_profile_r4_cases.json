@@ -1,0 +1,82 @@
+[
+  {
+    "name": "qwen38-r2-cta45-profile-full-serial-r4",
+    "script": "build/campaign/profile-moe-rank-zero.py",
+    "environment": {
+      "PYTHONPATH": ".:tests",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "0"
+    },
+    "arguments": [
+      "--output",
+      "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-cta45-profile-full-serial-r4",
+      "--",
+      "python",
+      "tests/profile_moe_wgrad_ctas.py",
+      "--wgrad-overlap",
+      "none",
+      "--dgrad-compute-cus",
+      "0"
+    ]
+  },
+  {
+    "name": "qwen38-r2-cta45-profile-capped-serial-r4",
+    "script": "build/campaign/profile-moe-rank-zero.py",
+    "environment": {
+      "PYTHONPATH": ".:tests",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "16"
+    },
+    "arguments": [
+      "--output",
+      "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-cta45-profile-capped-serial-r4",
+      "--",
+      "python",
+      "tests/profile_moe_wgrad_ctas.py",
+      "--wgrad-overlap",
+      "none",
+      "--dgrad-compute-cus",
+      "23"
+    ]
+  },
+  {
+    "name": "qwen38-r2-cta45-profile-capped-parallel-r4",
+    "script": "build/campaign/profile-moe-rank-zero.py",
+    "environment": {
+      "PYTHONPATH": ".:tests",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "16"
+    },
+    "arguments": [
+      "--output",
+      "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-cta45-profile-capped-parallel-r4",
+      "--",
+      "python",
+      "tests/profile_moe_wgrad_ctas.py",
+      "--wgrad-overlap",
+      "both",
+      "--dgrad-compute-cus",
+      "23"
+    ]
+  },
+  {
+    "name": "qwen38-r2-cta45-profile-full-parallel-r4",
+    "script": "build/campaign/profile-moe-rank-zero.py",
+    "environment": {
+      "PYTHONPATH": ".:tests",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "0"
+    },
+    "arguments": [
+      "--output",
+      "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-cta45-profile-full-parallel-r4",
+      "--",
+      "python",
+      "tests/profile_moe_wgrad_ctas.py",
+      "--wgrad-overlap",
+      "both",
+      "--dgrad-compute-cus",
+      "0"
+    ]
+  }
+]

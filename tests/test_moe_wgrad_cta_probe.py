@@ -29,4 +29,15 @@ for pattern in ([256,128,384],[0,512,128],[0,0,0]):
  torch.testing.assert_close(normal,probed,rtol=0,atol=0)
  records=probe.reshape(-1,2).cpu();active=records[records[:,0]>=0]
  assert active.numel() and bool((active[:,1]>active[:,0]).all())
-print(json.dumps(dict(case='wgrad_cta_probe_correctness',bitwise_equal=True,dynamic_lengths_and_inputs=True,graph=True,invalid_probe_cases=5,passed=True)),flush=True)
+# Cover both actual Qwen wgrad templates with one identical packed layout.
+for m,n in ((4096,8192),(8192,2048)):
+ left=(torch.randn(65536,m,device='cuda')*.01).bfloat16()
+ right=(torch.randn(65536,n,device='cuda')*.01).bfloat16()
+ lengths_large=torch.full((16,),2560,device='cuda',dtype=torch.int32)
+ base=torch.zeros((16,m,n),device='cuda')
+ measured=torch.zeros_like(base)
+ dg.k_grouped_bf16_gemm_tn_device(left,right,base,lengths_large,65536)
+ dg.k_grouped_bf16_gemm_tn_device(left,right,measured,lengths_large,65536,probe)
+ torch.cuda.synchronize();torch.testing.assert_close(base,measured,rtol=0,atol=0)
+ del left,right,base,measured
+print(json.dumps(dict(case='wgrad_cta_probe_correctness',bitwise_equal=True,qwen_templates=2,dynamic_lengths_and_inputs=True,graph=True,invalid_probe_cases=5,passed=True)),flush=True)
