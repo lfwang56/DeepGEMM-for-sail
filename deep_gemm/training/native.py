@@ -97,8 +97,9 @@ class NativeMoEPlan:
         if packed_rows is not None:
             if (type(packed_rows) is not int or packed_rows <= 0 or packed_rows % self.alignment
                     or self.transport not in ("peer", "deepep")
-                    or (compute != "bf16" and self.transport != "deepep")):
-                raise ValueError("packed-row windows require aligned peer/DeepEP workspaces; peer requires BF16")
+                    or (compute != "bf16" and self.transport != "deepep"
+                        and not getattr(self, "fp8_peer_compute", False))):
+                raise ValueError("packed-row windows require an aligned supported peer/DeepEP workspace")
         self.rows = self.full_row_capacity if packed_rows is None else min(packed_rows, self.full_row_capacity)
         if self.full_row_capacity > 2**31 - 1 or self.routes > 2**31 - 1:
             raise ValueError("native route capacity exceeds int32 metadata")

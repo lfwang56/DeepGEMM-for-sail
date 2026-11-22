@@ -473,6 +473,8 @@ def main():
                     "wgrad_tsm_load_order": int(os.environ.get("DG_BF16_WGRAD_TSM_LOAD_ORDER", "0")),
                     "fp8_async_weight_quantization": getattr(plan, "fp8_async_weight_quantization", None),
                     "fp8_weight_quantization": getattr(plan, "fp8_weight_quantization", None),
+                    "peer_fp8_input_mode": getattr(plan, "fp8_input_mode", None),
+                    "peer_fp8_return_fused": plan.fuse_return if getattr(plan, "fp8_peer_compute", False) else None,
                     "fp8_active_quantization": getattr(plan, "fp8_active_quantization", None),
                     "fp8_mn_major_scales": getattr(plan, "fp8_mn_major_scales", None),
                     "communication_dtype": getattr(plan, "communication_dtype", "bf16"),
