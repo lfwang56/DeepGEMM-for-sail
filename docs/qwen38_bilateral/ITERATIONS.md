@@ -15507,3 +15507,351 @@ matched baseline verification runs independently; no ratio claimed yet.
     "evidence_path": "work/qwen38-r2-context89-ep8-lm-fp8.log"
   }
 ]
+
+
+## Iteration90 — bit-preserving FP8 weight transpose and current-forward reuse
+
+Frozencontext86profile exposed FP8weightquant7.0859ms plusBF16weight
+transpose2.5830ms; DW15.6679ms didnot improveversusBF16. Eliminate
+repeated weight preparation rather than excluding it from measuredscope.
+
+AddOperation32: persistent128x128 byte transpose of bothquantizedexpert
+weights, and corresponding128x128 FP32scaletile transpose. TransferSF
+asuint32bits soNaNpayloads/signedzeros survive. Shared128x33wordtile,
+256threads, atmost4CTAs/CU, twoCTAbarriersperpersistenttile. Allold
+operations and Params ABI unchanged. Defaultoffenvironment
+DG_MOE_FP8_TRANSPOSE_QUANTIZED_WEIGHTS1 is in Nativeallrankrecipe.
+Require synchronousFP8weightpreparation. BothDeepEPandPeerinheritit.
+
+Quantize originalweights afresheveryforward. Matchingforwardcontext
+backward reusesthose exactunchangedquantizedweights, then transposes
+bytes/scalesforDGrad. Mismatched/standalonebackwardrefreshesoriginal
+weights beforethetranspose. BF16-inputFP32DW, masterweights,optimizer,
+activationquantization and timingremain unchanged. No across-stepcache.
+
+Gate arbitraryFP8bytes/SFspecialbits, outputcanaries, mutablegraphs,
+bitwiseequivalence versusfreshBF16transpose+allthreequantizers, and
+Qwenactualweight-prepcomponents. EP8independentCPU/nativeeachgradient
+checks includecontext/replay,multichunks,mutableinput/weights/routing,
+rank-localinvalidation/zerocapacity. ActualEP32QwenFP32gradient/skewgates
+andpairedwhole-stepcontext/replayDeepEP/Peercontrols atT4096/T16384.
+
+[
+  {
+    "name": "qwen38-r2-qtranspose90-deepep-fp8-source-control-t4096-qt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "elastic",
+        "median_max_rank_event_ms": 97.76644897460938,
+        "fp8_transpose_quantized_weights": false,
+        "reuse_forward_context": false,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-deepep-fp8-source-control-t4096-qt1",
+    "clean": false,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "elastic",
+        "median_max_rank_event_ms": 94.85144653320313,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": false,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-ep8-deepep-context",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-ep8-deepep-multichunk",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-ep8-deepep-replay",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": false,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": false,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": false,
+        "passed": true
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": false,
+        "passed": true
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-ep8-peer-multichunk",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-ep8-peer-staged-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-reference-c4096-skew-r1",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "skew_capacity_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-qtranspose90-reference-qwen-r1-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "large_distributed_peer_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      },
+      {
+        "case": "large_distributed_peer_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      },
+      {
+        "case": "large_distributed_peer_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "passed": true
+      }
+    ]
+  }
+]
+
+Unit evidence (including failures):
+```
+{"case": "idle_node_gate", "host": "e01-cn-2n550vu1t02-a0006", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "fp8_weight_transpose_bits", "experts": 1, "hidden": 256, "intermediate": 128, "graph": true, "mutable_replays": 3, "every_byte": true, "special_scale_bits": true, "canaries": true, "passed": true}
+{"case": "fp8_weight_transpose_bits", "experts": 2, "hidden": 512, "intermediate": 256, "graph": true, "mutable_replays": 3, "every_byte": true, "special_scale_bits": true, "canaries": true, "passed": true}
+{"case": "fp8_weight_transpose_bits", "experts": 3, "hidden": 768, "intermediate": 384, "graph": true, "mutable_replays": 3, "every_byte": true, "special_scale_bits": true, "canaries": true, "passed": true}
+{"case": "fp8_weight_transpose_quantizer_equivalence", "quantizer": 10, "changed_weights": 3, "every_byte": true, "passed": true}
+{"case": "fp8_weight_transpose_quantizer_equivalence", "quantizer": 29, "changed_weights": 3, "every_byte": true, "passed": true}
+{"case": "fp8_weight_transpose_quantizer_equivalence", "quantizer": 30, "changed_weights": 3, "every_byte": true, "passed": true}
+{"case": "fp8_full_weight_preparation", "experts": 16, "hidden": 8192, "intermediate": 2048, "control_ms": 9.669596099853516, "quantized_transpose_and_forward_context_ms": 4.328736114501953, "speedup": 2.2338151007770684, "scope": "FWD+matching BWD weight preparation only, all current-step quantization included; no GEMM or EP timing claim", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-2n550vu1t02-a0006", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3817646, "start_ticks": "66429165"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

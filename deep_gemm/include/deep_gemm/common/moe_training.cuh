@@ -44,6 +44,7 @@ enum class Operation : int {
     QuantizeWeightsCachedFloat,
     QuantizeWeightsCachedInteger,
     PackQuantizedRouteRows,
+    TransposeQuantizedWeights,
 };
 
 }  // namespace deep_gemm::training

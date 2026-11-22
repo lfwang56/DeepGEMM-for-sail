@@ -39,6 +39,59 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     const int warp = thread >> 5;
     const int64_t index = block_index * blockDim.x + thread;
 
+    if constexpr (Op == Operation::TransposeQuantizedWeights) {
+        // The 128x128 quantization grid is closed under transpose. Transfer
+        // E4M3 bytes and FP32 scale bits without re-quantizing BF16 weights.
+        __shared__ uint32_t tile[128][33];
+        const int64_t first_tiles = p.dim[0] * (2 * p.dim[2] / 128) * (p.dim[1] / 128);
+        const int64_t total_tiles = first_tiles + p.dim[0] * (p.dim[1] / 128) * (p.dim[2] / 128);
+        for (int64_t t = block_index; t < total_tiles; t += gridDim.x) {
+            const bool first = t < first_tiles;
+            const int64_t rows = first ? 2 * p.dim[2] : p.dim[1];
+            const int64_t columns = first ? p.dim[1] : p.dim[2];
+            const int64_t local = first ? t : t - first_tiles;
+            const int64_t column_tiles = columns / 128, row_tiles = rows / 128;
+            const int64_t group = local / (row_tiles * column_tiles);
+            const int64_t tile_row = (local / column_tiles) % row_tiles;
+            const int64_t tile_column = local % column_tiles;
+            const auto* source = pointer<uint4>(p, first ? 0 : 2);
+            auto* destination = pointer<uint4>(p, first ? 4 : 6);
+            #pragma unroll
+            for (int vector = thread; vector < 1024; vector += 256) {
+                const int row = vector / 8, column = vector % 8 * 16;
+                const int64_t offset = ((group * rows + tile_row * 128 + row) * columns
+                                       + tile_column * 128 + column) / 16;
+                const uint4 raw = source[offset];
+                tile[row][column / 4] = raw.x;
+                tile[row][column / 4 + 1] = raw.y;
+                tile[row][column / 4 + 2] = raw.z;
+                tile[row][column / 4 + 3] = raw.w;
+            }
+            if (thread == 0) {
+                const auto raw = pointer<uint32_t>(p, first ? 1 : 3)[local];
+                pointer<uint32_t>(p, first ? 5 : 7)[group * row_tiles * column_tiles
+                                                + tile_column * row_tiles + tile_row] = raw;
+            }
+            __syncthreads();
+            #pragma unroll
+            for (int vector = thread; vector < 1024; vector += 256) {
+                const int row = vector / 8, column = vector % 8 * 16;
+                uint32_t words[4]{};
+                #pragma unroll
+                for (int word = 0; word < 4; ++word) {
+                    #pragma unroll
+                    for (int byte = 0; byte < 4; ++byte)
+                        words[word] |= ((tile[column + word * 4 + byte][row / 4]
+                                          >> (8 * (row & 3))) & 255u) << (8 * byte);
+                }
+                const int64_t offset = ((group * columns + tile_column * 128 + row) * rows
+                                       + tile_row * 128 + column) / 16;
+                destination[offset] = make_uint4(words[0], words[1], words[2], words[3]);
+            }
+            __syncthreads();
+        }
+        return;
+    }
     if constexpr (Op == Operation::PackQuantizedRouteRows) {
         const int64_t capacity = p.dim[0], width = p.dim[1], source_rows = p.dim[2], topk = p.dim[3];
         const int32_t active = __ldg(pointer<int32_t>(p, 5));

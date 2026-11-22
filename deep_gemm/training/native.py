@@ -6,6 +6,7 @@ retaining a layer's expanded expert activations in the plan.
 """
 
 import math
+import os
 import threading
 from contextlib import contextmanager
 
@@ -38,7 +39,7 @@ class NativeMoEPlan:
                  check_errors=True, m_schedule="nopad", fuse_activation_quant=True,
                  active_pointwise=True, vectorized_routes=True, fast_weight_transpose=True,
                  packed_rows=None, block_m=128, gate_up_layout="split", wgrad_overlap="none",
-                 overlap_expert_dy=False):
+                 overlap_expert_dy=False, fp8_transpose_quantized_weights=None):
         if hidden <= 0 or hidden % 256 or intermediate <= 0 or intermediate % 128:
             raise ValueError("native training requires positive H%256=0 and I%128=0")
         if min(local_experts, topk, chunk_tokens) < 1 or not 0 <= max_tokens <= 2**31 - 1:
@@ -50,6 +51,16 @@ class NativeMoEPlan:
         if wgrad_overlap != "none" and (compute != "bf16" or packed_rows is None
                                         or self.transport not in ("peer", "deepep")):
             raise ValueError("wgrad overlap requires a bounded BF16 peer or DeepEP plan")
+        if fp8_transpose_quantized_weights is None:
+            raw = os.environ.get('DG_MOE_FP8_TRANSPOSE_QUANTIZED_WEIGHTS', '0')
+            if raw not in ('0', '1'):
+                raise ValueError('DG_MOE_FP8_TRANSPOSE_QUANTIZED_WEIGHTS must be0or1')
+            fp8_transpose_quantized_weights = raw == '1'
+        if type(fp8_transpose_quantized_weights) is not bool:
+            raise TypeError('fp8_transpose_quantized_weights must be bool')
+        if fp8_transpose_quantized_weights and (compute != 'fp8' or getattr(self, 'fp8_async_weight_quantization', False)):
+            raise ValueError('quantized weight transpose requires synchronous FP8 weight preparation')
+        self.fp8_transpose_quantized_weights = fp8_transpose_quantized_weights
         self.wgrad_overlap = wgrad_overlap
         if not isinstance(overlap_expert_dy, bool):
             raise TypeError("overlap_expert_dy must be bool")
@@ -120,7 +131,7 @@ class NativeMoEPlan:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout,
-                           wgrad_overlap, overlap_expert_dy)
+                           wgrad_overlap, overlap_expert_dy, fp8_transpose_quantized_weights)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -249,9 +260,15 @@ class NativeMoEPlan:
         _launch(10, [weight, data, scales], list(weight.shape))
 
     def _prepare_weights(self, w1, w2, backward=False):
-        if self.compute == "fp8":
+        cached = (backward and self.fp8_transpose_quantized_weights
+                  and getattr(self, '_using_forward_context', False))
+        if self.compute == "fp8" and not cached:
             self._quantize_weight("w1", w1)
             self._quantize_weight("w2", w2)
+        if backward and self.fp8_transpose_quantized_weights:
+            _launch(32, [*self.quantized['w1'], *self.quantized['w2'],
+                         *self.quantized['w1_t'], *self.quantized['w2_t']], [self.e, self.h, self.i])
+            return
         if backward:
             if self.fast_weight_transpose and w1.data_ptr() % 16 == 0 and w2.data_ptr() % 16 == 0:
                 _launch(22, [w1, w2, self.w1_t, self.w2_t], [self.e, self.h, self.i])

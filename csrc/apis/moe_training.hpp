@@ -52,7 +52,7 @@ __global__ void {}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::PackQuantizedRouteRows));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeQuantizedWeights));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -71,6 +71,21 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
     constexpr auto fp = torch::kFloat, f8 = torch::kFloat8_e4m3fn;
     int64_t work = 0, blocks = -1;
     switch (static_cast<Operation>(operation)) {
+        case Operation::TransposeQuantizedWeights: {
+            schema(8, 3);
+            const auto e = dims[0], h = dims[1], i = dims[2];
+            DG_HOST_ASSERT(e > 0 && h > 0 && i > 0 && h % 128 == 0 && i % 128 == 0);
+            DG_HOST_ASSERT(e * h * 2 * i <= INT32_MAX);
+            expect(0, e * 2 * i * h, f8); expect(1, e * (2 * i / 128) * (h / 128), fp);
+            expect(2, e * h * i, f8); expect(3, e * (h / 128) * (i / 128), fp);
+            expect(4, e * h * 2 * i, f8); expect(5, e * (h / 128) * (2 * i / 128), fp);
+            expect(6, e * i * h, f8); expect(7, e * (i / 128) * (h / 128), fp);
+            for (const auto index : {0, 2, 4, 6})
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[index].data_ptr()) % 16 == 0);
+            const auto tiles = e * (2 * i / 128) * (h / 128) + e * (h / 128) * (i / 128);
+            blocks = std::min<int64_t>(tiles, int64_t(get_num_sms()) * 4);
+            break;
+        }
         case Operation::PackQuantizedRouteRows:
             schema(7, 4);
             DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[1] % 128 == 0 && dims[2] > 0 && dims[3] > 0);
@@ -322,7 +337,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::PackQuantizedRouteRows));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeQuantizedWeights));
         const int variants = Runtime::active_quantization(operation) ? 2 : 1;
         for (int layout = 0; layout < variants; ++layout) {
             Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
