@@ -31,7 +31,7 @@ __device__ __forceinline__ float warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-template <Operation Op, bool MnMajorScales = false, bool QuantizeDwBeforeTranspose = false, bool ReciprocalDwScale = false>
+template <Operation Op, bool MnMajorScales = false, bool QuantizeDwBeforeTranspose = false, bool ReciprocalDwScale = false, uint32_t DwCachedFeatures = 0, uint32_t DwCachedRows = 0>
 __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int thread = threadIdx.x;
@@ -152,6 +152,103 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                 __uint_as_float(words[j]<<16)/scale,__uint_as_float(words[j]&0xffff0000u)/scale);
             *reinterpret_cast<uint2*>(pointer<uint8_t>(p,1)+base+within*8)=
                 make_uint2(packed[0]|(packed[1]<<16),packed[2]|(packed[3]<<16));
+        }
+        return;
+    }
+    if constexpr (Op == Operation::PackFp8WeightGradients && DwCachedFeatures != 0) {
+        constexpr int F=DwCachedFeatures,KCap=DwCachedRows,V=F/4,Warps=32;
+        static_assert((F==16 || F==32) && KCap%128==0);
+        __shared__ uint32_t cached[KCap/2][F];
+        __shared__ uint32_t maxima[Warps][F];
+        __shared__ float inverse[F];
+        const int capacity=p.dim[1],m=p.dim[2],n=p.dim[3],per_group=(m+n)/F;
+        const auto slot=[](int pair,int feature) {
+            return (feature^(pair&(F-1))^((pair/F)&(F-1)))&(F-1);
+        };
+        for(int work=block_index;work<p.dim[0]*per_group;work+=gridDim.x) {
+            const int g=work/per_group,local=work%per_group;
+            const bool left=local<m/F;
+            const int width=left?m:n,feature_base=(left?local:local-m/F)*F;
+            const int count=__ldg(pointer<int32_t>(p,6)+g),start=__ldg(pointer<int32_t>(p,7)+g);
+            const int end=__ldg(pointer<int32_t>(p,7)+g+1);
+            if(count<0 || start<0 || start%128 || end<start || end>capacity ||
+                    int64_t(start)+((int64_t(count)+127)/128)*128>end) {
+                if(thread==0)atomicOr(pointer<int32_t>(p,8),2);
+                continue;
+            }
+            const int padded=(count+127)/128*128,feature=(thread%V)*4;
+            const bool retain=count<=KCap;
+            const auto* source=pointer<Bf16>(p,left?0:1);
+            auto* destination=pointer<uint8_t>(p,left?2:4);
+            auto* sf=pointer<float>(p,left?3:5);
+            uint32_t maximum[4]{};
+            for(int pair=thread/V;pair<(count+1)/2;pair+=blockDim.x/V) {
+                const int token=pair*2;
+                const auto a=*reinterpret_cast<const uint2*>(source+(int64_t(start)+token)*width+feature_base+feature);
+                uint2 b{};
+                if(token+1<count)b=*reinterpret_cast<const uint2*>(source+(int64_t(start)+token+1)*width+feature_base+feature);
+                const uint32_t va[4]={a.x&65535u,a.x>>16,a.y&65535u,a.y>>16};
+                const uint32_t vb[4]={b.x&65535u,b.x>>16,b.y&65535u,b.y>>16};
+                #pragma unroll
+                for(int j=0;j<4;++j) {
+                    const auto lo=va[j]&0x7fffu,hi=vb[j]&0x7fffu;
+                    if(lo<=0x7f80u)maximum[j]=max(maximum[j],lo);
+                    if(hi<=0x7f80u)maximum[j]=max(maximum[j],hi);
+                    if(retain)cached[pair][slot(pair,feature+j)]=va[j]|(vb[j]<<16);
+                }
+            }
+            #pragma unroll
+            for(int j=0;j<4;++j) {
+                #pragma unroll
+                for(int delta=16;delta>=V;delta>>=1)
+                    maximum[j]=max(maximum[j],__shfl_down_sync(0xffffffffu,maximum[j],delta));
+                if(lane<V)maxima[warp][feature+j]=maximum[j];
+            }
+            __syncthreads();
+            if(thread<V) {
+                float scales[4];
+                #pragma unroll
+                for(int j=0;j<4;++j) {
+                    uint32_t value=0;
+                    #pragma unroll
+                    for(int w=0;w<Warps;++w)value=max(value,maxima[w][feature+j]);
+                    scales[j]=fmaxf(__uint_as_float(value<<16),1e-4f)/448.f;
+                    inverse[feature+j]=1.f/scales[j];
+                }
+                *reinterpret_cast<float4*>(sf+int64_t(g)*width+feature_base+feature)=
+                    make_float4(scales[0],scales[1],scales[2],scales[3]);
+            }
+            __syncthreads();
+            for(int base=0;base<padded;base+=128) {
+                // Oversized experts retain the same recipe using ordinary
+                // two-pass loads through the first128rows of this scratch.
+                if(!retain) {
+                    for(int pair=thread/V;pair<64;pair+=blockDim.x/V) {
+                        uint2 a{},b{};
+                        if(base+2*pair<count)a=*reinterpret_cast<const uint2*>(source+(int64_t(start)+base+2*pair)*width+feature_base+feature);
+                        if(base+2*pair+1<count)b=*reinterpret_cast<const uint2*>(source+(int64_t(start)+base+2*pair+1)*width+feature_base+feature);
+                        const uint32_t va[4]={a.x&65535u,a.x>>16,a.y&65535u,a.y>>16};
+                        const uint32_t vb[4]={b.x&65535u,b.x>>16,b.y&65535u,b.y>>16};
+                        #pragma unroll
+                        for(int j=0;j<4;++j)cached[pair][slot(pair,feature+j)]=va[j]|(vb[j]<<16);
+                    }
+                    __syncthreads();
+                }
+                if(warp<F) {
+                    const int at=base+lane*4,pair=retain?at/2:lane*2;
+                    uint32_t a=at<count?cached[pair][slot(pair,warp)]:0;
+                    uint32_t b=at+2<count?cached[pair+1][slot(pair+1,warp)]:0;
+                    if(at+1>=count)a&=65535u;
+                    if(at+3>=count)b&=65535u;
+                    const float scale=inverse[warp];
+                    const uint32_t lo=epilogue::quant::fp8_pair(__uint_as_float(a<<16)*scale,__uint_as_float(a&0xffff0000u)*scale);
+                    const uint32_t hi=epilogue::quant::fp8_pair(__uint_as_float(b<<16)*scale,__uint_as_float(b&0xffff0000u)*scale);
+                    const int64_t offset=int64_t(start)*width+int64_t(feature_base+warp)*padded+at;
+                    *reinterpret_cast<uint32_t*>(destination+offset)=lo|(hi<<16);
+                }
+                if(!retain)__syncthreads();
+            }
+            __syncthreads();
         }
         return;
     }

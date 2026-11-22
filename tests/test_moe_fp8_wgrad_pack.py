@@ -191,7 +191,28 @@ def special_panels():
         scale_bits_exact=True,guards=True,passed=True)),flush=True)
 
 
+def cached_fallback_panels():
+    cap=3072 if PACK_MODE==4 else 6144
+    count=cap+1;padded=(count+127)//128*128;r=padded+256;m,n=256,128
+    rng=torch.Generator().manual_seed(125125)
+    left=(torch.randn(r,m,generator=rng)*.02).bfloat16();right=(torch.randn(r,n,generator=rng)*.02).bfloat16()
+    counts,offsets=[count],[128,128+padded]
+    ac,bc,_=panels(left,right,counts,offsets)
+    lens=torch.tensor(counts,device='cuda',dtype=torch.int32);starts=torch.tensor(offsets,device='cuda',dtype=torch.int32)
+    status=torch.zeros(1,device='cuda',dtype=torch.int32)
+    a,b,pack=gpu_panels(left.cuda(),right.cuda(),lens,starts,status)
+    torch.cuda.synchronize();assert status.item()==0
+    for actual,expected,width in ((a,ac,m),(b,bc,n)):
+        lo,hi=128*width,(128+padded)*width
+        assert torch.equal(actual[0].flatten()[lo:hi].view(torch.uint8).cpu(),expected[0].flatten()[lo:hi].view(torch.uint8))
+        assert torch.equal(actual[1].cpu(),expected[1])
+    for raw in pack.guards:assert torch.all(raw[:16]==56) and torch.all(raw[-16:]==56)
+    print(json.dumps(dict(case='fp8_dw_cached_fallback_reference',mode=PACK_MODE,cache_limit=cap,count=count,
+        nonzero_offsets=True,tail_zero=True,every_byte=True,scale_bits=True,guards=True,passed=True)),flush=True)
+
+
 torch.cuda.set_device(0);torch.set_num_threads(2)
 special_panels()
+if PACK_MODE>=4:cached_fallback_panels()
 for shape in ((128,128),(256,384),(384,512)):unit(*shape)
 for role in ('dw1','dw2'):large(role)

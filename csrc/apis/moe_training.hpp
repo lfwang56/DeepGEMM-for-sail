@@ -28,6 +28,8 @@ public:
 
     static std::string kernel_name(const Args& args) {
         const auto name = fmt::format("moe_training_{}", args.operation);
+        if(args.operation==int(Operation::PackFp8WeightGradients) && args.params.dim[4]>=4)
+            return name+fmt::format("_cache_{}x{}_reciprocal",args.params.dim[4]==4?32:16,args.params.dim[4]==4?3072:6144);
         if (args.operation == int(Operation::PackFp8WeightGradients) && args.params.dim[4])
             return name + (args.params.dim[4]==1 || args.params.dim[4]==2 ? "_quantize_before_transpose" : "") +
                 (args.params.dim[4]>=2 ? "_reciprocal" : "");
@@ -38,11 +40,13 @@ public:
     static std::string generate_impl(const Args& args) {
         return fmt::format(R"(
 #include <deep_gemm/impls/moe_training.cuh>
-extern "C" __launch_bounds__(256, 1)
+extern "C" __launch_bounds__({}, 1)
 __global__ void {}(const deep_gemm::training::Params params) {{
     deep_gemm::training::run<static_cast<deep_gemm::training::Operation>({}){}>(params);
 }}
-)", kernel_name(args), args.operation,
+)", args.launch_args.block_dim.x,kernel_name(args), args.operation,
+       args.operation==int(Operation::PackFp8WeightGradients) && args.params.dim[4]>=4 ?
+           fmt::format(", false, false, true, {}, {}",args.params.dim[4]==4?32:16,args.params.dim[4]==4?3072:6144) :
        args.operation == int(Operation::PackFp8WeightGradients) && args.params.dim[4] ?
            fmt::format(", false, {}, {}",args.params.dim[4]==1 || args.params.dim[4]==2 ? "true" : "false",
                        args.params.dim[4]>=2 ? "true" : "false") :
@@ -97,7 +101,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             DG_HOST_ASSERT(tensors.size()==9 && (dims.size()==4 || dims.size()==6));
             const auto mode=dims.size()==6?dims[4]:0;
             const auto ctas=dims.size()==6?dims[5]:4;
-            DG_HOST_ASSERT(mode<=3 && ctas>0 && ctas<=16);
+            DG_HOST_ASSERT(mode<=5 && ctas>0 && ctas<=16);
             const auto g=dims[0],r=dims[1],m=dims[2],n=dims[3];
             DG_HOST_ASSERT(g>0 && g<128 && r>0 && r%128==0 && m>0 && n>0 && m%128==0 && n%128==0);
             DG_HOST_ASSERT(r*m<=INT32_MAX && r*n<=INT32_MAX);
@@ -105,7 +109,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(4,r*n,f8);expect(5,g*n,fp);expect(6,g,i32);expect(7,g+1,i32);expect(8,1,i32);
             for(const auto index:{0,1}) DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[index].data_ptr())%8==0);
             for(const auto index:{2,4}) DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[index].data_ptr())%4==0);
-            blocks=std::min<int64_t>(g*((m+n)/128),int64_t(get_num_sms())*ctas);
+            blocks=std::min<int64_t>(g*((m+n)/(mode==4?32:mode==5?16:128)),int64_t(get_num_sms())*ctas);
             break;
         }
         case Operation::TransposeQuantizedWeightsSwizzled:
@@ -370,7 +374,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
     Params params{};
     for (size_t i = 0; i < tensors.size(); ++i) params.ptr[i] = tensors[i].data_ptr();
     for (size_t i = 0; i < dims.size(); ++i) params.dim[i] = dims[i];
-    Runtime::Args args{operation, {dim3(blocks), dim3(256), 0}, params};
+    Runtime::Args args{operation, {dim3(blocks), dim3(operation==int(Operation::PackFp8WeightGradients) && params.dim[4]>=4 ? 1024 : 256), 0}, params};
     const auto code = Runtime::generate(args);
     const auto runtime = compiler->build(Runtime::kernel_name(args), code);
     Runtime::launch(runtime, args);
