@@ -39,6 +39,84 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     const int warp = thread >> 5;
     const int64_t index = block_index * blockDim.x + thread;
 
+    if constexpr (Op == Operation::QuantizeWeightsAndTranspose) {
+        __shared__ float maxima[8];
+        __shared__ uint32_t tile[128*32];
+        auto slot=[](int row,int word){return row*32+(word^(row&3)^(row>>4));};
+        const int64_t first_tiles=p.dim[0]*(2*p.dim[2]/128)*(p.dim[1]/128);
+        const int64_t total_tiles=first_tiles+p.dim[0]*(p.dim[1]/128)*(p.dim[2]/128);
+        for(int64_t work=block_index;work<total_tiles;work+=gridDim.x) {
+            const bool first=work<first_tiles;
+            const int64_t rows=first?2*p.dim[2]:p.dim[1],columns=first?p.dim[1]:p.dim[2];
+            const int64_t local=first?work:work-first_tiles;
+            const int64_t column_tiles=columns/128,row_tiles=rows/128;
+            const int64_t group=local/(row_tiles*column_tiles);
+            const int64_t tile_row=(local/column_tiles)%row_tiles,tile_column=local%column_tiles;
+            const auto* source=pointer<Bf16>(p,first?0:1);
+            auto* quantized=pointer<uint8_t>(p,first?2:4);
+            auto* transposed=pointer<uint4>(p,first?6:8);
+            uint4 cached[8];
+            unsigned maximum=0;
+            #pragma unroll
+            for(int j=0;j<8;++j) {
+                const int vector=thread+j*256;
+                const int64_t at=((group*rows+tile_row*128+vector/16)*columns+tile_column*128+(vector%16)*8);
+                cached[j]=*reinterpret_cast<const uint4*>(source+at);
+                const unsigned words[4]={cached[j].x,cached[j].y,cached[j].z,cached[j].w};
+                #pragma unroll
+                for(int pair=0;pair<4;++pair) {
+                    const unsigned lo=words[pair]&0x7fffu,hi=(words[pair]>>16)&0x7fffu;
+                    if(lo<=0x7f80u && lo>maximum)maximum=lo;
+                    if(hi<=0x7f80u && hi>maximum)maximum=hi;
+                }
+            }
+            float value=warp_max(__uint_as_float(maximum<<16));
+            if(lane==0)maxima[warp]=value;
+            __syncthreads();
+            if(warp==0) {
+                value=warp_max(lane<8?maxima[lane]:0.f);
+                if(lane==0)maxima[0]=fmaxf(value,1e-4f)/448.f;
+            }
+            __syncthreads();
+            const float scale=maxima[0];
+            if(thread==0) {
+                pointer<float>(p,first?3:5)[local]=scale;
+                pointer<float>(p,first?7:9)[group*row_tiles*column_tiles+tile_column*row_tiles+tile_row]=scale;
+            }
+            #pragma unroll
+            for(int j=0;j<8;++j) {
+                const unsigned words[4]={cached[j].x,cached[j].y,cached[j].z,cached[j].w};
+                unsigned converted[4];
+                #pragma unroll
+                for(int pair=0;pair<4;++pair)
+                    converted[pair]=epilogue::quant::fp8_pair(__uint_as_float(words[pair]<<16)/scale,
+                        __uint_as_float(words[pair]&0xffff0000u)/scale);
+                const uint2 packed=make_uint2(converted[0]|(converted[1]<<16),converted[2]|(converted[3]<<16));
+                const int vector=thread+j*256,row=vector/16,column=(vector%16)*8;
+                const int64_t at=((group*rows+tile_row*128+row)*columns+tile_column*128+column);
+                *reinterpret_cast<uint2*>(quantized+at)=packed;
+                tile[slot(row,column/4)]=packed.x;
+                tile[slot(row,column/4+1)]=packed.y;
+            }
+            __syncthreads();
+            #pragma unroll
+            for(int vector=thread;vector<1024;vector+=256) {
+                const int row=vector/8,column=(vector%8)*16;
+                uint32_t words[4]{};
+                #pragma unroll
+                for(int word=0;word<4;++word) {
+                    #pragma unroll
+                    for(int byte=0;byte<4;++byte)
+                        words[word]|=((tile[slot(column+word*4+byte,row/4)]>>(8*(row&3)))&255u)<<(8*byte);
+                }
+                const int64_t at=((group*columns+tile_column*128+row)*rows+tile_row*128+column)/16;
+                transposed[at]=make_uint4(words[0],words[1],words[2],words[3]);
+            }
+            __syncthreads();
+        }
+        return;
+    }
+
     if constexpr (Op == Operation::QuantizeRowsVectorDeviceRows) {
         const int rows=__ldg(pointer<int32_t>(p,3));
         if(rows<0 || int64_t(rows)>p.dim[0]) {

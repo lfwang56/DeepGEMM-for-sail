@@ -48,6 +48,7 @@ enum class Operation : int {
     PackFp8WeightGradients,
     QuantizeRowsVectorDeviceRows,
     TransposeQuantizedWeightsSwizzled,
+    QuantizeWeightsAndTranspose,
 };
 
 }  // namespace deep_gemm::training

@@ -45032,3 +45032,917 @@ Raw tail:
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3307887, "start_ticks": "218417128"}, {"pid": 3350813, "start_ticks": "218433387"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration114 — single-read forward/backward quantized weight preparation
+
+113closed3933c40a25 after108every-elementreferences+12componenttimings
+and4EP8phases. Local fake-owner signals improve return keep from5.1666
+to4.3783ms forK2048 and8.4220to7.5155ms forK4096; this alone is not a
+realEP or whole-layer speedup. Actual32 triple-arm timings are separate.
+
+New Op36 reads each BF16 weight once, retaining packed values for the
+same integer-maximum 128x128 scale reduction as established Op30. Write
+forward E4M3 weights, transpose those same bytes from swizzled TSM,
+and write both orientations' FP32 scales. Persistent CTA budgets1..16
+perCU are selectable. No reciprocal approximation or quantization recipe
+change. Compare all bytes and scale bits with Op30+Op35, including
+Inf/NaN/subnormal/all-NaN blocks, canaries and mutable graphs; finite
+cases also compare independent CPU arithmetic.
+
+DG_MOE_FP8_FUSED_WEIGHT_PREPARE=1 requires synchronous FP8 quantized
+weight transpose. DG_MOE_FP8_WEIGHT_PREP_CTAS_PER_CU defaults4. The
+common NativeMoEPlan implementation makes the same optimization available
+to DeepEP and peer, with matching rank configuration checks. Forward
+prepares both orientations; backward reuses them only with a matching
+live forward context, otherwise regenerates both from current weights.
+Default flags preserve the current path. Full-layer denominators must
+include this optimization on both sides if it proves beneficial.
+
+Twenty small reference gates+five Qwen preparation timings, then six
+EP8 phases (peer direct16 with/without input producer, multichunk and
+zero capacity; DeepEP single/multichunk) precede performance promotion.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 1,
+      "before_ms": 4.053063583374024,
+      "after_ms": 12.484679412841796,
+      "speedup": 0.32464298436089795,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        12.486071014404297,
+        12.48567886352539,
+        12.484679412841796,
+        12.48456268310547,
+        12.482736206054687
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 2,
+      "before_ms": 4.053063583374024,
+      "after_ms": 6.560707092285156,
+      "speedup": 0.6177784690525336,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        6.560923004150391,
+        6.562438201904297,
+        6.560707092285156,
+        6.557750701904297,
+        6.557421112060547
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 4,
+      "before_ms": 4.053063583374024,
+      "after_ms": 3.830698013305664,
+      "speedup": 1.058048316337124,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        3.830698013305664,
+        3.8340930938720703,
+        3.822734069824219,
+        3.832202911376953,
+        3.818674087524414
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 8,
+      "before_ms": 4.053063583374024,
+      "after_ms": 3.7903839111328126,
+      "speedup": 1.0693016006821074,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        3.791828155517578,
+        3.7903839111328126,
+        3.7898586273193358,
+        3.786215972900391,
+        3.7917545318603514
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 16,
+      "before_ms": 4.053063583374024,
+      "after_ms": 3.797002410888672,
+      "speedup": 1.0674377165921844,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        3.803150939941406,
+        3.792367172241211,
+        3.797002410888672,
+        3.801911544799805,
+        3.796778106689453
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-weightprep114-ep8-mode3-tiled2-direct16",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-weightprep114-ep8-multichunk-tiled2-direct16",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-weightprep114-ep8-mode3-tiled2-direct16-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-weightprep114-ep8-multichunk-tiled2-direct16-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-weightprep114-ep8-mode3-tiled2-deepep",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-weightprep114-ep8-multichunk-tiled2-deepep",
+      "returncode": 0
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 1,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 2,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 4,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 8,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "random",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "zero",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "special",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": false,
+      "nonfinite_and_all_nan_blocks": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_fused_weight_prepare_reference",
+      "ctas_per_cu": 16,
+      "pattern": "updated",
+      "graph": true,
+      "mutable_weights": true,
+      "canaries": true,
+      "every_byte": true,
+      "legacy_q_and_qt_bits": true,
+      "independent_cpu_arithmetic": true,
+      "nonfinite_and_all_nan_blocks": false,
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 1,
+      "before_ms": 4.053063583374024,
+      "after_ms": 12.484679412841796,
+      "speedup": 0.32464298436089795,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        12.486071014404297,
+        12.48567886352539,
+        12.484679412841796,
+        12.48456268310547,
+        12.482736206054687
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 2,
+      "before_ms": 4.053063583374024,
+      "after_ms": 6.560707092285156,
+      "speedup": 0.6177784690525336,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        6.560923004150391,
+        6.562438201904297,
+        6.560707092285156,
+        6.557750701904297,
+        6.557421112060547
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 4,
+      "before_ms": 4.053063583374024,
+      "after_ms": 3.830698013305664,
+      "speedup": 1.058048316337124,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        3.830698013305664,
+        3.8340930938720703,
+        3.822734069824219,
+        3.832202911376953,
+        3.818674087524414
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 8,
+      "before_ms": 4.053063583374024,
+      "after_ms": 3.7903839111328126,
+      "speedup": 1.0693016006821074,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        3.791828155517578,
+        3.7903839111328126,
+        3.7898586273193358,
+        3.786215972900391,
+        3.7917545318603514
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "qwen_fp8_fused_weight_prepare_performance",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "ctas_per_cu": 16,
+      "before_ms": 4.053063583374024,
+      "after_ms": 3.797002410888672,
+      "speedup": 1.0674377165921844,
+      "before_samples": [
+        4.055456161499023,
+        4.048938369750976,
+        4.0511425018310545,
+        4.055615615844727,
+        4.053063583374024
+      ],
+      "after_samples": [
+        3.803150939941406,
+        3.792367172241211,
+        3.797002410888672,
+        3.801911544799805,
+        3.796778106689453
+      ],
+      "every_byte": true,
+      "passed": true,
+      "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3491144,
+          "start_ticks": "218489724"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Raw tail:
+```
+, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": false, "nonfinite_and_all_nan_blocks": true, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 4, "pattern": "updated", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 8, "pattern": "random", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 8, "pattern": "zero", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 8, "pattern": "special", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": false, "nonfinite_and_all_nan_blocks": true, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 8, "pattern": "updated", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 16, "pattern": "random", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 16, "pattern": "zero", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 16, "pattern": "special", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": false, "nonfinite_and_all_nan_blocks": true, "passed": true}
+{"case": "fp8_fused_weight_prepare_reference", "ctas_per_cu": 16, "pattern": "updated", "graph": true, "mutable_weights": true, "canaries": true, "every_byte": true, "legacy_q_and_qt_bits": true, "independent_cpu_arithmetic": true, "nonfinite_and_all_nan_blocks": false, "passed": true}
+{"case": "qwen_fp8_fused_weight_prepare_performance", "experts": 16, "hidden": 8192, "intermediate": 2048, "ctas_per_cu": 1, "before_ms": 4.053063583374024, "after_ms": 12.484679412841796, "speedup": 0.32464298436089795, "before_samples": [4.055456161499023, 4.048938369750976, 4.0511425018310545, 4.055615615844727, 4.053063583374024], "after_samples": [12.486071014404297, 12.48567886352539, 12.484679412841796, 12.48456268310547, 12.482736206054687], "every_byte": true, "passed": true, "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"}
+{"case": "qwen_fp8_fused_weight_prepare_performance", "experts": 16, "hidden": 8192, "intermediate": 2048, "ctas_per_cu": 2, "before_ms": 4.053063583374024, "after_ms": 6.560707092285156, "speedup": 0.6177784690525336, "before_samples": [4.055456161499023, 4.048938369750976, 4.0511425018310545, 4.055615615844727, 4.053063583374024], "after_samples": [6.560923004150391, 6.562438201904297, 6.560707092285156, 6.557750701904297, 6.557421112060547], "every_byte": true, "passed": true, "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"}
+{"case": "qwen_fp8_fused_weight_prepare_performance", "experts": 16, "hidden": 8192, "intermediate": 2048, "ctas_per_cu": 4, "before_ms": 4.053063583374024, "after_ms": 3.830698013305664, "speedup": 1.058048316337124, "before_samples": [4.055456161499023, 4.048938369750976, 4.0511425018310545, 4.055615615844727, 4.053063583374024], "after_samples": [3.830698013305664, 3.8340930938720703, 3.822734069824219, 3.832202911376953, 3.818674087524414], "every_byte": true, "passed": true, "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"}
+{"case": "qwen_fp8_fused_weight_prepare_performance", "experts": 16, "hidden": 8192, "intermediate": 2048, "ctas_per_cu": 8, "before_ms": 4.053063583374024, "after_ms": 3.7903839111328126, "speedup": 1.0693016006821074, "before_samples": [4.055456161499023, 4.048938369750976, 4.0511425018310545, 4.055615615844727, 4.053063583374024], "after_samples": [3.791828155517578, 3.7903839111328126, 3.7898586273193358, 3.786215972900391, 3.7917545318603514], "every_byte": true, "passed": true, "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"}
+{"case": "qwen_fp8_fused_weight_prepare_performance", "experts": 16, "hidden": 8192, "intermediate": 2048, "ctas_per_cu": 16, "before_ms": 4.053063583374024, "after_ms": 3.797002410888672, "speedup": 1.0674377165921844, "before_samples": [4.055456161499023, 4.048938369750976, 4.0511425018310545, 4.055615615844727, 4.053063583374024], "after_samples": [3.803150939941406, 3.792367172241211, 3.797002410888672, 3.801911544799805, 3.796778106689453], "every_byte": true, "passed": true, "scope": "Current BF16 weights to forward/backward E4M3 weights and FP32 scales; not a full-layer result"}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3491144, "start_ticks": "218489724"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

@@ -61,6 +61,15 @@ class NativeMoEPlan:
         if fp8_transpose_quantized_weights and (compute != 'fp8' or getattr(self, 'fp8_async_weight_quantization', False)):
             raise ValueError('quantized weight transpose requires synchronous FP8 weight preparation')
         self.fp8_transpose_quantized_weights = fp8_transpose_quantized_weights
+        fused_prep=os.environ.get('DG_MOE_FP8_FUSED_WEIGHT_PREPARE','0')
+        if fused_prep not in ('0','1'):
+            raise ValueError('DG_MOE_FP8_FUSED_WEIGHT_PREPARE must be0or1')
+        self.fp8_fused_weight_prepare=fused_prep=='1'
+        self.fp8_weight_prep_ctas=int(os.environ.get('DG_MOE_FP8_WEIGHT_PREP_CTAS_PER_CU','4'))
+        if not 0<self.fp8_weight_prep_ctas<=16:
+            raise ValueError('FP8 weight preparation CTA budget must be1..16')
+        if self.fp8_fused_weight_prepare and not fp8_transpose_quantized_weights:
+            raise ValueError('fused FP8 weight preparation requires quantized weight transpose')
         raw_swizzle=os.environ.get('DG_MOE_FP8_WEIGHT_TRANSPOSE_SWIZZLE','0')
         if raw_swizzle not in ('0','1'):
             raise ValueError('DG_MOE_FP8_WEIGHT_TRANSPOSE_SWIZZLE must be0or1')
@@ -143,7 +152,8 @@ class NativeMoEPlan:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout,
-                           wgrad_overlap, overlap_expert_dy, fp8_transpose_quantized_weights, self.fp8_vector_row_quant, self.fp8_transpose_swizzle)
+                           wgrad_overlap, overlap_expert_dy, fp8_transpose_quantized_weights, self.fp8_vector_row_quant, self.fp8_transpose_swizzle,
+                           self.fp8_fused_weight_prepare,self.fp8_weight_prep_ctas)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -274,6 +284,12 @@ class NativeMoEPlan:
     def _prepare_weights(self, w1, w2, backward=False):
         cached = (backward and self.fp8_transpose_quantized_weights
                   and getattr(self, '_using_forward_context', False))
+        if self.fp8_fused_weight_prepare:
+            if not cached:
+                _launch(36,[w1,w2,*self.quantized['w1'],*self.quantized['w2'],
+                            *self.quantized['w1_t'],*self.quantized['w2_t']],
+                        [self.e,self.h,self.i,self.fp8_weight_prep_ctas])
+            return
         if self.compute == "fp8" and not cached:
             self._quantize_weight("w1", w1)
             self._quantize_weight("w2", w2)
