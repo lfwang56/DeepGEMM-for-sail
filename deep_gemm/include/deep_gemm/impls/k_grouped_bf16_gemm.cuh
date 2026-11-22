@@ -22,9 +22,11 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
-          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0>
+          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0, bool PerFeatureScales = false>
 __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args,
-        uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u) {
+        uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u,
+        const float* feature_scales_a = nullptr, const float* feature_scales_b = nullptr,
+        const int32_t* external_offsets = nullptr) {
     static_assert(is_k_grouped_contiguous(kGemmType), "K-grouped GEMM type required");
     static_assert(kWithAccumulation, "K-grouped wgrad requires beta=1");
     static_assert(SHAPE_M > 0 and SHAPE_N > 0 and kNumGroups > 0, "M, N and groups must be positive");
@@ -164,7 +166,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
         // Bind A/B to the current group's base and current M/N tile.
         auto blk_coord_mnkl = make_coord(m_block_idx, n_block_idx, _, _1{});
-        const uint32_t k_begin = scheduler.current_k_start;
+        const uint32_t k_begin = PerFeatureScales ? uint32_t(external_offsets[curr_group_idx]) : scheduler.current_k_start;
         const SrcT* gmem_a = reinterpret_cast<const SrcT*>(args.a_ptr) + static_cast<size_t>(k_begin) * SHAPE_M;
         const SrcT* gmem_b = reinterpret_cast<const SrcT*>(args.b_ptr) + static_cast<size_t>(k_begin) * SHAPE_N;
         auto shape_A = cute::make_shape(Int<SHAPE_M>{}, group_k);
@@ -275,6 +277,18 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
         cp_async_wait<0>();
         __syncthreads();
 
+        if constexpr (PerFeatureScales) {
+            CUTLASS_PRAGMA_UNROLL
+            for (int item = 0; item < size(accum); ++item) {
+                const auto point = tCcC(item);
+                const uint32_t row = c_row_base + uint32_t(get<0>(point));
+                const uint32_t column = blk_n_offset + uint32_t(get<1>(point));
+                if (row < SHAPE_M && column < SHAPE_N) {
+                    const float first = float(accum(item)) * feature_scales_a[curr_group_idx * SHAPE_M + row];
+                    accum(item) = first * feature_scales_b[curr_group_idx * SHAPE_N + column];
+                }
+            }
+        }
         // Epilogue: reuse fused MoE's no-TSM store with FP32 beta=1.
         using TCcC = decltype(tCcC);
         if constexpr (cute::is_same_v<AccT, float> && cute::is_same_v<DstT, float> &&

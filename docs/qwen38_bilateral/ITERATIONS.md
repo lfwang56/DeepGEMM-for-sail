@@ -17739,3 +17739,99 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2103658, "start_ticks": "18352785"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration97 — token-major FP8 DW on the native TN K-grouped pipeline
+
+96 closed87de1f5399. All native/CPU/guard tests passed, but moving
+dequantization outside token K only improved DW1 to13.2691ms and DW2
+to6.6882ms, still behind BF16 9.4805/4.9302ms. The high FP32
+instruction count in95 is insufficient alone to explain the gap.
+
+Keep per-expert feature scales from96. Reuse the optimized native
+BF16 K-grouped TN mainloop with FP8 SrcT, FP32 output and final
+feature scaling. Token-major panels match packed activations and
+avoid global transpose. Default256x256x128/warp64x64/stages3.
+GPU rounded lengths plus explicit offsets retain dynamic routing
+and gapped segments. BF16 default template remains unchanged.
+
+Experimental private primitive only; no training plan or producer.
+Timing excludes quantization. Gate every CPU output, native FP8
+BF16 boundary, canaries, tails, empty groups, FP32 accumulation,
+invalid metadata and both actual Qwen DW shapes. No whole-step or
+convergence claim before producer-inclusive training validation.
+
+{
+  "clean": false,
+  "passed": false,
+  "metrics": [],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 2372194,
+          "start_ticks": "18459454"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 1
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+mem_ptr< ::cutlass::float_e4m3_t *>>>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)1>>, ::cute::tuple< ::cute::C<(int)2>, ::cute::C<(int)2>>>, ::cute::tuple< ::cute::tuple< ::cute::ScaledBasis< ::cute::C<(int)1>, (int)0>, ::cute::C<(int)0>>, ::cute::tuple< ::cute::ScaledBasis< ::cute::C<(int)64>, (int)1>, ::cute::ScaledBasis< ::cute::C<(int)1>, (int)2>>>>, ::cute::ViewEngine< ::cutlass::float_e4m3_t *>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)1>>, ::cute::tuple< ::cute::C<(int)2>, ::cute::C<(int)2>>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)1>, ::cute::C<(int)0>>, ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)128>>>>>' requested here
+  return copy(static_cast<CopyAtom const&>(tiled_copy), src, dst);
+         ^
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/deep_gemm/include/actlize_v1.0.0/cute/algorithm/copy.hpp:478:10: note: in instantiation of function template specialization '::cute::copy< ::cute::Copy_Atom< ::cute::PPU0015_TSM_LD_SWZL< ::cutlass::float_e4m3_t, (int)128, (int)128, true, true, (int)2>, ::cutlass::float_e4m3_t>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)4>, ::cute::C<(int)8>, ::cute::C<(int)4>, ::cute::C<(int)4>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)4>, ::cute::C<(int)2>, ::cute::C<(int)2>>, ::cute::tuple< ::cute::C<(int)1>, ::cute::C<(int)1>>>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)256>, ::cute::C<(int)1>, ::cute::C<(int)0>, ::cute::C<(int)16>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)64>, ::cute::C<(int)1024>, ::cute::C<(int)8>>, ::cute::tuple< ::cute::C<(int)0>, ::cute::C<(int)0>>>>>, ::cute::tuple< ::cute::C<(int)64>, ::cute::C<(int)32>>, ::cute::ViewEngine< ::cute::PtrArithmeticTupleMixIterator< ::cute::ArithmeticTuple<unsigned int, unsigned int, ::cute::C<(int)0>, int>, ::cute::smem_ptr< ::cutlass::float_e4m3_t *>>>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)1>>, ::cute::tuple< ::cute::C<(int)2>, ::cute::C<(int)2>>>, ::cute::tuple< ::cute::tuple< ::cute::ScaledBasis< ::cute::C<(int)1>, (int)0>, ::cute::C<(int)0>>, ::cute::tuple< ::cute::ScaledBasis< ::cute::C<(int)64>, (int)1>, ::cute::ScaledBasis< ::cute::C<(int)1>, (int)2>>>>, ::cute::ViewEngine< ::cutlass::float_e4m3_t *>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)1>>, ::cute::tuple< ::cute::C<(int)2>, ::cute::C<(int)2>>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)1>, ::cute::C<(int)0>>, ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)128>>>>>' requested here
+  return copy(copy_policy, src, dst);
+         ^
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/deep_gemm/include/deep_gemm/impls/k_grouped_bf16_gemm.cuh:221:17: note: in instantiation of function template specialization '::cute::copy< ::cute::TiledCopy< ::cute::Copy_Atom< ::cute::PPU0015_TSM_LD_SWZL< ::cutlass::float_e4m3_t, (int)128, (int)128, true, true, (int)2>, ::cutlass::float_e4m3_t>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)4>, ::cute::C<(int)8>, ::cute::C<(int)4>, ::cute::C<(int)4>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)4>, ::cute::C<(int)2>, ::cute::C<(int)2>>, ::cute::tuple< ::cute::C<(int)1>, ::cute::C<(int)1>>>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)256>, ::cute::C<(int)1>, ::cute::C<(int)0>, ::cute::C<(int)16>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)64>, ::cute::C<(int)1024>, ::cute::C<(int)8>>, ::cute::tuple< ::cute::C<(int)0>, ::cute::C<(int)0>>>>>, ::cute::tuple< ::cute::C<(int)64>, ::cute::C<(int)32>>>, ::cute::ViewEngine< ::cute::PtrArithmeticTupleMixIterator< ::cute::ArithmeticTuple<unsigned int, unsigned int, ::cute::C<(int)0>, int>, ::cute::smem_ptr< ::cutlass::float_e4m3_t *>>>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)1>>, ::cute::tuple< ::cute::C<(int)2>, ::cute::C<(int)2>>>, ::cute::tuple< ::cute::tuple< ::cute::ScaledBasis< ::cute::C<(int)1>, (int)0>, ::cute::C<(int)0>>, ::cute::tuple< ::cute::ScaledBasis< ::cute::C<(int)64>, (int)1>, ::cute::ScaledBasis< ::cute::C<(int)1>, (int)2>>>>, ::cute::ViewEngine< ::cutlass::float_e4m3_t *>, ::cute::Layout< ::cute::tuple< ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)1>>, ::cute::tuple< ::cute::C<(int)2>, ::cute::C<(int)2>>>, ::cute::tuple< ::cute::tuple< ::cute::C<(int)1>, ::cute::C<(int)0>>, ::cute::tuple< ::cute::C<(int)16>, ::cute::C<(int)128>>>>>' requested here
+                copy(smem_tiled_copy_B, tCsB_p(_,_,fragment), tCrB_copy_view(_,_,fragment));
+                ^
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/training-validation/jit-cache/tmp/2372194-7a5d39af-407cbe65-505d9cbc/kernel.cu:19:5: note: in instantiation of function template specialization '::deep_gemm::bf16_k_grouped_gemm_impl< ::cutlass::float_e4m3_t, float, ::deep_gemm::GemmType::KGroupedContiguous, (unsigned int)128U, (unsigned int)128U, (unsigned int)3U, (unsigned int)256U, (unsigned int)256U, (unsigned int)128U, (unsigned int)64U, (unsigned int)64U, (unsigned int)512U, (int)3, true, (unsigned int)0U, true, (unsigned int)0U, (unsigned int)0U, true>' requested here
+    bf16_k_grouped_gemm_impl<cutlass::float_e4m3_t,float,GemmType::KGroupedContiguous,
+    ^
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/deep_gemm/include/actlize_v1.0.0/cute/arch/copy_ppu0015_aiu.hpp:215:8: note: template is declared here
+struct PPU0015_TSM_LD_SWZL_IMPL;
+       ^
+1 warning and 2 errors generated when compiling for ppu0015.
+hgcc error: Exited with error code 1
+
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad_tn.py", line 139, in <module>
+    for shape in ((128,128),(256,384),(384,512)):unit(*shape)
+                                                 ^^^^^^^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad_tn.py", line 57, in unit
+    out.zero_();launch();torch.cuda.synchronize()
+                ^^^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad_tn.py", line 56, in launch
+    def launch():dg._C._moe_training_fp8_wgrad_tn(a,b,out,lens,starts,status)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Assertion error (/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/../../jit/compiler.hpp:360): false and "HGCC compilation failed"
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2372194, "start_ticks": "18459454"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
+
+```
