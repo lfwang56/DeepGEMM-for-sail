@@ -29,6 +29,7 @@ def relative_rms(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--backend", choices=("deepep", "hybrid"), default="hybrid")
     parser.add_argument("--hybrid-domain-size", type=int, required=True)
     parser.add_argument("--dag-fusion", action="store_true")
@@ -105,6 +106,11 @@ def main():
                          dispatch_external=args.dispatch_external, dispatch_external_serial=args.serialize_external_dispatch,
                          producer_input_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas),
                          producer_local_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas)))
+    if args.compute=='fp8':
+        if args.gate_up_layout!='split' or args.block_m!=128:
+            raise ValueError('FP8 hierarchy requires split weights and M128')
+        if args.backend=='hybrid':
+            plan_options=dict(expert_local_grad=True,reuse_packed_dy=True,fuse_dispatch=False)
     if hybrid_groups is not None:
         plan_options["groups"] = hybrid_groups
     plan = (DeepEPMoEPlan if args.backend == "deepep" else HierarchicalPeerMoEPlan)(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
@@ -114,7 +120,7 @@ def main():
                         gate_up_layout=args.gate_up_layout,
                         wgrad_overlap=args.wgrad_overlap,
                         overlap_expert_dy=args.overlap_expert_dy,
-                        gemm_configs=configs, check_errors=False)
+                        compute=args.compute, **({"gemm_configs":configs} if args.compute=="bf16" else {}), check_errors=False)
     print(json.dumps(dict(case="large_deepep_stage", rank=rank, stage="plan_ready",
                           backend=args.backend, rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None))), flush=True)
 
@@ -171,11 +177,12 @@ def main():
         compared = (outputs[0], outputs[1], from_g8_weight(outputs[2]), outputs[3], outputs[4]) if args.gate_up_layout == "g8" else outputs
         errors = {name: relative_rms(a, b) for name, a, b in zip(
             ("y", "dx", "dw1", "dw2", "dscores"), compared, expected)}
-        passed = all(math.isfinite(error) and error < .04 for error in errors.values())
+        tolerance=.04 if args.compute=="bf16" else .12
+        passed = all(math.isfinite(error) and error < tolerance for error in errors.values())
         print(json.dumps(dict(case="large_distributed_deepep_reference" if args.backend == "deepep" else "large_distributed_hybrid_reference", rank=rank,
             ranks=size, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens=t, chunk_tokens=args.chunk_tokens, pattern=pattern,
-            graph=args.graph, relative_rms=errors, every_element_compared=True,
+            graph=args.graph, compute=args.compute, relative_rms=errors, relative_rms_tolerance=tolerance, every_element_compared=True,
             ring_rows=args.ring_rows, packed_ring_rows=plan.rows,
             block_m=plan.block_m,
             route_window_count=plan.route_window_count,

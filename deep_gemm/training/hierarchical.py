@@ -91,14 +91,15 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             raise ValueError('create and retain live HierarchicalGroups before constructing a plan')
         if min(max_tokens, chunk_tokens) < 1 or 2 * max_tokens * topk > 2**31 - 1:
             raise ValueError('positive token/chunk capacities and int32-bounded pair routes are required')
-        if peer_options.pop('compute', 'bf16') != 'bf16':
-            raise ValueError('hierarchical peer training currently requires BF16')
+        compute=peer_options.pop('compute','bf16')
+        if compute not in ('bf16','fp8'):
+            raise ValueError('hierarchical peer compute must be bf16 or fp8')
         self.groups = groups
         self.group, self.size, self.rank = groups.metadata, groups.size, groups.rank
         self.gradient_group = gradient_group
         self.h, self.i, self.e, self.k = hidden, intermediate, local_experts, topk
         self.max_tokens, self.chunk_tokens = max_tokens, chunk_tokens
-        self.compute, self.check_errors = 'bf16', check_errors
+        self.compute, self.check_errors = compute, check_errors
         self.device = torch.device('cuda', torch.cuda.current_device()) if device is None else torch.device(device)
         if self.device.index is None:
             self.device = torch.device('cuda', torch.cuda.current_device())
@@ -136,7 +137,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self._pair_forward_mask=None
         self._pair_forward_tensors=None
         description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                       groups.domain_size, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized)
+                       groups.domain_size, compute, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized)
         descriptions = [None] * self.size
         dist.all_gather_object(descriptions, description, group=self.group)
         if any(item != description for item in descriptions):
@@ -149,10 +150,12 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             raise ValueError('tail DW overlap requires the source pipeline')
         if tail_dw_serialized and not tail_dw_overlap:
             raise ValueError('tail DW serialization requires deferred tail overlap')
+        if tail_dw_overlap and compute!='bf16':
+            raise ValueError('deferred tail DW currently requires BF16 compute')
         factor=1 if source_pipeline else 2
         self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, factor * max_tokens,
                                  chunk_tokens=factor * chunk_tokens, group=groups.domain,
-                                 device=self.device, check_errors=False, **peer_options)
+                                 device=self.device, compute=compute, check_errors=False, **peer_options)
         if reuse_pair_context and not self.inner.reuse_forward_context:
             if hasattr(self.inner,'close'):self.inner.close()
             raise ValueError('pair context reuse requires domain-local forward context reuse')
@@ -161,7 +164,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self.remote_inner=None
         if source_pipeline:
             self.remote_inner=PeerMoEPlan(hidden,intermediate,local_experts,topk,max_tokens,
-                chunk_tokens=chunk_tokens,group=groups.domain,device=self.device,check_errors=False,**peer_options)
+                chunk_tokens=chunk_tokens,group=groups.domain,device=self.device,compute=compute,check_errors=False,**peer_options)
             self.buffers.update({'remote_inner_'+key:value for key,value in self.remote_inner.buffers.items()})
             self._source_pair_stream=torch.cuda.Stream(device=self.device)
 

@@ -94734,3 +94734,34 @@ cross64timing/profile against the fastest matched DeepEP and source control.
     }
   ]
 }
+
+## Iteration129 — native FP8 compute within the cross-domain hierarchy
+
+Allow explicit BF16 or FP8 compute in the hierarchical wrapper and include
+compute precision in global rank recipe agreement. Pass the selected compute
+to both independent source plans. Pair communication remains BF16, score
+payloads remain FP32, and weight gradients use BF16 operands with FP32
+accumulation. This is not an FP8 communication or FP8-DW implementation.
+Reject deferred tail DW with FP8, since that private path currently supports
+BF16 only. BF16 behavior remains selected by the existing default.
+
+Reuse the already validated native FP8 staged-input/direct-return recipe,
+including live context, row quantization, fused Q/QT weight preparation and
+cached tiled dY quantization. No additional math kernel is introduced.
+Check pair and source-split live contexts, serialized source control, one-rank
+mutation, rematerialization, backward/full mutable graphs, preparation failure
+and retry. Independent FP32 CPU-sum comparisons use an explicit upfront .12
+relative-RMS tolerance for FP8 (.04 BF16); exact-path context comparisons
+retain .0001. Also run BF16 CPU and deferred-tail regression cases.
+Seven whole-host EP8 phases require376focused and72independent reference
+records. Physical EP64 timing against matched FP8 DeepEP is still required
+before promoting the added precision path.
+
+{
+  "passed": true,
+  "focused": 376,
+  "independent_fp32_reference_records": 72,
+  "accepted": 7,
+  "excluded": [],
+  "raw_sha256": "06b605ec401b293b8a2c5a0cc5536e2a485b6ff82f29762e9f965ef974baa8b8"
+}
