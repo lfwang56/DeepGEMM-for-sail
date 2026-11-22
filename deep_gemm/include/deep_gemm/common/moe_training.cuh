@@ -41,6 +41,8 @@ enum class Operation : int {
     QuantizeRowsDeviceRows,
     ActivationQuantizeDeviceRows,
     ActivationBackwardQuantizeDeviceRows,
+    QuantizeWeightsCachedFloat,
+    QuantizeWeightsCachedInteger,
 };
 
 }  // namespace deep_gemm::training

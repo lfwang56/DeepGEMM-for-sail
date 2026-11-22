@@ -252,6 +252,69 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         for (int pair = 0; pair < 2; ++pair)
             output[base / 2 + lane + pair * 32] = epilogue::quant::fp8_pair(
                 values[pair * 2] / scale, values[pair * 2 + 1] / scale);
+    } else if constexpr (Op == Operation::QuantizeWeightsCachedFloat ||
+                         Op == Operation::QuantizeWeightsCachedInteger) {
+        // One 128x128 block, with every BF16 input loaded once and retained
+        // as packed registers until the block scale is known.
+        const int n_blocks = p.dim[1] / 128, k_blocks = p.dim[2] / 128;
+        const int group = block_index / (n_blocks * k_blocks);
+        const int tile = block_index % (n_blocks * k_blocks);
+        const int row_base = (tile / k_blocks) * 128, col_base = (tile % k_blocks) * 128;
+        uint4 cached[8];
+        float maximums[4] = {0.f, 0.f, 0.f, 0.f};
+        unsigned integer_maximum = 0;
+        #pragma unroll
+        for (int slot = 0; slot < 8; ++slot) {
+            const int vector = thread + slot * 256;
+            const int64_t offset = (int64_t(group) * p.dim[1] + row_base + vector / 16) * p.dim[2]
+                                   + col_base + (vector % 16) * 8;
+            cached[slot] = *reinterpret_cast<const uint4*>(pointer<Bf16>(p, 0) + offset);
+            const unsigned words[4] = {cached[slot].x, cached[slot].y, cached[slot].z, cached[slot].w};
+            #pragma unroll
+            for (int pair = 0; pair < 4; ++pair) {
+                const unsigned word = words[pair];
+                if constexpr (Op == Operation::QuantizeWeightsCachedInteger) {
+                    const unsigned lo = word & 0x7fffu, hi = (word >> 16) & 0x7fffu;
+                    // Match fmaxf: ignore NaNs, retain infinity and unsigned zero.
+                    if (lo <= 0x7f80u && lo > integer_maximum) integer_maximum = lo;
+                    if (hi <= 0x7f80u && hi > integer_maximum) integer_maximum = hi;
+                } else {
+                    maximums[pair] = fmaxf(maximums[pair], fabsf(__uint_as_float(word << 16)));
+                    maximums[pair] = fmaxf(maximums[pair], fabsf(__uint_as_float(word & 0xffff0000u)));
+                }
+            }
+        }
+        float maximum;
+        if constexpr (Op == Operation::QuantizeWeightsCachedInteger)
+            maximum = __uint_as_float(integer_maximum << 16);
+        else maximum = fmaxf(fmaxf(maximums[0], maximums[1]), fmaxf(maximums[2], maximums[3]));
+        maximum = warp_max(maximum);
+        __shared__ float maxima[8];
+        if (lane == 0) maxima[warp] = maximum;
+        __syncthreads();
+        if (warp == 0) {
+            maximum = warp_max(lane < 8 ? maxima[lane] : 0.f);
+            if (lane == 0) maxima[0] = fmaxf(maximum, 1e-4f) / 448.f;
+        }
+        __syncthreads();
+        const float scale = maxima[0];
+        if (thread == 0) pointer<float>(p, 2)[block_index] = scale;
+        #pragma unroll
+        for (int slot = 0; slot < 8; ++slot) {
+            const unsigned words[4] = {cached[slot].x, cached[slot].y, cached[slot].z, cached[slot].w};
+            unsigned converted[4];
+            #pragma unroll
+            for (int pair = 0; pair < 4; ++pair)
+                converted[pair] = epilogue::quant::fp8_pair(
+                    __uint_as_float(words[pair] << 16) / scale,
+                    __uint_as_float(words[pair] & 0xffff0000u) / scale);
+            const uint2 packed = make_uint2(converted[0] | (converted[1] << 16),
+                                            converted[2] | (converted[3] << 16));
+            const int vector = thread + slot * 256;
+            const int64_t offset = (int64_t(group) * p.dim[1] + row_base + vector / 16) * p.dim[2]
+                                   + col_base + (vector % 16) * 8;
+            *reinterpret_cast<uint2*>(pointer<uint8_t>(p, 1) + offset) = packed;
+        }
     } else if constexpr (Op == Operation::QuantizeWeights) {
         // BF16 weights[G,N,K], E4M3 weights, FP32 block scales[G,N/128,K/128].
         // dims: G,N,K; N/K are 128 aligned.

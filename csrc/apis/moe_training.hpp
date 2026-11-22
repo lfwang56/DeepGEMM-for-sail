@@ -20,9 +20,14 @@ public:
         Params params;
     };
 
+    static bool active_quantization(const int operation) {
+        return operation >= int(Operation::QuantizeRowsDeviceRows) &&
+               operation <= int(Operation::ActivationBackwardQuantizeDeviceRows);
+    }
+
     static std::string kernel_name(const Args& args) {
         const auto name = fmt::format("moe_training_{}", args.operation);
-        if (args.operation < int(Operation::QuantizeRowsDeviceRows)) return name;
+        if (!active_quantization(args.operation)) return name;
         return name + (args.params.dim[2] ? "_mn_scales" : "_row_scales");
     }
 
@@ -34,7 +39,7 @@ __global__ void {}(const deep_gemm::training::Params params) {{
     deep_gemm::training::run<static_cast<deep_gemm::training::Operation>({}){}>(params);
 }}
 )", kernel_name(args), args.operation,
-       args.operation < int(Operation::QuantizeRowsDeviceRows) ? "" : args.params.dim[2] ? ", true" : ", false");
+       !active_quantization(args.operation) ? "" : args.params.dim[2] ? ", true" : ", false");
     }
 
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -47,7 +52,7 @@ __global__ void {}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantizeDeviceRows));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::QuantizeWeightsCachedInteger));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -169,11 +174,17 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             break;
         }
         case Operation::QuantizeWeights:
+        case Operation::QuantizeWeightsCachedFloat:
+        case Operation::QuantizeWeightsCachedInteger:
             schema(3, 3);
             DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[2] > 0);
             DG_HOST_ASSERT(dims[1] % 128 == 0 && dims[2] % 128 == 0);
             expect(0, dims[0] * dims[1] * dims[2], bf);
             expect(1, dims[0] * dims[1] * dims[2], f8);
+            if (static_cast<Operation>(operation) != Operation::QuantizeWeights) {
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[0].data_ptr()) % 16 == 0);
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[1].data_ptr()) % 8 == 0);
+            }
             blocks = dims[0] * (dims[1] / 128) * (dims[2] / 128);
             expect(2, blocks, fp);
             break;
@@ -302,8 +313,8 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::ActivationBackwardQuantizeDeviceRows));
-        const int variants = operation >= int(Operation::QuantizeRowsDeviceRows) ? 2 : 1;
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::QuantizeWeightsCachedInteger));
+        const int variants = Runtime::active_quantization(operation) ? 2 : 1;
         for (int layout = 0; layout < variants; ++layout) {
             Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
             args.params.dim[2] = layout;
