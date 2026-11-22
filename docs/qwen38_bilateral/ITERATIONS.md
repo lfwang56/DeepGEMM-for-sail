@@ -37377,3 +37377,698 @@ rue, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, 
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1814088, "start_ticks": "217841742"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration110 — overlap FP8 return GEMM with tile-wise BF16 peer copies
+
+109source/adapterall23component+6EP8gatespassed. Actual32inputpipeline
+is not promoted:4kparallel8/16/24/32=114.43/84.43/74.82/94.56ms;
+serial156/312=63.71/63.40vsstaged62.44. Keep best107staged input.
+
+ReturnFP8 kernels consume14.36ms while comparable local FC2+DX arithmetic
+is about8.65ms. Prototype separate low-register return copy consumers
+with original BF16 bytes and tile readiness, overlapping native FP8
+GEMM producing local M128xN256 tiles. Producer grid39-copyCTAs avoids
+resident-copy starvation with512-thread/256-register GEMM blocks.
+The producer publishes after per-thread fence and CTA barrier; copy
+consumers acquire each tile, validate routes, copy16-byte vectors,
+then join before scratch reuse/rank barrier/token combination.
+
+New peer26ReturnGemmTiles; DG_MOE_FP8_RETURN_PIPELINE1 and
+DG_MOE_FP8_RETURN_CTAS(default4) are opt-in/allrank-agreed. Force
+M128/N256 return geometry; no claim of hard CU affinity or a single
+megakernel. Exact scatter-byte/guard tests and8EP8 mutable/multichunk
+integration phases(2/4/8copyCTAs and combined input32+return4)
+are required before actual EP32 latency comparisons.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 1,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 106.53353271484374,
+      "speedup": 0.01569380049069424,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 2,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 54.10506591796875,
+      "speedup": 0.03090128400417211,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 4,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 26.677108764648438,
+      "speedup": 0.06267230916009794,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 8,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 13.064103698730468,
+      "speedup": 0.12797785799557587,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 12,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 8.584075927734375,
+      "speedup": 0.19476948038096864,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 16,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 6.354684066772461,
+      "speedup": 0.2630997844153675,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 24,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 4.219807815551758,
+      "speedup": 0.3962066712692211,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 32,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 3.1457239151000977,
+      "speedup": 0.5314884755048203,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 1,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 106.53353271484374,
+      "speedup": 0.01569380049069424,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 2,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 54.10506591796875,
+      "speedup": 0.03090128400417211,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 4,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 26.677108764648438,
+      "speedup": 0.06267230916009794,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 8,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 13.064103698730468,
+      "speedup": 0.12797785799557587,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 12,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 8.584075927734375,
+      "speedup": 0.19476948038096864,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 16,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 6.354684066772461,
+      "speedup": 0.2630997844153675,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 24,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 4.219807815551758,
+      "speedup": 0.3962066712692211,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_return_tile_copy_performance",
+      "copy_ctas": 32,
+      "before_ms": 1.6719160079956055,
+      "after_ms": 3.1457239151000977,
+      "speedup": 0.5314884755048203,
+      "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 2206131,
+          "start_ticks": "217993489"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-mode3-tiled2-copy2",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-multichunk-tiled2-copy2",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-mode3-tiled2-copy4",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-multichunk-tiled2-copy4",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-mode3-tiled2-copy8",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-multichunk-tiled2-copy8",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-mode3-tiled2-copy4-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe110-ep8-multichunk-tiled2-copy4-input32",
+      "returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0004", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "fp8_return_tile_copy_reference", "width": 256, "capacity": 512, "active": 0, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 256, "capacity": 512, "active": 128, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 256, "capacity": 512, "active": 256, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 256, "capacity": 512, "active": 512, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 512, "capacity": 512, "active": 0, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 512, "capacity": 512, "active": 128, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 512, "capacity": 512, "active": 256, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 512, "capacity": 512, "active": 512, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 8192, "capacity": 512, "active": 0, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 8192, "capacity": 512, "active": 128, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 8192, "capacity": 512, "active": 256, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 8192, "capacity": 512, "active": 512, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_reference", "width": 8192, "capacity": 65536, "active": 40960, "graph": true, "every_element": true, "gates": {"torch_index_copy": true, "legacy_copy_bits": true, "outer_guards": true, "ready_read_only": true, "status": true}, "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 1, "before_ms": 1.6719160079956055, "after_ms": 106.53353271484374, "speedup": 0.01569380049069424, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 2, "before_ms": 1.6719160079956055, "after_ms": 54.10506591796875, "speedup": 0.03090128400417211, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 4, "before_ms": 1.6719160079956055, "after_ms": 26.677108764648438, "speedup": 0.06267230916009794, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 8, "before_ms": 1.6719160079956055, "after_ms": 13.064103698730468, "speedup": 0.12797785799557587, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 12, "before_ms": 1.6719160079956055, "after_ms": 8.584075927734375, "speedup": 0.19476948038096864, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 16, "before_ms": 1.6719160079956055, "after_ms": 6.354684066772461, "speedup": 0.2630997844153675, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 24, "before_ms": 1.6719160079956055, "after_ms": 4.219807815551758, "speedup": 0.3962066712692211, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_return_tile_copy_performance", "copy_ctas": 32, "before_ms": 1.6719160079956055, "after_ms": 3.1457239151000977, "speedup": 0.5314884755048203, "scope": "Local BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2206131, "start_ticks": "217993489"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

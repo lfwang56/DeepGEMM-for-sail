@@ -38,7 +38,7 @@ public:
     static constexpr int MinBlocksPerMultiprocessor = Base::MinBlocksPerMultiprocessor;
     CUTLASS_DEVICE void
   operator()(Params const& params, const training::PeerGemmParams& peers,
-             const training::PeerDispatchPipeline& input, char* smem_buf) {
+             const training::PeerDispatchPipeline& input, const training::PeerDispatchPipeline& output, char* smem_buf) {
     using namespace cute;
     using X = Underscore;
     int warp_idx = cutlass::canonical_warp_idx_sync();
@@ -177,7 +177,7 @@ public:
       const auto coordinates = thread_mma.partition_C(make_identity_tensor(take<0, 2>(blk_shape)));
       const uint32_t row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
       const uint32_t valid_rows = uint32_t(cute::min(int(size<0>(TileShape{})), int(M) - int(m_coord) * int(size<0>(TileShape{}))));
-#if !DG_TRAINING_FP8_PEER_INPUT
+#if !DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_RETURN_PIPELINE
       training::scatter_peer_output<cutlass::bfloat16_t, TileScheduler::SHAPE_N, false>(
           accumulators, coordinates, peers, row_base, valid_rows,
           uint32_t(n_coord) * size<1>(TileShape{}));
@@ -198,6 +198,17 @@ public:
         thread_idx,
         (char*)&shared_storage.tensors.epilogue
       );
+#endif
+#if DG_TRAINING_FP8_RETURN_PIPELINE
+      static_assert(size<0>(TileShape{})==128 && size<1>(TileShape{})==256);
+      __threadfence();
+      __syncthreads();
+      if(threadIdx.x==0) {
+        const uint32_t tile=(row_base/128)*(TileScheduler::SHAPE_N/256)+uint32_t(n_coord);
+        if(tile>=output.signal_capacity)atomicOr(output.status,2u);
+        else tix::red_add_rel(output.ready+tile,1u);
+      }
+      __syncthreads();
 #endif
       if constexpr(kEnableSboOverlap && TileScheduler::GEMM_TYPE == GemmType::MGroupedMasked) {
         cp_async_wait<0>();

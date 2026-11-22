@@ -31,7 +31,7 @@ public:
         const bool tiled_quant=args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) ||
                                args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached);
         const bool input_tiles = args.operation == int(PeerOperation::PackQuantizedInputTiles);
-        const bool fused_quant = input_tiles || args.operation == int(PeerOperation::PackActiveQuantized) ||
+        const bool fused_quant = input_tiles || args.operation == int(PeerOperation::ReturnGemmTiles) || args.operation == int(PeerOperation::PackActiveQuantized) ||
                                  args.operation == int(PeerOperation::ExpertLocalGradientsQuantized) ||
                                  tiled_quant;
         const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
@@ -53,7 +53,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PackQuantizedInputTiles));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ReturnGemmTiles));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -85,6 +85,16 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
                 reinterpret_cast<uintptr_t>(tensors[5].data_ptr())%16==0 &&
                 reinterpret_cast<uintptr_t>(tensors[8].data_ptr())%8==0);
             blocks=int64_t(get_num_sms())*4;
+            break;
+        case PeerOperation::ReturnGemmTiles:
+            schema(6,6);
+            DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>0 && dims[1]%256==0 &&
+                           dims[2]>0 && dims[3]>0 && dims[3]<=64 && dims[4]==256 &&
+                           dims[5]>0 && dims[5]<get_num_sms());
+            expect(0,dims[0]*dims[1],bf);expect(1,dims[0],i32);expect(2,dims[3],i64);
+            expect(3,1,i32);expect(4,(dims[0]/128)*(dims[1]/256),i32);expect(5,1,i32);
+            DG_HOST_ASSERT(dims[0]*dims[1]<=INT32_MAX && reinterpret_cast<uintptr_t>(tensors[0].data_ptr())%16==0);
+            blocks=dims[5];
             break;
         case PeerOperation::PackQuantizedInputTiles:
             schema(8,7);

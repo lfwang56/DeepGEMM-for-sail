@@ -116,6 +116,48 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
             if constexpr(cache_scores)__syncthreads();
         }
+    } else if constexpr (Op == PeerOperation::ReturnGemmTiles) {
+        static_assert(InputWidth>0 && InputWidth%256==0);
+        const int blocks=peer_pointer<int32_t>(p,3)[0];
+        auto* status=peer_pointer<uint32_t>(p,5);
+        if(blocks<0 || blocks>p.dim[0]/128) {
+            if(index==0)atomicOr(status,2u);
+            return;
+        }
+        constexpr int nt=InputWidth/256;
+        __shared__ int failed;
+        __shared__ uint64_t destinations[128];
+        for(int task=block_index;task<blocks*nt;task+=gridDim.x) {
+            const int base=(task/nt)*128,column=(task%nt)*256;
+            if(threadIdx.x==0) {
+                failed=0;const uint64_t begin=clock64();
+                while(tix::ld_acq(peer_pointer<uint32_t>(p,4)+task)!=1u) {
+                    if(tix::ld_acq(status) || clock64()-begin>uint64_t(180)*2'000'000'000) {
+                        atomicOr(status,8u);failed=1;break;
+                    }
+                }
+            }
+            __syncthreads();
+            if(failed)return;
+            if(threadIdx.x<128) {
+                const int route=peer_pointer<int32_t>(p,1)[base+threadIdx.x];
+                const bool valid=route>=0 && int64_t(route)<p.dim[2]*p.dim[3];
+                if(route>=0 && !valid)atomicOr(status,2u);
+                destinations[threadIdx.x]=valid?peer_pointer<uint64_t>(p,2)[int64_t(route)/p.dim[2]]+
+                    uint64_t(int64_t(route)%p.dim[2])*InputWidth*sizeof(__ppu_bfloat16):0;
+            }
+            __syncthreads();
+            for(int item=threadIdx.x;item<128*(256/8);item+=blockDim.x) {
+                const int row=item/(256/8),col=(item%(256/8))*8;
+                if(destinations[row]) {
+                    const uint4 value=*reinterpret_cast<const uint4*>(peer_pointer<__ppu_bfloat16>(p,0)+
+                        int64_t(base+row)*InputWidth+column+col);
+                    *reinterpret_cast<uint4*>(destinations[row]+uint64_t(column+col)*sizeof(__ppu_bfloat16))=value;
+                }
+            }
+            __syncthreads();
+        }
+        __threadfence();
     } else if constexpr (Op == PeerOperation::PackQuantizedInputTiles) {
         static_assert(InputWidth>=128 && InputWidth<=8192 && InputWidth%128==0);
         static_assert(InputBlockM>0 && InputTopk>0);
