@@ -196,6 +196,7 @@ class PeerMoEPlan(NativeMoEPlan):
             return value
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
+        self.fp8_serial_full_grid = fp8_flag(None, "DG_MOE_FP8_INPUT_SERIAL_FULL_GRID")
         self.fp8_input_cache_scales = fp8_flag(fp8_input_cache_scales, "DG_MOE_FP8_INPUT_CACHE_SCALES")
         self.reuse_forward_context = fp8_flag(reuse_forward_context, "DG_MOE_REUSE_FORWARD_CONTEXT")
         if self.reuse_forward_context and (ring_rows is None or not expert_local_grad
@@ -212,6 +213,8 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("FP8 producer threads must be128,256or512")
         if self.fp8_input_pipeline and not self.fp8_peer_compute:
             raise ValueError("FP8 input pipeline requires FP8 peer compute")
+        if self.fp8_serial_full_grid and not (self.fp8_input_pipeline and self.fp8_input_serialize):
+            raise ValueError("full-grid serial input requires the serialized FP8 input pipeline")
         if self.fp8_input_serialize and not self.fp8_input_pipeline:
             raise ValueError("FP8 input serialization requires the FP8 input pipeline")
         self._fp8_backward = self._fp8_bf_input_pending = False
@@ -366,7 +369,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -617,6 +620,14 @@ class PeerMoEPlan(NativeMoEPlan):
             width = a.shape[1]
             quantized_a = self.quantized[width]
             if self.fp8_input_pipeline and role == "fc1":
+                if self.fp8_serial_full_grid:
+                    # _fc1 has joined the producer stream. No consumers wait
+                    # on READY, so every CU may now execute the native GEMM.
+                    config = self.gemm_configs.get(role)
+                    options = {} if config is None else {"configs": (dg.get_num_sms(), self.block_m, *config, (0, 0, 0))}
+                    dg.m_grouped_fp8_gemm_nt_nopad(quantized_a, self.quantized[name], output, self.group_ids,
+                                                  m_rows=self.lengths, disable_ue8m0_cast=True, **options)
+                    return None
                 return dg._C._moe_training_peer_fp8_gemm(
                     quantized_a, self.quantized[name], output, self.lengths, self.permutation,
                     self.pointer_tables[destination], self.chunk_tokens * self.k,

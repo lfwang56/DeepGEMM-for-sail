@@ -483,6 +483,7 @@ def main():
                     "reused_forward_windows_last_step": int(plan.forward_context_reused_windows.item()) if getattr(plan, "reuse_forward_context", False) else 0,
                     "reused_forward_padded_rows_last_step": int(plan.forward_context_reused_rows.item()) if getattr(plan, "reuse_forward_context", False) else 0,
                     "peer_fp8_input_serialized": getattr(plan, "fp8_input_serialize", False),
+                    "peer_fp8_serial_full_grid": getattr(plan, "fp8_serial_full_grid", False),
                     "fp8_source_dispatch": getattr(plan, "fp8_source_dispatch", False),
                     "peer_fp8_return_fused": plan.fuse_return if getattr(plan, "fp8_peer_compute", False) else None,
                     "fp8_active_quantization": getattr(plan, "fp8_active_quantization", None),

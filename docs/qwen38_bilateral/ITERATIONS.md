@@ -15855,3 +15855,509 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-2n550vu1t02-a0006", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3817646, "start_ticks": "66429165"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration91 — reclaim every compute CU after serialized FP8 input copies
+
+90 closed e8260ff999. Unit byte/SF/canary/mutablegraph tests and
+allfiveEP8 gradients passed, asdid actual32Qwen FP32reference and
+largeC4096skew. Weightpreparation9.6696->4.3287ms. Timing group
+wasinterrupted bygates75 onSN2; partialphase timings are not accepted
+without clean postflight. Frozen90 retries onstableSN1 afterfrozen88
+verification; originalstopped trials retained.
+
+Source review found serialized FP8 input still launched its consumer
+through the ready-waiting wrapper, reserving communicationCUs even
+afterthe producerstream hadjoined. With38producerCTAs thatwould
+leaveonlyonecomputeCU, making sucha serial bandwidthtest invalid.
+
+Adddefaultoff DG_MOE_FP8_INPUT_SERIAL_FULL_GRID1. Requirethe
+serializedFP8inputpipeline; allranks agree. After _fc1's existing
+streamjoin, launchthe ordinarylocalnativeFP8groupedGEMM, whichuses
+thefullcomputegrid andhasnoREADYwaits orpeerstores. Preserveold
+reserved/parallel controls withtheflag0. NoC++/nativebuildormathchange.
+GPUquantization/copy remainsinscope. KeepBF16inputforFP32DW.
+
+EP8gates includefullgrid serial8/38, multiplechunks, separate/fused
+return, CPU/nativeeverygradient, zeroandmutablerouting. Actual32
+Qwenreferences/skew andpairedstaged/parallel8/serial8reserved/
+serial8,16,24,38fullgrid wholeFWD+BWD atT4096;T16384staged/serial24/38.
+BothsourceFP8quantization andcurrent-forwardweightreuseenabled.
+
+[
+  {
+    "name": "qwen38-r2-serial91-ep8-control-serial8-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-ep8-multichunk38",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-ep8-separate38",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-ep8-serial38",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-parallel8-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 72.57296142578124,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 8,
+        "peer_fp8_input_serialized": false,
+        "peer_fp8_serial_full_grid": false,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-reference-c4096-skew-r1",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "skew_capacity_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-reference-qwen-r1-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "large_distributed_peer_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": 38,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "large_distributed_peer_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": 38,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      },
+      {
+        "case": "large_distributed_peer_reference",
+        "backend": "peer",
+        "median_max_rank_event_ms": null,
+        "fp8_transpose_quantized_weights": null,
+        "reuse_forward_context": null,
+        "peer_fp8_input_ctas": 38,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": null,
+        "passed": true
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial16-full-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 75.26951904296875,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 16,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": true,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial24-full-t16384",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 280.914306640625,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 24,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": true,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial24-full-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 74.68053588867187,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 24,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": true,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial38-full-t16384",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 276.4403564453125,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 38,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": true,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial38-full-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 73.81436767578126,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 38,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": true,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial8-full-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 77.59636840820312,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 8,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": true,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-serial8-reserved-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 80.6889404296875,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 8,
+        "peer_fp8_input_serialized": true,
+        "peer_fp8_serial_full_grid": false,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-staged-t16384",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 266.797119140625,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 8,
+        "peer_fp8_input_serialized": false,
+        "peer_fp8_serial_full_grid": false,
+        "passed": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-serial91-staged-t4096",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "bounded_training_benchmark",
+        "backend": "peer",
+        "median_max_rank_event_ms": 71.18611450195313,
+        "fp8_transpose_quantized_weights": true,
+        "reuse_forward_context": true,
+        "peer_fp8_input_ctas": 8,
+        "peer_fp8_input_serialized": false,
+        "peer_fp8_serial_full_grid": false,
+        "passed": null
+      }
+    ]
+  }
+]
+
+Unit evidence (including failures):
+```
+
+```
