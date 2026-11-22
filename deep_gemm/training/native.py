@@ -27,6 +27,8 @@ class NativeMoEPlan:
     create separate plans for concurrent callers. Optional internal weight
     gradients use a joined auxiliary stream. The activation ring holds one
     chunk, independent of max_tokens and the number of pending layers.
+    With optional forward-context reuse, give each outstanding captured
+    layer its own plan so a later forward cannot overwrite its context.
     """
 
     transport = "collective"

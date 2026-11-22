@@ -15462,3 +15462,48 @@ and fused context/full-replay timing and gradient references.
     ]
   }
 ]
+
+
+## Iteration89 — give captured LM layers independent forward contexts
+
+88 closed at32daaf467b. AllsixEP8 cases passed, including both
+multichunk payload types, every CPU/native gradient, mutable graph routes,
+zero capacity and rank-local invalidation. Initial LM launch omitted its
+requiredcheckpoint path; unchanged-source retry then passed fullmodel
+initialgradient comparisons but failed joint graph capture because the
+harness deliberately shared a replay-only workspace across allfourlayers.
+After the last layer backward consumed that singlelive context, earlier
+layers had no matching forward. No numerical mismatch was observed here.
+
+Allocate one plan per outstanding LM layer only when context reuse is
+enabled. Keep the original shared-plan policy otherwise. Reset/check/close
+allplans and assert/record nonzero GPU reuse counters on every layer at
+eachtraining evaluation boundary, before evaluation overwrites them.
+Document captured forward-context ownership in NativeMoEPlan. No kernel,
+math, optimizer, quantization recipe or timing policy change. Gate both
+BF16 and FP8 complete4layer public-textLM20step training, fullmodel initial
+gradients, captured AdamW and mutable training batches.
+
+Independent frozen86algorithm profiles on SN2: BF16span65.0183ms versus
+FP8staged76.2699ms. DW15.8151vs15.6679ms. FP8weightquantization7.0859ms,
+BF16weighttranspose2.5830ms, activation-rowquantization5.6400ms, fused
+activation/quantization3.6706ms. These are category intervals, not a pure
+communication/compute split; mixed kernels include math and remoteaccess.
+Artifacts iter86-context-{bf16,fp8}-breakdown.json retain graph correlation
+IDs, resources, all timegaps and exclusive overlaps. Frozen88 actual32
+matched baseline verification runs independently; no ratio claimed yet.
+
+[
+  {
+    "compute": "bf16",
+    "clean": true,
+    "passed": true,
+    "evidence_path": "work/qwen38-r2-context89-ep8-lm-bf16.log"
+  },
+  {
+    "compute": "fp8",
+    "clean": true,
+    "passed": true,
+    "evidence_path": "work/qwen38-r2-context89-ep8-lm-fp8.log"
+  }
+]

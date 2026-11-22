@@ -343,14 +343,21 @@ def main():
         metadata = dist.new_group(backend="gloo", timeout=timedelta(seconds=300))
         hybrid_groups = make_hierarchical_groups(options.hybrid_domain_size, metadata)
         classes["hybrid"] = HierarchicalPeerMoEPlan
-    plan = classes[options.backend](config.hidden, config.intermediate, local_experts, config.topk,
-                                    local_batch * config.sequence, chunk_tokens=config.chunk_tokens,
-                                    compute=options.compute,
-                                    **({"group":dist.group.WORLD} if hybrid_groups is None else {"groups":hybrid_groups}), device=device,
-                                    check_errors=False, **plan_options)
-    for block in model.blocks:
+    def make_plan():
+        return classes[options.backend](config.hidden, config.intermediate, local_experts, config.topk,
+                                        local_batch * config.sequence, chunk_tokens=config.chunk_tokens,
+                                        compute=options.compute,
+                                        **({"group":dist.group.WORLD} if hybrid_groups is None else {"groups":hybrid_groups}), device=device,
+                                        check_errors=False, **plan_options)
+    plan = make_plan()
+    # A reusable forward context belongs to one outstanding layer. Sharing a
+    # replay-only scratch plan across layers remains the default recipe.
+    plans = [plan]
+    if getattr(plan, 'reuse_forward_context', False):
+        plans.extend(make_plan() for _ in model.blocks[1:])
+    for index, block in enumerate(model.blocks):
         experts = block.experts
-        experts.backend, experts.plan = "native", plan
+        experts.backend, experts.plan = "native", plans[index] if len(plans) > 1 else plan
         section = slice(rank * local_experts, (rank + 1) * local_experts)
         experts.w1 = nn.Parameter(experts.w1[section].clone())
         experts.w2 = nn.Parameter(experts.w2[section].clone())
@@ -389,7 +396,7 @@ def main():
                           "seed": options.seed}), flush=True)
 
         def step():
-            plan.reset_errors()
+            for layer_plan in plans:layer_plan.reset_errors()
             with torch.autocast("cuda", dtype=torch.bfloat16, cache_enabled=False):
                 ce, auxiliary = model(static_x, static_y)
                 loss = (ce + config.auxiliary_coefficient * auxiliary) / size
@@ -429,7 +436,11 @@ def main():
             else:
                 graph.replay()
             if (iteration + 1) % options.eval_interval == 0 or iteration + 1 == options.steps:
-                plan.check()
+                for layer_plan in plans:layer_plan.check()
+                reused_windows = ([int(layer_plan.forward_context_reused_windows.item()) for layer_plan in plans]
+                                  if getattr(plan, 'reuse_forward_context', False) else [])
+                if reused_windows and not all(count > 0 for count in reused_windows):
+                    raise AssertionError('every context-enabled layer must reuse its own forward window')
                 last_validation = evaluate(model, validation, config, rank, size, device, options.eval_batches)
                 metrics = torch.stack((ce.detach(), auxiliary.detach(), norm.detach()))
                 dist.all_reduce(metrics)
@@ -441,7 +452,8 @@ def main():
                                       "backend": options.backend, "compute": options.compute, "ep_size": size,
                                       "train_cross_entropy": values[0] / size, "auxiliary_loss": values[1] / size,
                                       "gradient_norm": values[2] / size, "validation_loss": last_validation,
-                                      "elapsed_seconds": time.perf_counter() - begin}), flush=True)
+                                      "elapsed_seconds": time.perf_counter() - begin,
+                                      "context_reused_windows_by_layer": reused_windows}), flush=True)
         save_checkpoints(model, optimizer, config, manifest, options, generator, rank, size, last_validation, initial_loss)
         torch.cuda.synchronize(device)
         print(json.dumps({"case": "distributed_lm_finished", "rank": rank, "ep_size": size,
@@ -455,8 +467,8 @@ def main():
         gc.collect()
     if options.backend == "elastic":
         torch.cuda.synchronize(device)
-        plan.close()
-    del model, optimizer, reduction, plan, static_x, static_y, stream
+        for layer_plan in plans:layer_plan.close()
+    del model, optimizer, reduction, plan, plans, static_x, static_y, stream
     gc.collect()
     if hybrid_groups is not None:
         hybrid_groups.close()
