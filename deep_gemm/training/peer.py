@@ -1,6 +1,7 @@
 """Native peer-read/peer-write Tensor Cell GEMMs for PPU MoE training."""
 
 import math
+import os
 
 import torch
 import torch.distributed as dist
@@ -37,7 +38,36 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
                  input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False, dispatch_external_serial=False,
-                 fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, transpose_free_dgrad=False, **kwargs):
+                 fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, transpose_free_dgrad=False,
+                 input_helper_threads=None, input_helper_block_m=None, input_helper_block_n=None, **kwargs):
+        # Optional CTA helper recipe; environment values allow the same large
+        # reference and capacity harnesses to exercise the exact candidate.
+        def helper_value(value, key, default):
+            value = int(os.environ.get(key, str(default))) if value is None else value
+            if type(value) is not int:
+                raise TypeError(key + " must be an integer")
+            return value
+        input_helper_threads = helper_value(input_helper_threads, "DG_MOE_INPUT_HELPER_THREADS", 0)
+        if input_helper_threads not in (0, 32, 64):
+            raise ValueError("input helper threads must be0,32or64")
+        self.input_helper_threads = input_helper_threads
+        self.input_helper_block_m = self.input_helper_block_n = 0
+        if input_helper_threads:
+            hm = helper_value(input_helper_block_m, "DG_MOE_INPUT_HELPER_BLOCK_M", 128)
+            hn = helper_value(input_helper_block_n, "DG_MOE_INPUT_HELPER_BLOCK_N", 512)
+            metadata_m = kwargs.get("block_m", 128)
+            if (hm not in (128, 256) or hn not in (256, 512) or hm > metadata_m
+                    or metadata_m % hm or (hn == 512 and hm != 128)):
+                raise ValueError("unsupported input-helper compute/metadata geometry")
+            if (not dispatch_producer or not producer_input_aiu or not producer_local_aiu
+                    or not fuse_fc1_activation or not expert_local_grad or not reuse_packed_dy
+                    or not fuse_dispatch or not fuse_return or ring_rows is None
+                    or kwargs.get("gate_up_layout", "split") != "g8"
+                    or dag_fusion or dag_backward or ffn_fusion or dispatch_pipeline
+                    or return_pipeline or dispatch_assist_ctas or dispatch_external
+                    or staged_return or dispatch_cache_n or kwargs.get("overlap_expert_dy", False)):
+                raise ValueError("input helpers require the G8 producer bilateral routed-window recipe")
+            self.input_helper_block_m, self.input_helper_block_n = hm, hn
         if not isinstance(transpose_free_dgrad, bool):
             raise TypeError("transpose_free_dgrad must be bool")
         if transpose_free_dgrad and (not expert_local_grad or not reuse_packed_dy
@@ -264,7 +294,8 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
                       self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
                       self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial,
-                      self.fuse_dhidden_scores, self.transpose_free_dgrad)
+                      self.fuse_dhidden_scores, self.transpose_free_dgrad,
+                      self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -272,6 +303,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if gemm_configs is None and self.block_m == 256:
             gemm_configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
+        if self.input_helper_threads:
+            self.gemm_configs["fc1"] = (self.input_helper_block_n, 64, 64, 64, 3)
         if set(self.gemm_configs) - {"fc1", "fc2", "dhidden", "dx"}:
             raise ValueError("unknown peer GEMM configuration role")
         if ffn_fusion and len({self.gemm_configs.get(role, (256, 64, 64, 64, 2))
@@ -424,7 +457,8 @@ class PeerMoEPlan(NativeMoEPlan):
     def _peer_gemm(self, a, weight, output, source_rows, *, read=False, write=False,
                    source="local_x", destination="local_values", compile_only=False, pack_input=False, role=None,
                    first_n_tile=0, num_n_tiles=0, local_input_aiu=False, producer_input_aiu=False,
-                   dispatch_pipeline=False, keep_gate_up=True, replay_gradients=False):
+                   dispatch_pipeline=False, keep_gate_up=True, replay_gradients=False,
+                   fc1_helper_threads=0):
         source_stride = self.chunk_tokens if source == "local_x" else self.chunk_tokens * self.k
         if role is None:
             role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
@@ -445,6 +479,10 @@ class PeerMoEPlan(NativeMoEPlan):
             while len(extra_arguments) < 2:
                 extra_arguments.append([])
             extra_arguments.append(True)
+        extra_options = {}
+        if fc1_helper_threads:
+            extra_options = dict(fc1_helper_threads=fc1_helper_threads,
+                                 fc1_compute_block_m=self.input_helper_block_m)
         grid = dg._C._moe_training_peer_gemm(
             a, weight, output, self.pointer_tables[source], self.pointer_tables[destination],
             source_rows, self.permutation, self.work_info, self.num_blocks,
@@ -466,10 +504,10 @@ class PeerMoEPlan(NativeMoEPlan):
             self.block_m,
             self.return_vector_bytes if write else 4,
             interleaved, fc1_activation, keep_gate_up if fc1_activation else True,
-            self.input_copy_ilp if producer_input_aiu or (dispatch_pipeline and self.inline_dispatch) else 1,
+            self.input_copy_ilp if producer_input_aiu or fc1_helper_threads or (dispatch_pipeline and self.inline_dispatch) else 1,
             dispatch_pipeline and self.dispatch_external,
             self.dgrad_compute_cus if role in ("dhidden", "dx") else 0,
-            *extra_arguments,
+            *extra_arguments, **extra_options,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
@@ -483,7 +521,11 @@ class PeerMoEPlan(NativeMoEPlan):
                     self.buffers[name] = statistics
 
     def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True, prefetch_dy=False):
-        if self.dispatch_pipeline:
+        if self.input_helper_threads:
+            self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
+                            read=True, pack_input=True, role="fc1", compile_only=compile_only,
+                            keep_gate_up=keep_gate_up, fc1_helper_threads=self.input_helper_threads)
+        elif self.dispatch_pipeline:
             if not compile_only:
                 self.pipeline_ready.zero_()
             if self.dispatch_assist_ctas and not compile_only:

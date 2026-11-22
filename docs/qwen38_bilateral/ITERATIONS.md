@@ -6305,3 +6305,75 @@ Whole-host-clean local signal: True.
     "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
   }
 ]
+
+
+## Iteration59 — integrate bounded in-CTA input helpers into bilateral EP32
+
+Expose the already validated58 native input helper through PeerMoEPlan as an
+opt-in recipe. Require the G8 producer, input/local AIU, bilateral bounded
+ring and expert-local gradient recipe, reject unsupported pipelines, and
+include helper geometry in the cross-rank recipe agreement. Default0 keeps
+the existing best49 path. Override only FC1 geometry to BM128/BN512/S3
+with64 helpers; metadata remains256 rows, other roles keep prior configs.
+No precision, work scope, Params ABI, gradient or capacity reduction.
+
+58 local all-buffer bitwise, small FP32 and mutable graph gates passed.
+Locally the wider helper is still slower than original two-kernel FC1
+(10.863 versus9.075ms), so real peer networking and full-step work decide
+acceptance. Run actual EP32 balanced/masked/duplicates/reversed graphs and
+full C4096 all-to-one expert skew, then same-host complete routed FWD+BWD
+against helper0 best49 and tuned Elastic38 early-DY. H8192/I2048/E512/K10.
+Failed or partial phase provenance is retained. No local-signal speedup
+is treated as a distributed win.
+
+[
+  {
+    "phase": "qwen38-r2-input59-control-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": 76.94671630859375,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-input59-elastic-early-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 105.28189697265626,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-input59-reference-balanced-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-input59-reference-balanced-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-input59-reference-balanced-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-input59-reference-c4096-skew-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-input59-wide64-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": 76.88698120117188,
+    "passed": null
+  }
+]
