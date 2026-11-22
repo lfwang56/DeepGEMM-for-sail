@@ -16361,3 +16361,133 @@ Unit evidence (including failures):
 ```
 
 ```
+
+
+## Iteration92 — native K-grouped E4M3 weight-gradient primitive
+
+91 closed8a22f17adf. All4EP8+12actual32phases clean: serial8
+full-grid77.5964vsreserved80.6889ms, but staged71.1861ms wasbest.
+Serial38full73.8144;T16384serial38 276.4404vsstaged266.7971ms.
+Sourcepipeline serialization is not promoted. Strong frozen90 matched
+weight-transpose controls continueonSN1; originalgate75attemptretained.
+
+Verified MoKMXFP8source csrc/megakernel/backward.cuh 370-396 passesFP8
+transposedoperands toallthree routedDW GEMMs. grouped_gemm.cuh187
+explicitlyhandles MXFP8wgradtoken-major scales. Ours stillusesBF16input
+FP32DW(~15.7ms). InvestigateFP8DWwithoutclaimingMXFP8hardwareformat
+compatibility: PPU'snativeE4M3/FP32blockscales differfromMoKMXFP8.
+
+AddprivateK-groupedE4M3primitive, usingexistingPPU0015blockwiseTensor
+Cellmainloop andGPUexpertcounts/offsets. Feature-majorqA[M,R] with
+row/128tokenSFphysical[R/128,M], qB[N,R] with128featurex128token
+blockSF[N/128,R/128]. Keepfullcapacityphysicalpitches andpassperexpert
+roundedactualK tomainloop. Directunique-writerFP32out+=accum epilogue.
+Zeroexpertsleaveaccumulatorsunchanged; invalidGPUmetadata setsstatus2
+withoutaccessinginvalidpanels. Existingforward/backwardplansunchanged.
+
+GateindependentCPUdequantizedFP32arithmeticoneveryoutput, tails/
+nonzerooffsets,mutabledatapointers/countgraphreplay,zerogroups,
+FP32accumulation,outputcanariesandinvalidmetadataguards. Measure
+QwenDW1/DW2 atG16,R65536,K2560 versus existingBF16DW. Panelquantization
+andtransposeareoutsidethisprimitivebenchmarkandmustbeincludedbefore
+anywhole-steportrainingclaim. ThisisnotanintegratedFP8DWtrainingrecipe.
+
+{
+  "clean": false,
+  "passed": false,
+  "metrics": [
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "m": 128,
+      "n": 128,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00012712556053884327,
+        0.00012613045691978186,
+        0.00012606037489604205
+      ],
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "m": 128,
+      "n": 128,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00012712556053884327,
+        0.00012613045691978186,
+        0.00012606037489604205
+      ],
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 1520841,
+          "start_ticks": "18125235"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 1
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "fp8_k_grouped_dw_cpu_reference", "m": 128, "n": 128, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.00012712556053884327, 0.00012613045691978186, 0.00012606037489604205], "passed": true}
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad.py", line 114, in <module>
+    for shape in ((128,128),(256,384),(384,512)):unit(*shape)
+                                                 ^^^^^^^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad.py", line 71, in unit
+    assert err<.003 and torch.allclose(actual,want,rtol=.01,atol=1e-4),err
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0.00012585666263476014
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1520841, "start_ticks": "18125235"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
+
+```

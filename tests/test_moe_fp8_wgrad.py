@@ -1,0 +1,115 @@
+"""K-grouped FP8 DW: independent CPU arithmetic, mutable counts and real shapes.
+
+This primitive test prepares panels outside the timing region. Its performance
+numbers are compute-only; production panel construction is a separate gate.
+"""
+import gc
+import json
+import torch
+import deep_gemm as dg
+
+
+def panels(left,right,counts,offsets):
+    r,m=left.shape;n=right.shape[1]
+    ql=torch.full((m,r),56,device=left.device,dtype=torch.uint8).view(torch.float8_e4m3fn)
+    qr=torch.full((n,r),56,device=left.device,dtype=torch.uint8).view(torch.float8_e4m3fn)
+    sl=torch.full((r//128,m),.7,device=left.device)
+    sr=torch.full((n//128,r//128),.7,device=left.device)
+    expected=[]
+    for g,c in enumerate(counts):
+        if not c:
+            expected.append(None);continue
+        start=offsets[g];padded=(c+127)//128*128
+        a=torch.zeros(m,padded,device=left.device);a[:,:c]=left[start:start+c].float().t()
+        b=torch.zeros(n,padded,device=left.device);b[:,:c]=right[start:start+c].float().t()
+        at=a.reshape(m,padded//128,128)
+        sa=at.abs().amax(-1).clamp_min(1e-4)/448
+        aq=(at/sa[...,None]).to(torch.float8_e4m3fn).reshape_as(a)
+        bt=b.reshape(n//128,128,padded//128,128)
+        sb=bt.abs().amax((1,3)).clamp_min(1e-4)/448
+        bq=(bt/sb[:,None,:,None]).to(torch.float8_e4m3fn).reshape_as(b)
+        ql[:,start:start+padded].copy_(aq);sl[start//128:(start+padded)//128].copy_(sa.t())
+        qr[:,start:start+padded].copy_(bq);sr[:,start//128:(start+padded)//128].copy_(sb)
+        if left.device.type=='cpu':
+            ar=(aq.float().reshape(m,padded//128,128)*sa[...,None]).reshape_as(a)
+            br=(bq.float().reshape(n//128,128,padded//128,128)*sb[:,None,:,None]).reshape_as(b)
+            expected.append(ar@br.t())
+    return (ql,sl),(qr,sr),expected
+
+
+def rel(a,b):return float((a-b).float().norm()/b.float().norm().clamp_min(1e-20))
+
+
+def unit(m,n):
+    g,r=3,2048;offsets=[128,640,1152,1664]
+    rng=torch.Generator().manual_seed(4101+m+n)
+    left=(torch.randn(r,m,generator=rng)*.1).bfloat16()
+    right=(torch.randn(r,n,generator=rng)*.1).bfloat16()
+    counts=[0,129,257]
+    a,b,_=panels(left,right,counts,offsets)
+    a=tuple(x.cuda() for x in a);b=tuple(x.cuda() for x in b)
+    lens=torch.tensor(counts,device='cuda',dtype=torch.int32);starts=torch.tensor(offsets,device='cuda',dtype=torch.int32)
+    status=torch.zeros(1,device='cuda',dtype=torch.int32)
+    raw=torch.full((g*m*n+32,),113.,device='cuda');out=raw[16:-16].reshape(g,m,n)
+    def launch():dg._C._moe_training_fp8_wgrad(a,b,out,lens,starts,status)
+    out.zero_();launch();torch.cuda.synchronize()
+    graph=torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):launch()
+    errors=[]
+    for change,counts in enumerate(([0,129,257],[257,7,511],[512,0,1])):
+        al=(left.float()*(1+.13*change)).bfloat16();bl=(right.float()*(1-.09*change)+.001*change).bfloat16()
+        ac,bc,expected=panels(al,bl,counts,offsets)
+        for x,y in zip(a,ac):x.copy_(y)
+        for x,y in zip(b,bc):x.copy_(y)
+        lens.copy_(torch.tensor(counts,dtype=torch.int32));starts.copy_(torch.tensor(offsets,dtype=torch.int32))
+        initial=torch.randn(g,m,n,generator=rng)*.01;out.copy_(initial)
+        graph.replay();torch.cuda.synchronize()
+        want=initial.clone()
+        for j,value in enumerate(expected):
+            if value is not None:want[j]+=value
+        actual=out.cpu();err=rel(actual,want);errors.append(err)
+        assert err<.003 and torch.allclose(actual,want,rtol=.01,atol=1e-4),err
+        assert not status.item() and torch.all(raw[:16]==113) and torch.all(raw[-16:]==113)
+    before=out.clone();lens[1]=513;status.zero_();graph.replay();torch.cuda.synchronize()
+    assert status.item()==2 and torch.equal(out[1],before[1])
+    assert torch.all(raw[:16]==113) and torch.all(raw[-16:]==113)
+    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,passed=True)),flush=True)
+
+
+def large(role):
+    g,r,k=16,65536,2560;m,n=(4096,8192) if role=='dw1' else (8192,2048)
+    torch.manual_seed(91317)
+    left=(torch.randn(r,m,device='cuda')*.01).bfloat16()
+    right=(torch.randn(r,n,device='cuda')*.01).bfloat16()
+    counts=[k]*g;offsets=[j*k for j in range(g+1)]
+    a,b,_=panels(left,right,counts,offsets)
+    lengths=torch.tensor(counts,device='cuda',dtype=torch.int32);starts=torch.tensor(offsets,device='cuda',dtype=torch.int32)
+    status=torch.zeros(1,device='cuda',dtype=torch.int32);out=torch.zeros(g,m,n,device='cuda');bf=torch.zeros_like(out)
+    def fp():dg._C._moe_training_fp8_wgrad(a,b,out,lengths,starts,status)
+    def bf16():dg.k_grouped_bf16_gemm_tn_device(left,right,bf,lengths,r)
+    fp();torch.cuda.synchronize();assert not status.item()
+    errors=[]
+    for group in (0,7,15):
+        start=group*k;features=torch.tensor([0,m//3,m-1],device='cuda');columns=torch.tensor([0,n//3,n-1],device='cuda')
+        av=a[0][features,start:start+k].float().reshape(3,k//128,128)*a[1][start//128:(start+k)//128,features].t()[...,None]
+        bv=b[0][columns,start:start+k].float().reshape(3,k//128,128)*b[1][columns//128,start//128:(start+k)//128][...,None]
+        want=av.reshape(3,k)@bv.reshape(3,k).t();actual=out[group][features[:,None],columns[None,:]]
+        error=rel(actual,want);errors.append(error);assert error<.003,error
+    def measure(fn):
+        for _ in range(2):fn()
+        torch.cuda.synchronize();graph=torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):fn()
+        begin,end=torch.cuda.Event(enable_timing=True),torch.cuda.Event(enable_timing=True);times=[]
+        for _ in range(7):
+            begin.record()
+            for _ in range(5):graph.replay()
+            end.record();end.synchronize();times.append(begin.elapsed_time(end)/5)
+        return sorted(times)[len(times)//2]
+    before,after=measure(bf16),measure(fp)
+    print(json.dumps(dict(case='qwen_fp8_dw_compute_only',role=role,m=m,n=n,groups=g,k_per_group=k,capacity=r,bf16_ms=before,fp8_ms=after,speedup=before/after,fp32_accumulation=True,sampled_reference_errors=errors,scope='Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result',passed=True)),flush=True)
+    del left,right,a,b,out,bf;gc.collect();torch.cuda.synchronize()
+
+
+torch.cuda.set_device(0);torch.set_num_threads(2)
+for shape in ((128,128),(256,384),(384,512)):unit(*shape)
+for role in ('dw1','dw2'):large(role)
