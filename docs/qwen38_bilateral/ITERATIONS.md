@@ -54047,3 +54047,1173 @@ ntization_in_timing": false, "bf16_dw_copy": true, "median_ms": 9.83080215454101
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 790962, "start_ticks": "219074801"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 143}
 
 ```
+
+
+## Iteration119 — bound producer admission and use a wider resident FC1 tile
+
+118closedbeeb0243cc with FAILED unit group:38references and17timing
+arms completed, then no log progress for over five minutes during
+312CTA/slices1 parallel timing. Only the verified campaign-tagged
+Python process was terminated. No external job was stopped. No EP8 or
+full-layer result was accepted. The exact GPU/driver hang site is not
+proven by the available host process status; do not claim a root cause.
+
+Preserve the failure and restrict elastic producer admission to39/78/156
+CTAs, rejecting larger budgets on producer and consumer host entry
+points before launch. Sequential full-grid preparation retains its own
+separate budget. Co-resident function occupancy>=2 is still required;
+occupancy alone is not a forward-progress or speedup proof.
+
+A read-only actual tc02 function query identified128x256 tiles,
+warp64x64,2stages as occupancy>=2. The wider tile may recover the FC1
+compute penalty introduced by128x128 tiles. Select it only as the
+experimental co-resident default; stable114 flags stay off. Validate
+both old control and this new geometry before complete-layer timing.
+
+Require three schema/resource/budget guards,20producer byte references,
+four small joint references,10Qwen-sized joint references and15timing
+arms for slices1/2/4/8/16 at156producer CTAs; then six EP8 correctness
+phases. Bound the entire owned unit command with a host watchdog.
+{
+  "clean": false,
+  "passed": false,
+  "metrics": [
+    {
+      "case": "fp8_sliced_input_schema_guard",
+      "rejected": [
+        [
+          "producer",
+          0
+        ],
+        [
+          "consumer",
+          0
+        ],
+        [
+          "producer",
+          3
+        ],
+        [
+          "consumer",
+          3
+        ],
+        [
+          "producer",
+          4
+        ],
+        [
+          "consumer",
+          4
+        ],
+        [
+          "producer",
+          32
+        ],
+        [
+          "consumer",
+          32
+        ]
+      ],
+      "valid_slices": [
+        1,
+        2
+      ],
+      "passed": true
+    },
+    {
+      "case": "fp8_co_resident_resource_guard",
+      "producer_blocks_per_cu": 7,
+      "consumer_minimum_blocks_per_cu": 2,
+      "unsafe_default_rejected_before_launch": true,
+      "producer_grid": 39,
+      "consumer_grid": 39,
+      "elastic_workers": true,
+      "invalid_layout_guard_and_retry": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_elastic_budget_guard",
+      "maximum_producer_ctas": 156,
+      "rejected": [
+        [
+          "producer",
+          195
+        ],
+        [
+          "consumer",
+          195
+        ],
+        [
+          "producer",
+          312
+        ],
+        [
+          "consumer",
+          312
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    }
+  ],
+  "integration": [],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_sliced_input_schema_guard",
+      "rejected": [
+        [
+          "producer",
+          0
+        ],
+        [
+          "consumer",
+          0
+        ],
+        [
+          "producer",
+          3
+        ],
+        [
+          "consumer",
+          3
+        ],
+        [
+          "producer",
+          4
+        ],
+        [
+          "consumer",
+          4
+        ],
+        [
+          "producer",
+          32
+        ],
+        [
+          "consumer",
+          32
+        ]
+      ],
+      "valid_slices": [
+        1,
+        2
+      ],
+      "passed": true
+    },
+    {
+      "case": "fp8_co_resident_resource_guard",
+      "producer_blocks_per_cu": 7,
+      "consumer_minimum_blocks_per_cu": 2,
+      "unsafe_default_rejected_before_launch": true,
+      "producer_grid": 39,
+      "consumer_grid": 39,
+      "elastic_workers": true,
+      "invalid_layout_guard_and_retry": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_elastic_budget_guard",
+      "maximum_producer_ctas": 156,
+      "rejected": [
+        [
+          "producer",
+          195
+        ],
+        [
+          "consumer",
+          195
+        ],
+        [
+          "producer",
+          312
+        ],
+        [
+          "consumer",
+          312
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3768961,
+          "start_ticks": "20566223"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 1
+    }
+  ]
+}
+
+Raw tail:
+```
+0, "input_slices": 4, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 128, "input_slices": 4, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 256, "input_slices": 4, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 512, "input_slices": 4, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 0, "input_slices": 8, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 128, "input_slices": 8, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 256, "input_slices": 8, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 512, "input_slices": 8, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 0, "input_slices": 16, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 128, "input_slices": 16, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 256, "input_slices": 16, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 512, "input_slices": 16, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_sliced_geometry.py", line 51, in <module>
+    if __name__=='__main__':main()
+                            ^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_sliced_geometry.py", line 42, in main
+    joint_fixture(4,512,512,2048,256,[[128,256,384,512],[0,128,512,128],[0,0,0,0],[512]*4],
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_input.py", line 98, in fixture
+    producer(compile_only=True);consumer(serial,compile_only=True)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_input.py", line 52, in consumer
+    dg._C._moe_training_peer_fp8_gemm((q,sf.t()),(qw,sw),output,lengths,rows,btables,tokens,
+RuntimeError: FP8 peer return with K<=512 requires at least three stages
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3768961, "start_ticks": "20566223"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
+
+```

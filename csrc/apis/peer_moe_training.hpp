@@ -101,7 +101,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             DG_HOST_ASSERT(tensors.size()==8 && (dims.size()==7 || dims.size()==8 || dims.size()==9));
             DG_HOST_ASSERT(dims.size()==7 || (dims[7]<=2 &&
                 (dims[7]!=1 || dims[6]==get_num_sms()) &&
-                (dims[7]!=2 || (dims[6]>=get_num_sms() && dims[6]%get_num_sms()==0))));
+                (dims[7]!=2 || (dims[6]>=get_num_sms() && dims[6]<=4*get_num_sms() && dims[6]%get_num_sms()==0))));
             if(dims.size()==9)DG_HOST_ASSERT(dims[8]>=1 && dims[8]<=16 &&
                 (dims[8]&(dims[8]-1))==0 && dims[1]%(128*dims[8])==0);
             DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192 &&

@@ -130,7 +130,7 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
             DG_HOST_ASSERT(tensor.is_cuda() && tensor.device() == a.device() && tensor.is_contiguous()
                            && tensor.scalar_type() == torch::kInt32);
         DG_HOST_ASSERT(input_control[0].numel() == m / 128 && input_control[1].numel() == 1);
-        DG_HOST_ASSERT(co_resident_input ? (dynamic_input ? reserved_input_ctas>=num_sms && reserved_input_ctas<=8*num_sms && reserved_input_ctas%num_sms==0 : reserved_input_ctas==num_sms) :
+        DG_HOST_ASSERT(co_resident_input ? (dynamic_input ? reserved_input_ctas>=num_sms && reserved_input_ctas<=4*num_sms && reserved_input_ctas%num_sms==0 : reserved_input_ctas==num_sms) :
                        reserved_input_ctas>0 && reserved_input_ctas<num_sms);
         if(dynamic_input)DG_HOST_ASSERT(input_control[2].numel()==1);
         input.ready = reinterpret_cast<uint32_t*>(input_control[0].data_ptr<int32_t>());

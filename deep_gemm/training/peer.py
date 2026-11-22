@@ -396,7 +396,7 @@ class PeerMoEPlan(NativeMoEPlan):
                 raise ValueError("BF16 quantized input pipeline supports hidden<=8192")
             if self.fp8_input_cache_scales and self.h > 8192:
                 raise ValueError("cached FP8 input scales support hidden<=8192")
-            producer_limit = (8*dg.get_num_sms() if self.fp8_input_elastic_workers else dg.get_num_sms() if self.fp8_input_co_resident else
+            producer_limit = (4*dg.get_num_sms() if self.fp8_input_elastic_workers else dg.get_num_sms() if self.fp8_input_co_resident else
                               8 * dg.get_num_sms() if self.fp8_bf16_input_pipeline and self.fp8_serial_full_grid
                               else dg.get_num_sms() - 1)
             if not 0 < self.fp8_input_ctas <= producer_limit:
@@ -437,7 +437,7 @@ class PeerMoEPlan(NativeMoEPlan):
             gemm_configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if self.fp8_input_co_resident:
-            self.gemm_configs.setdefault('fc1',(128,128,32,64,3))
+            self.gemm_configs.setdefault('fc1',(256,128,64,64,2))
         if self.fp8_return_pipeline:
             for role in ('fc2', 'dx'):
                 config = self.gemm_configs.setdefault(role, (256, 128, 32, 64, 3))
