@@ -29,6 +29,7 @@ def relative_rms(actual, expected):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=("deepep",), default="deepep")
+    parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--elastic-hybrid-mode", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dag-fusion", action="store_true")
     parser.add_argument("--dag-backward", action="store_true")
@@ -47,13 +48,15 @@ def main():
     parser.add_argument("--topk", type=int, default=10)
     parser.add_argument("--tokens", type=int, default=19)
     parser.add_argument("--chunk-tokens", type=int, default=256)
-    parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
+    parser.add_argument("--gemm-config", type=int, nargs=5)
     parser.add_argument("--comm-sms", type=int, default=38)
     parser.add_argument("--ring-rows", type=int)
     parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--graph", action="store_true")
     args = parser.parse_args()
+    if args.gemm_config is None and args.compute == "bf16":
+        args.gemm_config = (256,64,64,64,2)
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     device = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
     torch.cuda.set_device(device)
@@ -86,7 +89,7 @@ def main():
     w2 = (torch.randn(e, h, i, generator=weight_rng) * .02).bfloat16().to(device)
     if args.gate_up_layout == "g8":
         w1 = to_g8_weight(w1)
-    configs = {role: tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
+    configs = None if args.gemm_config is None else {role: tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     plan_options = (dict(comm_sms=args.comm_sms, elastic_hybrid=args.elastic_hybrid_mode) if args.backend == "deepep" else
                     dict(dag_fusion=args.dag_fusion, dag_backward=args.dag_backward,
                          dag_direct_return=args.dag_direct_return,
@@ -106,7 +109,7 @@ def main():
                         gate_up_layout=args.gate_up_layout,
                         wgrad_overlap=args.wgrad_overlap,
                         overlap_expert_dy=args.overlap_expert_dy,
-                        gemm_configs=configs, check_errors=False)
+                        gemm_configs=configs, check_errors=False, compute=args.compute)
     print(json.dumps(dict(case="large_deepep_stage", rank=rank, stage="plan_ready",
                           backend=args.backend, rdma_ranks=getattr(plan, "deep_ep_rdma_ranks", None))), flush=True)
 
@@ -163,9 +166,10 @@ def main():
         compared = (outputs[0], outputs[1], from_g8_weight(outputs[2]), outputs[3], outputs[4]) if args.gate_up_layout == "g8" else outputs
         errors = {name: relative_rms(a, b) for name, a, b in zip(
             ("y", "dx", "dw1", "dw2", "dscores"), compared, expected)}
-        passed = all(math.isfinite(error) and error < .04 for error in errors.values())
+        limit = .13 if args.compute == "fp8" else .04
+        passed = all(math.isfinite(error) and error < limit for error in errors.values())
         print(json.dumps(dict(case="large_distributed_elastic_reference", rank=rank,
-            ranks=size, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
+            ranks=size, compute=args.compute, tolerance=limit, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens=t, chunk_tokens=args.chunk_tokens, pattern=pattern,
             graph=args.graph, relative_rms=errors, every_element_compared=True,
             ring_rows=args.ring_rows, packed_ring_rows=plan.rows,

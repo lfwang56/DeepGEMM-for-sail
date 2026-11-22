@@ -8384,3 +8384,101 @@ Do not infer an FP8 fusion speedup from this baseline implementation.
     }
   }
 ]
+
+
+## Iteration61 — Qwen FP8 DeepEP complete-step configuration verdict
+
+60 passed64 every-element eight-rank mutable-graph records (serial and
+early-DY), independent CPU E4M3 STE oracle maximum RMS.0160212, Native
+transport pair maximum.00304398, all idle audits clean. This validates
+FP8 compute/BF16 transport, not FP8 peer fusion or model convergence.
+
+Extend the existing large Elastic FP32 reference with an explicit compute
+flag and documented FP8.13/BF16.04 accuracy limits, preserving BF16's
+previous default geometry. First exercise actual EP32 H8192/I2048/E512/K10
+full outputs/gradients and mutable route graphs, with serial/early-DY.
+Then same-host T4096/C4096/ring65536 complete FWD+rematerialized BWD,
+DX,FP32 DW zero/accumulation and dScores. Measure tuned BF16 control,
+FP8 default and BN128/256/512 BK128 S3 tiles. Quantization/transposes
+stay inside timing; communication stays BF16. No mixed-precision ratio
+is reported as a same-precision fusion speedup.
+
+[
+  {
+    "phase": "qwen38-r2-fp8compute61-bf16-control-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 105.3615966796875,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-bn128s3-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 618.85478515625,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-bn256s3-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 1101.04658203125,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-bn512s3-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 741.149951171875,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-default-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 519.723828125,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-reference-early-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-reference-early-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-reference-early-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-reference-serial-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-reference-serial-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8compute61-reference-serial-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  }
+]
