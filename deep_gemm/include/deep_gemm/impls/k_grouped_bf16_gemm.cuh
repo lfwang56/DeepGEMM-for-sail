@@ -22,7 +22,7 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
-          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0, bool PerFeatureScales = false>
+          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0, bool PerFeatureScales = false, bool FeatureMajorPanels = false>
 __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args,
         uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u,
         const float* feature_scales_a = nullptr, const float* feature_scales_b = nullptr,
@@ -82,7 +82,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     // Both inputs are physically [K, M/N]. Use AIU's Trans=true descriptors
     // and hardware swizzle, paired with A/B's respective TSM-to-MMA layouts.
     using GemmOperandA = cutlass::gemm::config::DefaultGemm_AIU_Operand<
-        ArchTag, SrcT, true, cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, false>;
+        ArchTag, SrcT, !FeatureMajorPanels, cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, false>;
     using TilerA = typename GemmOperandA::GmemTiledCopy::Tiler_MN;
     using SmemLayoutA = decltype(tile_to_shape(typename GemmOperandA::SmemLayoutAtom{},
         Shape<cute::Int<BLOCK_M>, cute::Int<BLOCK_K>, cute::Int<kNumStages>>{}));
@@ -93,7 +93,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     auto stride_A = cute::make_stride(_1{}, Int<SHAPE_M>{});
 
     using GemmOperandB = cutlass::gemm::config::DefaultGemm_AIU_Operand<
-        ArchTag, SrcT, true, cute::Int<BLOCK_N>, cute::Int<BLOCK_K>, true>;
+        ArchTag, SrcT, !FeatureMajorPanels, cute::Int<BLOCK_N>, cute::Int<BLOCK_K>, true>;
     using TilerB = typename GemmOperandB::GmemTiledCopy::Tiler_MN;
     using SmemLayoutB = decltype(tile_to_shape(typename GemmOperandB::SmemLayoutAtom{},
         Shape<cute::Int<BLOCK_N>, cute::Int<BLOCK_K>, cute::Int<kNumStages>>{}));
@@ -134,9 +134,9 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     CUTE_STATIC_ASSERT_V(size<2>(tCsB) == size<2>(tCrB_copy_view));
 
     // Initialize fixed descriptor fields once; each group supplies its K extent.
-    gmem_tiled_copy_A.desc_.template init<SrcT, true, get<0>(TilerA{}), get<1>(TilerA{})>(
+    gmem_tiled_copy_A.desc_.template init<SrcT, !FeatureMajorPanels, get<0>(TilerA{}), get<1>(TilerA{})>(
         nullptr, SHAPE_M, 0, stride_A);
-    gmem_tiled_copy_B.desc_.template init<SrcT, true, get<0>(TilerB{}), get<1>(TilerB{})>(
+    gmem_tiled_copy_B.desc_.template init<SrcT, !FeatureMajorPanels, get<0>(TilerB{}), get<1>(TilerB{})>(
         nullptr, SHAPE_N, 0, stride_B);
 
     auto blk_mn_shape = Shape<Int<BLOCK_M>, Int<BLOCK_N>>{};
@@ -155,8 +155,23 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     TileScheduler scheduler(args.grouped_layout, SHAPE_M, first_output_tile, end_output_tile);
     while (scheduler.fetch_next_work(curr_group_idx, m_block_idx, n_block_idx)) {
         const uint32_t group_k = scheduler.current_shape_k;
-        gmem_tiled_copy_A.desc_.dim_h = group_k;
-        gmem_tiled_copy_B.desc_.dim_h = group_k;
+        auto stride_A_group = [&]() {
+            if constexpr (FeatureMajorPanels) return cute::make_stride(group_k, _1{});
+            else return stride_A;
+        }();
+        auto stride_B_group = [&]() {
+            if constexpr (FeatureMajorPanels) return cute::make_stride(group_k, _1{});
+            else return stride_B;
+        }();
+        if constexpr (FeatureMajorPanels) {
+            gmem_tiled_copy_A.desc_.template init<SrcT, false, get<0>(TilerA{}), get<1>(TilerA{})>(
+                nullptr, SHAPE_M, group_k, stride_A_group);
+            gmem_tiled_copy_B.desc_.template init<SrcT, false, get<0>(TilerB{}), get<1>(TilerB{})>(
+                nullptr, SHAPE_N, group_k, stride_B_group);
+        } else {
+            gmem_tiled_copy_A.desc_.dim_h = group_k;
+            gmem_tiled_copy_B.desc_.dim_h = group_k;
+        }
 
         const uint32_t c_row_base = m_block_idx * BLOCK_M;
         const uint32_t num_valid_rows = SHAPE_M % BLOCK_M == 0
@@ -170,12 +185,12 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
         const SrcT* gmem_a = reinterpret_cast<const SrcT*>(args.a_ptr) + static_cast<size_t>(k_begin) * SHAPE_M;
         const SrcT* gmem_b = reinterpret_cast<const SrcT*>(args.b_ptr) + static_cast<size_t>(k_begin) * SHAPE_N;
         auto shape_A = cute::make_shape(Int<SHAPE_M>{}, group_k);
-        Tensor mA_mk = cute::make_tensor(cute::make_gmem_ptr(gmem_a), shape_A, stride_A);
+        Tensor mA_mk = cute::make_tensor(cute::make_gmem_ptr(gmem_a), shape_A, stride_A_group);
         Tensor gA = cute::local_tile(cute::make_mix_tensor_like(mA_mk), TileShape{},
                                      take<0,3>(blk_coord_mnkl), Step<_1,X,_1>{});
         Tensor tAgA = gmem_thr_copy_A.partition_S(gA);
         auto shape_B = cute::make_shape(Int<SHAPE_N>{}, group_k);
-        Tensor mB_nk = cute::make_tensor(cute::make_gmem_ptr(gmem_b), shape_B, stride_B);
+        Tensor mB_nk = cute::make_tensor(cute::make_gmem_ptr(gmem_b), shape_B, stride_B_group);
         Tensor gB = cute::local_tile(cute::make_mix_tensor_like(mB_nk), TileShape{},
                                      take<0,3>(blk_coord_mnkl), Step<X,_1,_1>{});
         Tensor tBgB = gmem_thr_copy_B.partition_S(gB);
