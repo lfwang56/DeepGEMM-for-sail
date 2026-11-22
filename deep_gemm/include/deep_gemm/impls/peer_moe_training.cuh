@@ -46,11 +46,59 @@ __device__ __forceinline__ float* fp8_input_scale_tile() {
 }
 
 template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false,
-          bool CacheFp8Scales = false>
+          bool CacheFp8Scales = false, uint32_t InputTopk = 0>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::PackActiveQuantized) {
+    if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantizedTiles) {
+        const int64_t rows=int64_t(peer_pointer<int32_t>(p,6)[0])*128;
+        if(rows<0 || rows>p.dim[0]) {
+            if(index==0)atomicOr(peer_pointer<int32_t>(p,7),2);
+            return;
+        }
+        const int64_t width=InputWidth?InputWidth:p.dim[1],segments=width/128;
+        const int64_t tokens=InputBlockM?InputBlockM:p.dim[2],topk=InputTopk?InputTopk:p.dim[3];
+        const int64_t stride=tokens*topk;
+        const int within=threadIdx.x&15;
+        const unsigned mask=0xffffu<<((threadIdx.x&31)>=16?16:0);
+        for(int64_t group=block_index*16+threadIdx.x/16;group<rows*segments;
+                group+=int64_t(gridDim.x)*16) {
+            const int64_t row=group/segments,segment=group%segments;
+            const int route=peer_pointer<int32_t>(p,3)[row];
+            const bool valid=route>=0 && int64_t(route)<p.dim[4]*stride;
+            if(route>=0 && !valid && within==0)atomicOr(peer_pointer<int32_t>(p,7),2);
+            const int owner=valid?int64_t(route)/stride:0;
+            const int64_t local=valid?int64_t(route)%stride:0;
+            const int64_t at=row*width+segment*128+within*8;
+            uint4 raw_dy{},raw_y{};
+            float score=0.f;
+            if(valid) {
+                const auto* source=reinterpret_cast<const __ppu_bfloat16*>(peer_pointer<uint64_t>(p,0)[owner]);
+                raw_dy=*reinterpret_cast<const uint4*>(source+(local/topk)*width+segment*128+within*8);
+                raw_y=*reinterpret_cast<const uint4*>(peer_pointer<__ppu_bfloat16>(p,4)+at);
+                score=reinterpret_cast<const float*>(peer_pointer<uint64_t>(p,1)[owner])[local];
+            }
+            const auto* d=reinterpret_cast<const __ppu_bfloat16*>(&raw_dy);
+            const auto* y=reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+            uint4 raw_weighted{};auto* weighted=reinterpret_cast<__ppu_bfloat16*>(&raw_weighted);
+            float dot=0.f;
+            #pragma unroll
+            for(int j=0;j<8;++j) {
+                const float value=__bfloat162float(d[j]);
+                weighted[j]=__float2bfloat16(value*score);
+                dot+=value*__bfloat162float(y[j]);
+            }
+            *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,5)+at)=raw_weighted;
+            float scale;
+            *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,8)+at)=peer_quantize_eight(raw_weighted,scale);
+            #pragma unroll
+            for(int delta=8;delta>0;delta>>=1)dot+=__shfl_down_sync(mask,dot,delta,16);
+            if(within==0) {
+                peer_pointer<float>(p,9)[segment*p.dim[0]+row]=scale;
+                peer_pointer<float>(p,10)[row*segments+segment]=dot;
+            }
+        }
+    } else if constexpr (Op == PeerOperation::PackActiveQuantized) {
         const int64_t rows=int64_t(peer_pointer<int32_t>(p,4)[0])*128;
         if(rows<0 || rows>p.dim[0]) {
             if(index==0)atomicOr(peer_pointer<int32_t>(p,3),2);

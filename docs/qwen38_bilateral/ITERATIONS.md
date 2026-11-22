@@ -32195,3 +32195,1768 @@ ctas_per_cu": 4, "graph": true, "zero_scores": true, "source_owners_local": true
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3576872, "start_ticks": "18910822"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration106 — tile fused DY quantization across hidden features
+
+105 closedf74ab16f7e all168 BF16/FP32 bit and dynamic-metadata gates
+passed. Pure local-copy11default1.7549->.7664ms at16CTAs;13 1.2743->
+1.0027;18 1.2817->1.1825. Correction:11default is a large one-shot
+capacity grid, not4CTAs/CU. Native686ab484015396afbf5ce57b0c8ca4ba66396920a259c980ef4222e7d3f610a6.
+Frozen105BF16complete-step search queued; no cross-host claim.
+
+103full-step ablation: backward fusion alone at16CTAs does not improve
+67.7953->67.7783ms. Old fused22 assigns one warp the whole8192-wide
+row, serializing feature loops, quantization and dot. Tile this across
+128-feature segments with two16-lane segments per warp. Generate
+identical BF16 weightedDY, FP8 bytes and SF, plus FP32 score partials;
+reuse peer17 for final reduction. Changed FP32 sum grouping for dScore
+is explicit and bounded against independent FP64 arithmetic and the
+legacy dot,3e-6 RMS/scaled-absolute tolerances. No weakened other gates.
+GPUmetadata,zero scores,padding/empty paths remain. Optional
+DG_MOE_FP8_TILED_GRAD_QUANT1 requires fusedDY flag. Production stores
+R*(H/128)FP32 partials and has no host-count reads. Need actualEP32
+reference/performance and3seedpublicLM before promotion.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 4.4343955774806433e-08,
+        "fp64_scaled_absolute": 1.7595730025302503e-08,
+        "legacy_rms": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.146715700934825e-08,
+        "fp64_scaled_absolute": 2.768784770758561e-08,
+        "legacy_rms": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.1575090865342305e-08,
+        "fp64_scaled_absolute": 3.13168011134966e-08,
+        "legacy_rms": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.3808387932969134e-08,
+        "fp64_scaled_absolute": 1.105193179947896e-08,
+        "legacy_rms": 8.163615339694295e-08
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 6.38462555261124e-08,
+        "fp64_scaled_absolute": 1.8366123452517777e-08,
+        "legacy_rms": 7.90687312811768e-08
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.966318387582567e-08,
+        "fp64_scaled_absolute": 1.4178745480597962e-08,
+        "legacy_rms": 7.527518111276171e-08
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 9.380464764779967e-08,
+        "fp64_scaled_absolute": 4.595139589154929e-09,
+        "legacy_rms": 1.6080127426564526e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 9.075339243186786e-08,
+        "fp64_scaled_absolute": 4.235328150917514e-09,
+        "legacy_rms": 1.5539144675540695e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 8.629248085773057e-08,
+        "fp64_scaled_absolute": 4.282447250258938e-09,
+        "legacy_rms": 1.3902945347601385e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 8.157396547363722e-08,
+        "fp64_scaled_absolute": 7.082383608502722e-09,
+        "legacy_rms": 1.4528110883542225e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 1,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 8.469110107421875,
+      "speedup": 0.4544071454670329,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 2,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 4.399795913696289,
+      "speedup": 0.8746824225595707,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 4,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 2.497610092163086,
+      "speedup": 1.5408426481919744,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 8,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 1.7137439727783204,
+      "speedup": 2.2456237394203686,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 16,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 1.690924072265625,
+      "speedup": 2.275929600672825,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 1,
+      "before_ms": 3.523041915893555,
+      "after_ms": 9.541206359863281,
+      "speedup": 0.36924491338053794,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 2,
+      "before_ms": 3.523041915893555,
+      "after_ms": 5.231055831909179,
+      "speedup": 0.6734858179878669,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 4,
+      "before_ms": 3.523041915893555,
+      "after_ms": 3.219797897338867,
+      "speedup": 1.0941810722981453,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 8,
+      "before_ms": 3.523041915893555,
+      "after_ms": 2.4496540069580077,
+      "speedup": 1.4381793942682075,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 16,
+      "before_ms": 3.523041915893555,
+      "after_ms": 2.435256004333496,
+      "speedup": 1.4466823650673122,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 4.4343955774806433e-08,
+        "fp64_scaled_absolute": 1.7595730025302503e-08,
+        "legacy_rms": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.146715700934825e-08,
+        "fp64_scaled_absolute": 2.768784770758561e-08,
+        "legacy_rms": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.1575090865342305e-08,
+        "fp64_scaled_absolute": 3.13168011134966e-08,
+        "legacy_rms": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.3808387932969134e-08,
+        "fp64_scaled_absolute": 1.105193179947896e-08,
+        "legacy_rms": 8.163615339694295e-08
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 6.38462555261124e-08,
+        "fp64_scaled_absolute": 1.8366123452517777e-08,
+        "legacy_rms": 7.90687312811768e-08
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 5.966318387582567e-08,
+        "fp64_scaled_absolute": 1.4178745480597962e-08,
+        "legacy_rms": 7.527518111276171e-08
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 9.380464764779967e-08,
+        "fp64_scaled_absolute": 4.595139589154929e-09,
+        "legacy_rms": 1.6080127426564526e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 9.075339243186786e-08,
+        "fp64_scaled_absolute": 4.235328150917514e-09,
+        "legacy_rms": 1.5539144675540695e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 8.629248085773057e-08,
+        "fp64_scaled_absolute": 4.282447250258938e-09,
+        "legacy_rms": 1.3902945347601385e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true
+      },
+      "dscore_errors": null,
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "graph": true,
+      "mutable_source_and_routes": true,
+      "zero_route_scores": true,
+      "source_owners_local": true,
+      "every_element": true,
+      "gates": {
+        "cpu_style_bf16_reference": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf16_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "dscore_close": true,
+        "status": true,
+        "partial_guards": true
+      },
+      "dscore_errors": {
+        "fp64_rms": 8.157396547363722e-08,
+        "fp64_scaled_absolute": 7.082383608502722e-09,
+        "legacy_rms": 1.4528110883542225e-07
+      },
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 1,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 8.469110107421875,
+      "speedup": 0.4544071454670329,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 2,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 4.399795913696289,
+      "speedup": 0.8746824225595707,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 4,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 2.497610092163086,
+      "speedup": 1.5408426481919744,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 8,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 1.7137439727783204,
+      "speedup": 2.2456237394203686,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": false,
+      "ctas_per_cu": 16,
+      "before_ms": 3.8484241485595705,
+      "after_ms": 1.690924072265625,
+      "speedup": 2.275929600672825,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 1,
+      "before_ms": 3.523041915893555,
+      "after_ms": 9.541206359863281,
+      "speedup": 0.36924491338053794,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 2,
+      "before_ms": 3.523041915893555,
+      "after_ms": 5.231055831909179,
+      "speedup": 0.6734858179878669,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 4,
+      "before_ms": 3.523041915893555,
+      "after_ms": 3.219797897338867,
+      "speedup": 1.0941810722981453,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 8,
+      "before_ms": 3.523041915893555,
+      "after_ms": 2.4496540069580077,
+      "speedup": 1.4381793942682075,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "fused_peer_quantization_performance",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "backward": true,
+      "ctas_per_cu": 16,
+      "before_ms": 3.523041915893555,
+      "after_ms": 2.435256004333496,
+      "speedup": 1.4466823650673122,
+      "source_owners_local": true,
+      "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3784853,
+          "start_ticks": "18993174"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+e_errors": null, "passed": true}
+{"case": "fused_peer_quantization_reference", "width": 8192, "capacity": 512, "active": 256, "backward": true, "graph": true, "mutable_source_and_routes": true, "zero_route_scores": true, "source_owners_local": true, "every_element": true, "gates": {"cpu_style_bf16_reference": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf16_guards": true, "q_guards": true, "sf_guards": true, "dscore_close": true, "status": true, "partial_guards": true}, "dscore_errors": {"fp64_rms": 9.075339243186786e-08, "fp64_scaled_absolute": 4.235328150917514e-09, "legacy_rms": 1.5539144675540695e-07}, "passed": true}
+{"case": "fused_peer_quantization_reference", "width": 8192, "capacity": 512, "active": 512, "backward": false, "graph": true, "mutable_source_and_routes": true, "zero_route_scores": true, "source_owners_local": true, "every_element": true, "gates": {"cpu_style_bf16_reference": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf16_guards": true, "q_guards": true, "sf_guards": true, "dscore_close": true, "status": true}, "dscore_errors": null, "passed": true}
+{"case": "fused_peer_quantization_reference", "width": 8192, "capacity": 512, "active": 512, "backward": true, "graph": true, "mutable_source_and_routes": true, "zero_route_scores": true, "source_owners_local": true, "every_element": true, "gates": {"cpu_style_bf16_reference": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf16_guards": true, "q_guards": true, "sf_guards": true, "dscore_close": true, "status": true, "partial_guards": true}, "dscore_errors": {"fp64_rms": 8.629248085773057e-08, "fp64_scaled_absolute": 4.282447250258938e-09, "legacy_rms": 1.3902945347601385e-07}, "passed": true}
+{"case": "fused_peer_quantization_reference", "width": 8192, "capacity": 65536, "active": 40960, "backward": false, "graph": true, "mutable_source_and_routes": true, "zero_route_scores": true, "source_owners_local": true, "every_element": true, "gates": {"cpu_style_bf16_reference": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf16_guards": true, "q_guards": true, "sf_guards": true, "dscore_close": true, "status": true}, "dscore_errors": null, "passed": true}
+{"case": "fused_peer_quantization_reference", "width": 8192, "capacity": 65536, "active": 40960, "backward": true, "graph": true, "mutable_source_and_routes": true, "zero_route_scores": true, "source_owners_local": true, "every_element": true, "gates": {"cpu_style_bf16_reference": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf16_guards": true, "q_guards": true, "sf_guards": true, "dscore_close": true, "status": true, "partial_guards": true}, "dscore_errors": {"fp64_rms": 8.157396547363722e-08, "fp64_scaled_absolute": 7.082383608502722e-09, "legacy_rms": 1.4528110883542225e-07}, "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": false, "ctas_per_cu": 1, "before_ms": 3.8484241485595705, "after_ms": 8.469110107421875, "speedup": 0.4544071454670329, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": false, "ctas_per_cu": 2, "before_ms": 3.8484241485595705, "after_ms": 4.399795913696289, "speedup": 0.8746824225595707, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": false, "ctas_per_cu": 4, "before_ms": 3.8484241485595705, "after_ms": 2.497610092163086, "speedup": 1.5408426481919744, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": false, "ctas_per_cu": 8, "before_ms": 3.8484241485595705, "after_ms": 1.7137439727783204, "speedup": 2.2456237394203686, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": false, "ctas_per_cu": 16, "before_ms": 3.8484241485595705, "after_ms": 1.690924072265625, "speedup": 2.275929600672825, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": true, "ctas_per_cu": 1, "before_ms": 3.523041915893555, "after_ms": 9.541206359863281, "speedup": 0.36924491338053794, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": true, "ctas_per_cu": 2, "before_ms": 3.523041915893555, "after_ms": 5.231055831909179, "speedup": 0.6734858179878669, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": true, "ctas_per_cu": 4, "before_ms": 3.523041915893555, "after_ms": 3.219797897338867, "speedup": 1.0941810722981453, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": true, "ctas_per_cu": 8, "before_ms": 3.523041915893555, "after_ms": 2.4496540069580077, "speedup": 1.4381793942682075, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "fused_peer_quantization_performance", "width": 8192, "capacity": 65536, "active": 40960, "backward": true, "ctas_per_cu": 16, "before_ms": 3.523041915893555, "after_ms": 2.435256004333496, "speedup": 1.4466823650673122, "source_owners_local": true, "scope": "Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3784853, "start_ticks": "18993174"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

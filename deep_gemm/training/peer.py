@@ -202,6 +202,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if stage_quant not in ('0','1','2','3'):
             raise ValueError('DG_MOE_FP8_FUSED_STAGE_QUANT must be0,1,2or3')
         self.fp8_fused_stage_quant = int(stage_quant)
+        self.fp8_tiled_gradient_quant=fp8_flag(None,'DG_MOE_FP8_TILED_GRAD_QUANT')
+        if self.fp8_tiled_gradient_quant and not (self.fp8_fused_stage_quant&2):
+            raise ValueError('tiled gradient quantization requires fused DY quantization')
         if self.fp8_fused_stage_quant and (not self.fp8_peer_compute or self.fp8_input_pipeline
                 or not expert_local_grad or kwargs.get('block_m',128)!=128):
             raise ValueError('fused stage quantization requires staged FP8 M128 expert-local gradients')
@@ -378,7 +381,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -513,6 +516,9 @@ class PeerMoEPlan(NativeMoEPlan):
             self.dispatch_scratch = torch.empty((cus * self.dispatch_cache_ctas * 128, self.h),
                                                 device=self.device, dtype=torch.bfloat16)
             self.buffers["dispatch_scratch"] = self.dispatch_scratch
+        if self.fp8_tiled_gradient_quant:
+            self.fp8_dscore_partials=torch.empty((self.rows,self.h//128),device=self.device,dtype=torch.float32)
+            self.buffers['fp8_dscore_partials']=self.fp8_dscore_partials
         if self.fuse_replay_gradients or self.fuse_dhidden_scores:
             bn = self.gemm_configs['dhidden' if self.fuse_dhidden_scores else 'fc2'][0]
             width = self.i if self.fuse_dhidden_scores else self.h
@@ -1118,7 +1124,14 @@ class PeerMoEPlan(NativeMoEPlan):
             tensors.append(self.packed_raw_dy)
         if self.fp8_fused_stage_quant & 2:
             tensors.extend((self.quantized[self.h][0],self.quantized_scale_storage[self.h]))
-            _peer(22,tensors,[self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+            if self.fp8_tiled_gradient_quant:
+                tensors.append(self.fp8_dscore_partials)
+                _peer(23,tensors,[self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+                _peer(17,[self.fp8_dscore_partials,self.permutation,self.num_blocks,
+                          self.pointer_tables['local_dscores'],self.status],
+                      [self.rows,self.h//128,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+            else:
+                _peer(22,tensors,[self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
             if not compile_only:self._fp8_prequantized_input=self.packed_dy.data_ptr()
         else:
             _peer(13, tensors,

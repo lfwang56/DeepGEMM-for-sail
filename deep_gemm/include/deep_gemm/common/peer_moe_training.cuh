@@ -29,6 +29,7 @@ enum class PeerOperation : int {
     PrepareContextReplay,
     PackActiveQuantized,
     ExpertLocalGradientsQuantized,
+    ExpertLocalGradientsQuantizedTiles,
 };
 
 struct PeerGemmParams {
