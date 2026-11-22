@@ -292,7 +292,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             return False
         fingerprint=PeerMoEPlan._context_fingerprint(*tensors)
         local=(self._pair_forward_available and self._pair_forward_fingerprint==fingerprint
-               and self._pair_forward_mask is not None and self.inner._forward_context_available)
+               and self._pair_forward_mask is not None and self.inner._has_live_forward_context())
         if local:
             local=(self.inner._forward_context_fingerprint==PeerMoEPlan._context_fingerprint(
                 self.pair_x,self._pair_forward_mask,self.pair_scores,tensors[3],tensors[4],self.inner_valid))

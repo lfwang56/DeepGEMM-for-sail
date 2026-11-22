@@ -77,7 +77,7 @@ def _matching(plan,tensors):
     local=plan._source_forward_available and plan._source_forward_fingerprint==PeerMoEPlan._context_fingerprint(*tensors)
     if local:
         own_mask,remote_mask=plan._source_forward_masks
-        local=(plan.inner._forward_context_available and plan.remote_inner._forward_context_available and
+        local=(plan.inner._has_live_forward_context() and plan.remote_inner._has_live_forward_context() and
             plan.inner._forward_context_fingerprint==PeerMoEPlan._context_fingerprint(
                 tensors[0],own_mask,tensors[2],tensors[3],tensors[4],tensors[5]) and
             plan.remote_inner._forward_context_fingerprint==PeerMoEPlan._context_fingerprint(

@@ -94925,3 +94925,41 @@ latency. Keep all experimental flags off unless selected by measured cases.
   "excluded": [],
   "raw_sha256": "caea387de979a45d3abe991c0704062f355f5724a8f5a94ce2ae65bd805e757b"
 }
+
+## Iteration135 — GPU generation and capture identity for live forward contexts
+
+Immutable134reproduction shows a real stale-context failure: eager FWD(B),
+replay an existing full or forward-only graph(A),then eager BWD(B). Replay
+updates GPU context buffers without executing Python fingerprint writes.
+134reuses A's activations for B and yields gradient relative RMS near1.
+Existing self-contained full-FWD/BWD graph timings do not follow this mixed
+call pattern; retain their evidence,then revalidate the final installed code.
+
+Allocate a GPU int64 generation token for live peer/DeepEP contexts. New forward
+invalidates it,successful forward writes a new host-assigned generation,and
+backward consumes it. Eager matching requires the GPU token to equal the host
+fingerprint's generation. Replayed graphs write their captured generation,
+so a graph cannot masquerade as a later eager forward. Check both source plans
+and legacy pair contexts; globally rematerialize when any rank is invalid.
+
+Use the PPU SDK2.2 hggcStreamGetCaptureInfo API to identify the current capture.
+A backward capture may reuse only a forward recorded in that same capture;
+otherwise record rematerialization so every replay is self-contained. Full
+training graphs retain the fast path; a valid forward-only replay followed by
+eager backward can reuse. Both fused and DeepEP controls get the same rules.
+No numerical recipe or DW launch policy changes. Thirteen EP8phases require
+536prior combo/reference contracts plus192new every-element graph/eager
+lifecycle checks across BF16/FP8peer,hierarchical,andDeepEP backends.
+
+{
+  "passed": false,
+  "focused": 384,
+  "independent_reference_records": 72,
+  "deferred_contract": 80,
+  "generation": 128,
+  "accepted": 11,
+  "excluded": [
+    "qwen38-r2-context135-ep8-generation-elastic-bf16"
+  ],
+  "raw_sha256": "297c07d9f1bfa2bc70e9c1435d445be4b608ed0b9269a1e47ce402ab5e8aa286"
+}

@@ -201,6 +201,11 @@ class NativeMoEPlan:
         self.route_experts = allocate("route_experts", (r,), torch.int32)
         self.route_rows = allocate("route_rows", (r,), torch.int32)
         self.status = allocate("status", (1,), torch.int32).zero_()
+        self._forward_context_generation_counter=0
+        self._forward_context_capture_key=0
+        self._forward_context_generation=None
+        if getattr(self,'reuse_forward_context',False):
+            self._forward_context_generation=allocate('forward_context_generation',(1,),torch.int64).zero_()
         if self.fp8_fuse_dhidden_activation:
             self._fp8_activation_destinations=allocate('fp8_local_activation_dummy',(1,),torch.int64).zero_()
         self.packed_x = allocate("packed_x", (m, h))
@@ -248,6 +253,8 @@ class NativeMoEPlan:
         """Check device validation after eager execution or a graph replay."""
         status = int(self.status.item())
         if status:
+            self._forward_context_available=False
+            self._consume_forward_context_generation()
             errors = []
             if status & 1: errors.append("expert ID outside [-1, global_experts)")
             if status & 2: errors.append("route workspace capacity exceeded")
@@ -315,14 +322,39 @@ class NativeMoEPlan:
                 self._quantize_weight("w1_t", self.w1_t)
                 self._quantize_weight("w2_t", self.w2_t)
 
+    def _begin_forward_context(self):
+        if self._forward_context_generation is not None:
+            self._forward_context_available=False
+            self._forward_context_generation.zero_()
+
+    def _record_forward_context_generation(self):
+        if self._forward_context_generation is not None:
+            self._forward_context_generation_counter+=1
+            self._forward_context_capture_key=dg._C._moe_training_capture_key()
+            self._forward_context_generation.fill_(self._forward_context_generation_counter)
+
+    def _consume_forward_context_generation(self):
+        if self._forward_context_generation is not None:
+            self._forward_context_generation.zero_()
+
+    def _has_live_forward_context(self):
+        if not getattr(self,'_forward_context_available',False):return False
+        # A backward-only capture must rematerialize: a prior eager/other-graph
+        # forward cannot remain a valid prerequisite of every future replay.
+        capture_key=dg._C._moe_training_capture_key()
+        if capture_key:return capture_key==self._forward_context_capture_key
+        return (self._forward_context_generation is None or
+                int(self._forward_context_generation.item())==self._forward_context_generation_counter)
+
     def _matching_forward_context(self, tensors):
         if not getattr(self, 'reuse_forward_context', False):
             return False
-        local = self._forward_context_available and self._forward_context_fingerprint == self._context_fingerprint(*tensors)
+        local = self._has_live_forward_context() and self._forward_context_fingerprint == self._context_fingerprint(*tensors)
         if torch.cuda.is_current_stream_capturing():
-            if not local:
-                raise RuntimeError('forward-context graphs require a matching forward before backward')
-            return True
+            if (not local and self._forward_context_available and
+                    self._forward_context_capture_key==dg._C._moe_training_capture_key()):
+                raise RuntimeError('captured forward inputs changed before backward')
+            return local
         if self.group is not None:
             # A single rank changing inputs invalidates cached routed values
             # on other ranks too. Agree using host metadata outside capture.

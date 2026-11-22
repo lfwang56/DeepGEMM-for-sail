@@ -281,3 +281,13 @@ math and heldout loss on a small model; neither establishes2.4T pretraining
 convergence. Accept timings only with clean whole-host audits and zero exits
 on all ranks. Kernel sums, profiled rank0 spans and unprofiled max-rank graph
 medians are distinct metrics.
+
+
+### Context identity across eager calls and graph replay
+
+Live-context matching checks the GPU-resident generation as well as host tensor
+pointer/version/shape. Each captured forward writes its own generation; backward
+consumes it. Replaying another forward or a full FWD/BWD graph invalidates an
+eager call's old context, even though replay does not run Python metadata writes.
+The peer, hierarchical and DeepEP controls use this same validity contract.
+Mismatches rematerialize globally; complete FWD/BWD graphs retain their fast path.

@@ -1392,12 +1392,14 @@ class PeerMoEPlan(NativeMoEPlan):
         with self._execution():
             self._dag_slot = 0
             self._validate(x, ids, scores, w1, w2, valid_tokens)
+            self._begin_forward_context()
             self.prepare(w1, w2)
             if self.reuse_forward_context:
                 self.forward_context_reused_windows.zero_()
                 self.forward_context_reused_rows.zero_()
             output = super().forward(x, ids, scores, w1, w2, valid_tokens, _chunk_output_callback=_chunk_output_callback)
             if self.reuse_forward_context:
+                self._record_forward_context_generation()
                 self._forward_context_fingerprint = self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens)
                 self._forward_context_available = True
             return output
@@ -1421,6 +1423,7 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
             self._using_forward_context = self._matching_forward_context((x, ids, scores, w1, w2, valid_tokens))
+            self._consume_forward_context_generation()
             if self.dag_fusion or self.dag_backward:
                 self._dag_slot = self.dag_forward_slots
             self.prepare(w1, w2)

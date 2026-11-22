@@ -457,6 +457,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         with self._execution():
             self._fp8_dispatch_backward = self._using_forward_context = False
+            self._begin_forward_context()
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
@@ -484,6 +485,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 self.check()
             self._join_weight_quantization()
             if self.reuse_forward_context:
+                self._record_forward_context_generation()
                 self._forward_context_fingerprint = self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens)
                 self._forward_context_available = True
             return output
@@ -498,6 +500,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
             self._using_forward_context = self._matching_forward_context((x, ids, scores, w1, w2, valid_tokens))
+            self._consume_forward_context_generation()
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()

@@ -2019,6 +2019,13 @@ static void acblaslt_gemm_tt(const torch::Tensor& a, const torch::Tensor& b,
 
 
 static void register_apis(pybind11::module_& m) {
+    m.def("_moe_training_capture_key", []() -> uint64_t {
+        hggcStreamCaptureStatus status;
+        unsigned long long id=0;
+        DG_HGGC_RUNTIME_CHECK(hggcStreamGetCaptureInfo(current_stream(), &status, &id));
+        // Reserve0for eager execution even if the runtime's first capture ID is0.
+        return status==hggcStreamCaptureStatusActive ? uint64_t(id)+1 : 0;
+    });
     m.def("k_grouped_bf16_gemm_tn_device", &k_grouped_bf16_gemm_tn_device,
           py::arg("a"), py::arg("b"), py::arg("d"), py::arg("grouped_layout"), py::arg("max_group_k"),
           py::arg("cta_probe") = std::nullopt, py::arg("compute_cus") = 0);
