@@ -472,6 +472,7 @@ def main():
                     "wgrad_b_padding_bytes": int(os.environ.get("DG_BF16_WGRAD_B_PAD_BYTES", "0")),
                     "wgrad_tsm_load_order": int(os.environ.get("DG_BF16_WGRAD_TSM_LOAD_ORDER", "0")),
                     "fp8_async_weight_quantization": getattr(plan, "fp8_async_weight_quantization", None),
+                    "fp8_weight_quantization": getattr(plan, "fp8_weight_quantization", None),
                     "fp8_active_quantization": getattr(plan, "fp8_active_quantization", None),
                     "fp8_mn_major_scales": getattr(plan, "fp8_mn_major_scales", None),
                     "communication_dtype": getattr(plan, "communication_dtype", "bf16"),

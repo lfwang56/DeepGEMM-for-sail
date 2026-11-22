@@ -10448,3 +10448,169 @@ both transposed weights. Isolated events only; no full-step promotion.
   ],
   "scope": "isolated weight quantizer, no EP/full-step fusion speedup"
 }
+
+
+## Iteration69 — integrate cached FP8 block weight quantizers
+
+68 clean node227:48 bitwise scale/output/canary mutable-graph checks pass
+including NaN/Inf/subnormals, full Qwen W1/W2 and transposed shapes.
+Cached integer quantization W1 5.973215->1.570841ms, W2 2.999708->.792924ms.
+These are isolated signals; no full-step gain implied. Initial66 path failure,
+67 occupied-host rejection,68 node226 contention all preserved; bounded
+controller switched226->227, accepted only the clean227 measurement.
+
+DeepEP option fp8_weight_quantization0/1/2 selects legacy/cached-float/
+cached-integer operations. Validate all ranks agree, require FP8 compute,
+precompile selected operation before routing and preserve current weight
+refreshes inside FWD and BWD timing. Default0 leaves existing behavior.
+No quantization precision, weight cache, communication dtype, DW or
+gradient reduction change. Gate actual8 mutable graphs/zero capacity,
+actual32 full Qwen FP32 gradients and fullC4096 skew, then compare
+complete-step legacy FP8, cachedfloat/integer, async integer and same-layout BF16split/M128.
+The earlier strongest BF16baseline uses G8/M256; repeat that recipe
+separately on the same hosts before claiming FP8-vs-best-BF16 gains.
+
+65 paired complete public-text LM quality: three2000-step EP2 seeds per
+precision with frozen source/native/LUT/fixtures verified, matched initial
+parameter hashes, dynamic train routes,111539 heldout targets each.
+BF16Elastic loss mean1.592425559 SD.005194050; FP8Elastic activeMN
+serial loss mean1.589495673 SD.003665625, relative-.183989%.
+Gathered checkpoints evaluated through Native at the same precision.
+No observed small-model loss degradation in this run; not statistical
+noninferiority or Qwen2.4T convergence. Artifacts iter65-fp8-paired-lm-quality.json.
+
+[
+  {
+    "phase": "qwen38-r2-fp8cache69-bf16-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 104.79384765625,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-cached-async-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 102.989990234375,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-cached-float-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 104.171484375,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-cached-integer-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 101.98659057617188,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-control-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 121.89888916015624,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-reference-c4096-skew-r1",
+    "clean": true,
+    "backend": "deepep",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8cache69-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  }
+]

@@ -20,7 +20,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
 
     def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None,
                  fp8_active_quantization=None, fp8_mn_major_scales=None,
-                 fp8_async_weight_quantization=None, **kwargs):
+                 fp8_async_weight_quantization=None, fp8_weight_quantization=None, **kwargs):
         def quant_flag(value, key):
             if value is None:
                 raw = os.environ.get(key, "0")
@@ -33,9 +33,17 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.fp8_active_quantization = quant_flag(fp8_active_quantization, "DG_MOE_FP8_ACTIVE_QUANTIZATION")
         self.fp8_mn_major_scales = quant_flag(fp8_mn_major_scales, "DG_MOE_FP8_MN_MAJOR_SCALES")
         self.fp8_async_weight_quantization = quant_flag(fp8_async_weight_quantization, "DG_MOE_FP8_ASYNC_WEIGHTS")
+        if fp8_weight_quantization is None:
+            raw = os.environ.get("DG_MOE_FP8_WEIGHT_QUANTIZER", "0")
+            if raw not in ("0", "1", "2"):
+                raise ValueError("DG_MOE_FP8_WEIGHT_QUANTIZER must be0,1or2")
+            fp8_weight_quantization = int(raw)
+        if type(fp8_weight_quantization) is not int or fp8_weight_quantization not in (0, 1, 2):
+            raise ValueError("fp8_weight_quantization must be0,1or2")
+        self.fp8_weight_quantization = fp8_weight_quantization
         if self.fp8_mn_major_scales and not self.fp8_active_quantization:
             raise ValueError("MN-major FP8 scales require active-row quantization")
-        if (self.fp8_active_quantization or self.fp8_async_weight_quantization) and kwargs.get("compute", "bf16") != "fp8":
+        if (self.fp8_active_quantization or self.fp8_async_weight_quantization or self.fp8_weight_quantization) and kwargs.get("compute", "bf16") != "fp8":
             raise ValueError("FP8 quantization options require FP8 expert compute")
         if kwargs.get("compute", "bf16") == "fp8" and kwargs.get("m_schedule", "nopad") != "nopad":
             raise ValueError("DeepEP FP8 GEMMs require the nopad expert schedule")
@@ -48,7 +56,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.ring_rows = ring_rows
         self.communication_dtype = "bf16"
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
-        recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales, self.fp8_async_weight_quantization)
+        recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales, self.fp8_async_weight_quantization,
+                  self.fp8_weight_quantization)
         recipes = [None] * self.size
         dist.all_gather_object(recipes, recipe, group=self.group)
         if any(other != recipe for other in recipes):
@@ -128,6 +137,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.buffers[name] = value
         return value
 
+    def _quantize_weight(self, name, weight):
+        data, scales = self.quantized[name]
+        operation = (10, 29, 30)[self.fp8_weight_quantization]
+        _launch(operation, [weight, data, scales], list(weight.shape))
+
     def _prepare_weights(self, w1, w2, backward=False):
         if not self.fp8_async_weight_quantization:
             return super()._prepare_weights(w1, w2, backward=backward)
@@ -189,6 +203,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
         operations = [0, 1, 2, 7, 8, 13, 16, 19, 20, 23, 24]
         if self.compute == "fp8":
             operations.extend((9, 10, 14, 15))
+            if self.fp8_weight_quantization:
+                operations.append((10, 29, 30)[self.fp8_weight_quantization])
             if self.fp8_active_quantization:
                 operations.extend((26, 27, 28))
         if self.fast_weight_transpose:
