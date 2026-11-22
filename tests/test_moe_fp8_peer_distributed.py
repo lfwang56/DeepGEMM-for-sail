@@ -119,7 +119,11 @@ def main():
               fused_return=zero.fuse_return, graph=True, passed=passed)), flush=True)
         if not passed:raise AssertionError('zero-capacity peer graph mismatch')
         del zero_graph, zero_outputs
-        stream.synchronize(); zero.close(); del zero
+        stream.synchronize()
+        if hasattr(zero, 'close'):
+            zero.close()
+        del zero
+        gc.collect()
     del graphs, buffers, result, actual, previous
     gc.collect(); stream.synchronize()
     for plan in plans:

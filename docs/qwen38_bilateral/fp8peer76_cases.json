@@ -1,0 +1,77 @@
+[
+  {
+    "name": "qwen38-r2-fp8peer76-bf16-skew-regression-r1",
+    "script": "tests/test_moe_training_skew_capacity.py",
+    "arguments": [
+      "--backends",
+      "peer",
+      "--hidden",
+      "256",
+      "--intermediate",
+      "128",
+      "--local-experts",
+      "2",
+      "--topk",
+      "3",
+      "--chunk-tokens",
+      "32",
+      "--ring-rows",
+      "128",
+      "--expert-local-grad",
+      "--block-m",
+      "128",
+      "--graph"
+    ],
+    "environment": {
+      "PYTHONPATH": "build/campaign/deepep-native-scope:.:tests",
+      "CPATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/compat/deepep:/usr/local/pccl/include:/usr/local/pccl/nccl_wrapper/include:/usr/local/PPU_SDK/include",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "0",
+      "DG_MOE_INPUT_HELPER_THREADS": "0",
+      "DEEPEP_NUM_MAX_ICN_PEERS": "8",
+      "DG_MOE_FP8_ACTIVE_QUANTIZATION": "1",
+      "DG_MOE_FP8_MN_MAJOR_SCALES": "1",
+      "DG_MOE_FP8_ASYNC_WEIGHTS": "0",
+      "DG_MOE_FP8_WEIGHT_QUANTIZER": "0"
+    }
+  },
+  {
+    "name": "qwen38-r2-fp8peer76-ep8-fused-r1",
+    "script": "tests/test_moe_fp8_peer_distributed.py",
+    "arguments": [
+      "--check-zero-capacity"
+    ],
+    "environment": {
+      "PYTHONPATH": "build/campaign/deepep-native-scope:.:tests",
+      "CPATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/compat/deepep:/usr/local/pccl/include:/usr/local/pccl/nccl_wrapper/include:/usr/local/PPU_SDK/include",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "0",
+      "DG_MOE_INPUT_HELPER_THREADS": "0",
+      "DEEPEP_NUM_MAX_ICN_PEERS": "8",
+      "DG_MOE_FP8_ACTIVE_QUANTIZATION": "1",
+      "DG_MOE_FP8_MN_MAJOR_SCALES": "1",
+      "DG_MOE_FP8_ASYNC_WEIGHTS": "0",
+      "DG_MOE_FP8_WEIGHT_QUANTIZER": "2"
+    }
+  },
+  {
+    "name": "qwen38-r2-fp8peer76-ep8-separate-r1",
+    "script": "tests/test_moe_fp8_peer_distributed.py",
+    "arguments": [
+      "--check-zero-capacity",
+      "--no-fuse-return"
+    ],
+    "environment": {
+      "PYTHONPATH": "build/campaign/deepep-native-scope:.:tests",
+      "CPATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/compat/deepep:/usr/local/pccl/include:/usr/local/pccl/nccl_wrapper/include:/usr/local/PPU_SDK/include",
+      "SAIL_DEEPGEMM_LUT_PATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/docs/qwen38_bilateral/wgrad_luts40/stage3",
+      "DG_BF16_WGRAD_COMPUTE_CUS": "0",
+      "DG_MOE_INPUT_HELPER_THREADS": "0",
+      "DEEPEP_NUM_MAX_ICN_PEERS": "8",
+      "DG_MOE_FP8_ACTIVE_QUANTIZATION": "1",
+      "DG_MOE_FP8_MN_MAJOR_SCALES": "1",
+      "DG_MOE_FP8_ASYNC_WEIGHTS": "0",
+      "DG_MOE_FP8_WEIGHT_QUANTIZER": "2"
+    }
+  }
+]
