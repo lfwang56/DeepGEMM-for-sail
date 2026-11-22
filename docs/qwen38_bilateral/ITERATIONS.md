@@ -70877,3 +70877,2260 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 330871, "start_ticks": "20855027"}, {"pid": 348505, "start_ticks": "20861846"}, {"pid": 351323, "start_ticks": "20862608"}, {"pid": 353315, "start_ticks": "20863290"}, {"pid": 355077, "start_ticks": "20863982"}, {"pid": 356977, "start_ticks": "20864769"}, {"pid": 358656, "start_ticks": "20865461"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+## Iteration126 — overlap paired input/gradient gathers with own-domain work
+
+124live-context reuse passed224EP8reference records and actual physical
+cross64CPUreferences. InitialT4096strongDeepEP134.7247ms versus hybrid
+reuse81.5015ms(1.653x);legacyhybrid97.9017ms. Full2–3x remains unmet.
+125cached DW panels passed48gates but producer-inclusive DW still loses
+BF16,so neither FP8 DW recipe is selected.
+
+Add opt-in DG_MOE_HYBRID_SOURCE_PIPELINE=1 requiring live pair/inner
+contexts. Use separate own-source and remote-source PeerMoEPlans,each
+maxT/chunkC rather than one2T/2Cplan. Launch pairwise X/ID/score GPU
+all-gathers on an auxiliary stream,queue own-source expert forward on
+main,then join and compute remote-source experts. Reassemble partials
+in global pair-rank order before the existing reduce-scatter, preserving
+the same domain-partial BF16 boundary. Backward overlaps DYgather with
+own-source backward,then computes remote-source backward into the same
+FP32DWaccumulators;reduce paired dX/dScore in the original order.
+
+A global CPU metadata decision invalidates BOTH source contexts on any
+rank change. On fallback gather current X/IDs/scores/DY and rematerialize
+both inner backprop paths with temporary reuse disable. Check both device
+statuses,record auxiliary tensor lifetimes,join before source reuse,
+and prepare BOTH inner plans before pair payloads. Handle varying local
+token counts via padding and filtered IDvalidation. New dispatch clears
+old context before side effects. Source serialization queues the SAME
+operators/geometry/payloads with the gather join before own-source work;
+it is a controlled overlap baseline,not a different algorithm.
+
+Five whole-host EP8phases on one host/two logical4rank domains:direct and
+producer source paths plus exact serialized producer control,each with
+12focused cases including injected remote-plan preparation failure/retry,
+and independent CPU eager/graph references. Require288focused+48CPU
+records and clean8rank exits for all five phases. No physical cross-domain
+speedup or full-model quality claim until separate validation.
+
+{
+  "passed": false,
+  "audited": {
+    "phases": [
+      {
+        "name": "qwen38-r2-sourcepipe126-ep8-focused-source-attempt0",
+        "clean": false,
+        "hosts": [
+          "e01-cn-9yq4xwro401-a0003"
+        ],
+        "metrics": [
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "remote_prepare_failure_retry",
+            "rank": 0,
+            "ranks": 8,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "live_eager",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": true,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              0.0,
+              4.416259358208663e-08,
+              4.371245054812789e-08,
+              4.906316775077357e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "one_rank_mutation_x",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.3700058682816234e-08,
+              4.36195897179914e-08,
+              5.3262358079564365e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "one_rank_mutation_scores",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.370566841771506e-08,
+              4.3383110437389405e-08,
+              5.4324171827602186e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "one_rank_mutation_ids",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.2427178215120875e-08,
+              4.225232075327767e-08,
+              5.341709297113084e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "one_rank_mutation_weight",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.300890310560135e-08,
+              4.20399857148368e-08,
+              6.382836659213353e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "overwritten_forward",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.300890310560135e-08,
+              4.20399857148368e-08,
+              5.38337161515301e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "consumed_context",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.300890310560135e-08,
+              4.20399857148368e-08,
+              5.032213934441643e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "backward_only_graph",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": false,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              4.300890310560135e-08,
+              4.20399857148368e-08,
+              5.0397794382206484e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "mutable_full_graph_0",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": true,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              0.0,
+              4.3596660503908424e-08,
+              4.1828183583447753e-08,
+              5.764069754832235e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "mutable_full_graph_1",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": true,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              0.0,
+              3.968049000491192e-08,
+              3.7617724046867806e-08,
+              9.969303249590666e-08
+            ],
+            "every_element": true,
+            "passed": true
+          },
+          {
+            "case": "hierarchical_pair_context_reference",
+            "name": "mutable_full_graph_2",
+            "rank": 0,
+            "ranks": 8,
+            "logical_domains": 2,
+            "physical_scope": "one-host correctness only; no cross-domain performance claim",
+            "reused": true,
+            "source_pipeline": true,
+            "source_serialized": false,
+            "dispatch_producer": false,
+            "errors": [
+              0.0,
+              0.0,
+              4.96473973043976e-08,
+              4.8974690969316725e-08,
+              5.043714779162656e-08
+            ],
+            "every_element": true,
+            "passed": true
+          }
+        ],
+        "reference_record_count": 96,
+        "reasons": [
+          "launch-qwen38-r2-sourcepipe126-ep8-focused-source-attempt0-node80.log: postflight not clean",
+          "launch-qwen38-r2-sourcepipe126-ep8-focused-source-attempt0-node80.log: local ranks failed"
+        ]
+      }
+    ],
+    "accepted": [],
+    "excluded": [
+      "qwen38-r2-sourcepipe126-ep8-focused-source-attempt0"
+    ]
+  },
+  "focused_records": [
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 0,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.416259358208663e-08,
+        4.371245054812789e-08,
+        4.906316775077357e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.3700058682816234e-08,
+        4.36195897179914e-08,
+        5.3262358079564365e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.370566841771506e-08,
+        4.3383110437389405e-08,
+        5.4324171827602186e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.2427178215120875e-08,
+        4.225232075327767e-08,
+        5.341709297113084e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.300890310560135e-08,
+        4.20399857148368e-08,
+        6.382836659213353e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.300890310560135e-08,
+        4.20399857148368e-08,
+        5.38337161515301e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.300890310560135e-08,
+        4.20399857148368e-08,
+        5.032213934441643e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.300890310560135e-08,
+        4.20399857148368e-08,
+        5.0397794382206484e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.3596660503908424e-08,
+        4.1828183583447753e-08,
+        5.764069754832235e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        3.968049000491192e-08,
+        3.7617724046867806e-08,
+        9.969303249590666e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank000.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 0,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.96473973043976e-08,
+        4.8974690969316725e-08,
+        5.043714779162656e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 1,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.060435898622927e-08,
+        4.0314471760893866e-08,
+        6.618027725835418e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.028155586865978e-08,
+        3.972451878553329e-08,
+        6.065283741918392e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.035740630570217e-08,
+        3.986645324971505e-08,
+        3.494906763990002e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        3.9603705204172e-08,
+        3.870817977258412e-08,
+        6.224072990335117e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        3.9603705204172e-08,
+        3.870817977258412e-08,
+        4.825842481182008e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        3.9603705204172e-08,
+        3.870817977258412e-08,
+        1.9423266550688822e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        3.9603705204172e-08,
+        3.870817977258412e-08,
+        5.637124900204071e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        3.9603705204172e-08,
+        3.870817977258412e-08,
+        5.9073563818401453e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        3.9443076360612395e-08,
+        3.877232757076854e-08,
+        6.149618059225759e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        3.787446800629368e-08,
+        3.707223328319742e-08,
+        4.306377476837042e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank001.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 1,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.339769432704088e-08,
+        4.400493835987618e-08,
+        5.0672557705411236e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 2,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.3509757574611285e-08,
+        4.24609254423558e-08,
+        4.643325368647311e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.321307756072201e-08,
+        4.252807883631249e-08,
+        4.1172960152380256e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.360934369174174e-08,
+        4.254629715205738e-08,
+        5.703746452923042e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.222226124284134e-08,
+        4.137743303544994e-08,
+        5.200634234370227e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.222226124284134e-08,
+        4.137743303544994e-08,
+        4.0950752122626e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.222226124284134e-08,
+        4.137743303544994e-08,
+        5.6697842865105486e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.222226124284134e-08,
+        4.137743303544994e-08,
+        3.991734587316387e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.222226124284134e-08,
+        4.137743303544994e-08,
+        2.6912269746048878e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.2614725970224754e-08,
+        4.082164295482471e-08,
+        5.021009030770074e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.463435487878087e-08,
+        4.3525460569071583e-08,
+        5.1360860453542045e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank002.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 2,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.800038055918776e-08,
+        4.9663469781080494e-08,
+        6.690562770472752e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 3,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.2838099290065657e-08,
+        4.276690646065617e-08,
+        4.669430353487769e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.3323492349145454e-08,
+        4.292930455562782e-08,
+        4.911663253892584e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.3345877998035576e-08,
+        4.3210203415355863e-08,
+        5.6618233656990924e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.2492462881682513e-08,
+        4.155593558152759e-08,
+        2.5373065426492758e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.2492462881682513e-08,
+        4.155593558152759e-08,
+        3.3973197588466064e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.2492462881682513e-08,
+        4.155593558152759e-08,
+        4.0564632541872925e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.2492462881682513e-08,
+        4.155593558152759e-08,
+        4.004090925491255e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.2492462881682513e-08,
+        4.155593558152759e-08,
+        5.1151108237945664e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.2466190564027784e-08,
+        4.1244490489589225e-08,
+        3.488919020355752e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.3244700265177016e-08,
+        4.3253322701275465e-08,
+        2.3997472453629598e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank003.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 3,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        5.152978133082797e-08,
+        5.117276202781795e-08,
+        3.1148434942451786e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 4,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.348737547843484e-08,
+        4.2903142372097136e-08,
+        5.387718005067654e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.371042905404465e-08,
+        4.333623238039763e-08,
+        4.198692238333024e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.3862602439048715e-08,
+        4.3173468355917066e-08,
+        5.7013163967667424e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.278569321058967e-08,
+        4.199908332225277e-08,
+        4.9582279615378866e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.278569321058967e-08,
+        4.199908332225277e-08,
+        6.538611785344983e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.278569321058967e-08,
+        4.199908332225277e-08,
+        4.456705937627703e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.278569321058967e-08,
+        4.199908332225277e-08,
+        3.430505657320282e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.278569321058967e-08,
+        4.199908332225277e-08,
+        3.5931112307707735e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.2889848117511065e-08,
+        4.263852915187272e-08,
+        3.651804902915501e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.043500112516085e-08,
+        4.053370261658529e-08,
+        4.105864093162381e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank004.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 4,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.360125771540879e-08,
+        4.4629125284245674e-08,
+        9.31728223463324e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 5,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.434803457797898e-08,
+        4.428767752528984e-08,
+        7.383468414445815e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.457022839687852e-08,
+        4.5032020778990045e-08,
+        6.01427458946091e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.4451475389450934e-08,
+        4.473393389048397e-08,
+        6.188943757479137e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.380708062967642e-08,
+        4.372257222939879e-08,
+        6.568669874695843e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.380708062967642e-08,
+        4.372257222939879e-08,
+        5.957584647831027e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.380708062967642e-08,
+        4.372257222939879e-08,
+        3.62036445267222e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.380708062967642e-08,
+        4.372257222939879e-08,
+        4.859899860321093e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.380708062967642e-08,
+        4.372257222939879e-08,
+        3.492653632974907e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.3051031184404565e-08,
+        4.3378161507234836e-08,
+        5.328020336037298e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.726688729306261e-08,
+        4.8807610397716417e-08,
+        5.8044737016871295e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank005.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 5,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        5.214297971178894e-08,
+        5.36626281189001e-08,
+        3.766091793977466e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 6,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.173404022367322e-08,
+        4.178091472795131e-08,
+        3.950989935219695e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.218026106173056e-08,
+        4.186257740457222e-08,
+        2.1784256176715644e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.216688864744356e-08,
+        4.18024015402807e-08,
+        5.4403283655801715e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.1215535873107e-08,
+        4.0584716032299184e-08,
+        5.752728071684032e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.1215535873107e-08,
+        4.0584716032299184e-08,
+        5.355550314334323e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.1215535873107e-08,
+        4.0584716032299184e-08,
+        6.789070283730325e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.1215535873107e-08,
+        4.0584716032299184e-08,
+        3.412933580193567e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.1215535873107e-08,
+        4.0584716032299184e-08,
+        3.357434863460185e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.1902783465275206e-08,
+        4.147304366597382e-08,
+        5.367302691183795e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.605114867217708e-08,
+        4.520898500004478e-08,
+        3.090370981340129e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank006.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 6,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        5.460292129555455e-08,
+        5.372235278855442e-08,
+        3.837580209165026e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "remote_prepare_failure_retry",
+      "rank": 7,
+      "ranks": 8,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "live_eager",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.271677411793462e-08,
+        4.234068740061048e-08,
+        2.604278925844028e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_x",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.264400033093807e-08,
+        4.247313611926984e-08,
+        4.986814516882987e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_scores",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.274310327900821e-08,
+        4.276265741509633e-08,
+        6.55395808735193e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_ids",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.9931621504129e-08,
+        4.9653188227694045e-08,
+        7.04573892562621e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "one_rank_mutation_weight",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        4.9931621504129e-08,
+        4.9653188227694045e-08,
+        7.187320960611032e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "overwritten_forward",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        5.004979186651326e-08,
+        4.9854889994094265e-08,
+        5.096171662444249e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "consumed_context",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        5.004979186651326e-08,
+        4.9854889994094265e-08,
+        5.058836549665102e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "backward_only_graph",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": false,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        5.019907689529646e-08,
+        4.9811827551593524e-08,
+        7.249691691413318e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_0",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        5.0254257644155587e-08,
+        4.995810343189078e-08,
+        5.2218489088318165e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_1",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.00604740491417e-08,
+        4.138512466056454e-08,
+        2.5701131889377393e-08
+      ],
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "source_log": "rank007.log",
+      "case": "hierarchical_pair_context_reference",
+      "name": "mutable_full_graph_2",
+      "rank": 7,
+      "ranks": 8,
+      "logical_domains": 2,
+      "physical_scope": "one-host correctness only; no cross-domain performance claim",
+      "reused": true,
+      "source_pipeline": true,
+      "source_serialized": false,
+      "dispatch_producer": false,
+      "errors": [
+        0.0,
+        0.0,
+        4.5595452746738374e-08,
+        4.5750415011980294e-08,
+        5.7058652913610786e-08
+      ],
+      "every_element": true,
+      "passed": true
+    }
+  ],
+  "reference_records": []
+}

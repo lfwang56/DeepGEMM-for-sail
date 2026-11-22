@@ -86,7 +86,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  groups, chunk_tokens=128, device=None, check_errors=True, gradient_group=None,
-                 reuse_pair_context=None, **peer_options):
+                 reuse_pair_context=None, source_pipeline=None, source_serialized=None, **peer_options):
         if not isinstance(groups, HierarchicalGroups) or groups._closed:
             raise ValueError('create and retain live HierarchicalGroups before constructing a plan')
         if min(max_tokens, chunk_tokens) < 1 or 2 * max_tokens * topk > 2**31 - 1:
@@ -110,6 +110,20 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             reuse_pair_context=raw=='1'
         if type(reuse_pair_context) is not bool:
             raise TypeError('reuse_pair_context must be bool')
+        def flag(value,key):
+            if value is None:
+                raw=os.environ.get(key,'0')
+                if raw not in ('0','1'):raise ValueError(key+' must be0or1')
+                value=raw=='1'
+            if type(value) is not bool:raise TypeError(key+' must be bool')
+            return value
+        source_pipeline=flag(source_pipeline,'DG_MOE_HYBRID_SOURCE_PIPELINE')
+        source_serialized=flag(source_serialized,'DG_MOE_HYBRID_SOURCE_SERIALIZED')
+        self.hybrid_source_pipeline=source_pipeline
+        self.hybrid_source_serialized=source_serialized
+        self._source_forward_available=False
+        self._source_forward_fingerprint=None
+        self._source_forward_tensors=self._source_forward_masks=None
         self.hybrid_reuse_pair_context=reuse_pair_context
         self.hybrid_pair_forward_reused_last_backward=False
         self._pair_forward_available=False
@@ -117,19 +131,30 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self._pair_forward_mask=None
         self._pair_forward_tensors=None
         description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                       groups.domain_size, repr(sorted(peer_options.items())),reuse_pair_context)
+                       groups.domain_size, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized)
         descriptions = [None] * self.size
         dist.all_gather_object(descriptions, description, group=self.group)
         if any(item != description for item in descriptions):
             raise ValueError('ranks must create matching hierarchical plans')
-        self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, 2 * max_tokens,
-                                 chunk_tokens=2 * chunk_tokens, group=groups.domain,
+        if source_pipeline and not reuse_pair_context:
+            raise ValueError('source pipeline requires live pair context reuse')
+        if source_serialized and not source_pipeline:
+            raise ValueError('source serialization requires the source pipeline')
+        factor=1 if source_pipeline else 2
+        self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, factor * max_tokens,
+                                 chunk_tokens=factor * chunk_tokens, group=groups.domain,
                                  device=self.device, check_errors=False, **peer_options)
         if reuse_pair_context and not self.inner.reuse_forward_context:
             self.inner.close()
             raise ValueError('pair context reuse requires domain-local forward context reuse')
         self.status = self.inner.status
         self.buffers = {'inner_' + key: value for key, value in self.inner.buffers.items()}
+        self.remote_inner=None
+        if source_pipeline:
+            self.remote_inner=PeerMoEPlan(hidden,intermediate,local_experts,topk,max_tokens,
+                chunk_tokens=chunk_tokens,group=groups.domain,device=self.device,check_errors=False,**peer_options)
+            self.buffers.update({'remote_inner_'+key:value for key,value in self.remote_inner.buffers.items()})
+            self._source_pair_stream=torch.cuda.Stream(device=self.device)
 
         def allocate(name, shape, dtype):
             tensor = torch.empty(shape, device=self.device, dtype=dtype)
@@ -148,14 +173,20 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self.validation_counts = allocate('counts', (local_experts,), torch.int32)
         self.validation_experts = allocate('route_experts', (2*t*k,), torch.int32)
         self.validation_rows = allocate('route_rows', (2*t*k,), torch.int32)
-        self.inner_valid = allocate('valid', (), torch.int32).fill_(2*t)
+        self.inner_valid = allocate('valid', (), torch.int32).fill_(t if source_pipeline else 2*t)
+        if source_pipeline:
+            section=slice((1-groups.domain_id)*t,(2-groups.domain_id)*t)
+            self.source_remote_x=self.pair_x[section]
+            self.source_remote_ids=self.pair_ids[section]
+            self.source_remote_scores=self.pair_scores[section]
+            self.source_remote_dy=self.pair_dy[section]
         self.hybrid_domains, self.hybrid_domain_size = 2, groups.domain_size
         self.hybrid_pair_backend = str(dist.get_backend(groups.pair))
         groups._devices.add(self.device.index)
 
     @property
     def activation_workspace_bytes(self):
-        return self.inner.activation_workspace_bytes + sum(
+        return self.inner.activation_workspace_bytes + (self.remote_inner.activation_workspace_bytes if self.remote_inner is not None else 0) + sum(
             t.numel() * t.element_size() for name, t in self.buffers.items() if name.startswith("pair_"))
 
     def __getattr__(self, name):
@@ -174,6 +205,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             error = None
             try:
                 self.inner.prepare(w1, w2)
+                if self.remote_inner is not None:self.remote_inner.prepare(w1,w2)
                 dg._C._moe_training_precompile(self.device.index, [0, 13])
             except Exception as exception:
                 error = exception
@@ -243,6 +275,9 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
 
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
+        if self.hybrid_source_pipeline:
+            from .hierarchical_pipeline import forward
+            return forward(self,x,ids,scores,w1,w2,valid_tokens)
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         with self._execution():
             self.prepare(w1, w2)
@@ -263,6 +298,9 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
 
     @torch.no_grad()
     def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None):
+        if self.hybrid_source_pipeline:
+            from .hierarchical_pipeline import backward
+            return backward(self,dy,x,ids,scores,w1,w2,valid_tokens,accumulators)
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         _validate_accumulators(accumulators, w1, w2)
         if dy.shape != x.shape or dy.dtype != x.dtype or dy.device != x.device or not dy.is_contiguous():
@@ -298,7 +336,18 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
                 self.check()
             return result
 
+    def reset_errors(self):
+        self.inner.reset_errors()
+        if self.remote_inner is not None:self.remote_inner.reset_errors()
+
+    def check(self):
+        self.inner.check()
+        if self.remote_inner is not None:self.remote_inner.check()
+
     def close(self):
         """Release plan peer mappings; shared group lifetime remains caller-owned."""
+        if self.remote_inner is not None:
+            self._source_pair_stream.synchronize()
+            self.remote_inner.close()
         if hasattr(self.inner, "close"):
             self.inner.close()

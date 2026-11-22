@@ -420,6 +420,8 @@ def main():
                     "hybrid_pair_backend": getattr(plan, "hybrid_pair_backend", None),
                     "hybrid_reuse_pair_context": getattr(plan, "hybrid_reuse_pair_context", None),
                     "hybrid_pair_forward_reused_last_backward": getattr(plan, "hybrid_pair_forward_reused_last_backward", None),
+                    "hybrid_source_pipeline": getattr(plan, "hybrid_source_pipeline", None),
+                    "hybrid_source_serialized": getattr(plan, "hybrid_source_serialized", None),
                     "hybrid_transport": "pairwise domain AG/RS + domain-local bilateral fusion" if backend == "hybrid" else None,
                     "collective_m_schedule": plan.m_schedule if backend.startswith("collective") else None,
                     "collective_active_pointwise": plan.active_pointwise if backend.startswith("collective") else None,
