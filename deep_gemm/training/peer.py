@@ -195,6 +195,7 @@ class PeerMoEPlan(NativeMoEPlan):
                 raise TypeError(key + " must be bool")
             return value
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
+        self.fp8_bf16_input_pipeline = fp8_flag(None, "DG_MOE_FP8_BF16_INPUT_PIPELINE")
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
         self.fp8_serial_full_grid = fp8_flag(None, "DG_MOE_FP8_INPUT_SERIAL_FULL_GRID")
         self.fp8_input_cache_scales = fp8_flag(fp8_input_cache_scales, "DG_MOE_FP8_INPUT_CACHE_SCALES")
@@ -202,6 +203,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if stage_quant not in ('0','1','2','3'):
             raise ValueError('DG_MOE_FP8_FUSED_STAGE_QUANT must be0,1,2or3')
         self.fp8_fused_stage_quant = int(stage_quant)
+        if self.fp8_bf16_input_pipeline and (not self.fp8_peer_compute or self.fp8_input_pipeline
+                or not (self.fp8_fused_stage_quant & 1) or ring_rows is None):
+            raise ValueError("BF16 input pipeline requires bounded staged FP8 with fused input quantization")
         tiled_mode=os.environ.get('DG_MOE_FP8_TILED_GRAD_QUANT','0')
         if tiled_mode not in ('0','1','2'):
             raise ValueError('DG_MOE_FP8_TILED_GRAD_QUANT must be0,1or2')
@@ -227,9 +231,9 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("FP8 producer threads must be128,256or512")
         if self.fp8_input_pipeline and not self.fp8_peer_compute:
             raise ValueError("FP8 input pipeline requires FP8 peer compute")
-        if self.fp8_serial_full_grid and not (self.fp8_input_pipeline and self.fp8_input_serialize):
+        if self.fp8_serial_full_grid and not ((self.fp8_input_pipeline or self.fp8_bf16_input_pipeline) and self.fp8_input_serialize):
             raise ValueError("full-grid serial input requires the serialized FP8 input pipeline")
-        if self.fp8_input_serialize and not self.fp8_input_pipeline:
+        if self.fp8_input_serialize and not (self.fp8_input_pipeline or self.fp8_bf16_input_pipeline):
             raise ValueError("FP8 input serialization requires the FP8 input pipeline")
         self._fp8_backward = self._fp8_bf_input_pending = False
         if self.fp8_peer_compute and (self.transport != "peer" or fuse_dispatch or not active_rows
@@ -262,6 +266,8 @@ class PeerMoEPlan(NativeMoEPlan):
             self.communication_dtype = "fp8_input_bf16_dw_and_return"
         if self.fp8_fused_stage_quant & 1:
             self.fp8_input_mode = "staged_bf16_with_fused_row_quantization"
+        if self.fp8_bf16_input_pipeline:
+            self.fp8_input_mode = "bf16_pull_quantized_tile_pipeline"
         self._fp8_prequantized_input = None
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
             raise TypeError("peer fusion switches must be bool")
@@ -356,7 +362,9 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and (fuse_dispatch or self.fp8_peer_compute)
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
-        if self.fp8_input_pipeline:
+        if self.fp8_input_pipeline or self.fp8_bf16_input_pipeline:
+            if self.fp8_bf16_input_pipeline and self.h > 8192:
+                raise ValueError("BF16 quantized input pipeline supports hidden<=8192")
             if self.fp8_input_cache_scales and self.h > 8192:
                 raise ValueError("cached FP8 input scales support hidden<=8192")
             if not 0 < self.fp8_input_ctas < dg.get_num_sms():
@@ -385,7 +393,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -546,7 +554,7 @@ class PeerMoEPlan(NativeMoEPlan):
                 self.buffers.pop("activation_scale_" + str(width))
                 self.quantized_scale_storage[width] = storage
             self.group_ids.zero_()
-        if self.fp8_input_pipeline:
+        if self.fp8_input_pipeline or self.fp8_bf16_input_pipeline:
             self.fp8_input_ready = torch.zeros(self.rows // 128, device=self.device, dtype=torch.int32)
             self.buffers["fp8_input_ready"] = self.fp8_input_ready
         self.forward_context_slots = []
@@ -638,7 +646,7 @@ class PeerMoEPlan(NativeMoEPlan):
             name = {"fc1": "w1", "fc2": "w2", "dhidden": "w2_t", "dx": "w1_t"}[role]
             width = a.shape[1]
             quantized_a = self.quantized[width]
-            if self.fp8_input_pipeline and role == "fc1":
+            if (self.fp8_input_pipeline or self.fp8_bf16_input_pipeline) and role == "fc1":
                 if self.fp8_serial_full_grid:
                     # _fc1 has joined the producer stream. No consumers wait
                     # on READY, so every CU may now execute the native GEMM.
@@ -728,7 +736,28 @@ class PeerMoEPlan(NativeMoEPlan):
                     self.buffers[name] = statistics
 
     def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True, prefetch_dy=False):
-        if self.fp8_input_pipeline:
+        if self.fp8_bf16_input_pipeline:
+            main = torch.cuda.current_stream(self.device)
+            if compile_only:
+                self._fp8_stage_bf16_input(compile_only=True)
+            else:
+                self.fp8_input_ready.zero_()
+                self._fp8_input_stream.wait_stream(main)
+                with torch.cuda.stream(self._fp8_input_stream):
+                    for tensor in (self.source_rows, self.num_blocks, self.fp8_input_ready, self.status,
+                                   *self.quantized[self.h], self.quantized_scale_storage[self.h],
+                                   self.packed_x, self.pointer_tables['local_x']):
+                        tensor.record_stream(self._fp8_input_stream)
+                    self._fp8_stage_bf16_input()
+                if self.fp8_input_serialize:
+                    main.wait_stream(self._fp8_input_stream)
+            self._peer_gemm(self.packed_x, w1, self.gate_up, self.identity_rows, role='fc1',
+                            compile_only=compile_only)
+            if not compile_only:
+                # Preserve the original BF16 X for DW and context reuse, and
+                # join every producer before reusing quantization scratch.
+                main.wait_stream(self._fp8_input_stream)
+        elif self.fp8_input_pipeline:
             main = torch.cuda.current_stream(self.device)
             if compile_only:
                 self._fp8_stage_quantized_input(compile_only=True)
@@ -1039,6 +1068,12 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.packed_output, self.permutation, self.pointer_tables[destination], self.status, self.num_blocks],
               [self.rows, self.h, self.chunk_tokens * self.k, self.size, self.block_m], compile_only)
 
+    def _fp8_stage_bf16_input(self, compile_only=False):
+        _peer(25, [self.pointer_tables['local_x'], self.source_rows, self.packed_x,
+                   self.status, self.num_blocks, self.quantized[self.h][0],
+                   self.quantized_scale_storage[self.h], self.fp8_input_ready],
+              [self.rows, self.h, self.chunk_tokens, self.k, self.size, 128, self.fp8_input_ctas], compile_only)
+
     def _fp8_stage_quantized_input(self, compile_only=False):
         _peer(19, [self.pointer_tables['local_qx'], self.pointer_tables['local_qx_scales'],
                    self.pointer_tables['local_x'], self.source_rows, self.quantized[self.h][0],
@@ -1053,6 +1088,8 @@ class PeerMoEPlan(NativeMoEPlan):
             self._fp8_bf_input_pending = False
 
     def _stage_input(self, compile_only=False, force_bf16=False, blocks_override=None):
+        if self.fp8_bf16_input_pipeline and not force_bf16:
+            return
         if self.fp8_input_pipeline and not force_bf16:
             if compile_only:
                 self._fp8_stage_quantized_input(compile_only=True)

@@ -116,6 +116,52 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             }
             if constexpr(cache_scores)__syncthreads();
         }
+    } else if constexpr (Op == PeerOperation::PackQuantizedInputTiles) {
+        static_assert(InputWidth>=128 && InputWidth<=8192 && InputWidth%128==0);
+        static_assert(InputBlockM>0 && InputTopk>0);
+        const int blocks=peer_pointer<int32_t>(p,4)[0];
+        if(blocks<0 || blocks>p.dim[0]/128) {
+            if(index==0)atomicOr(peer_pointer<int32_t>(p,3),2);
+            return;
+        }
+        constexpr int segments=InputWidth/128;
+        __shared__ uint64_t addresses[128];
+        float* scales=fp8_input_scale_tile<InputWidth>();
+        for(int tile=block_index;tile<blocks;tile+=gridDim.x) {
+            const int64_t base=int64_t(tile)*128;
+            if(threadIdx.x<128) {
+                const int route=peer_pointer<int32_t>(p,1)[base+threadIdx.x];
+                const int64_t source_row=route>=0?int64_t(route)/InputTopk:0;
+                const int owner=source_row/InputBlockM;
+                const bool valid=route>=0 && owner<p.dim[4];
+                if(route>=0 && !valid)atomicOr(peer_pointer<int32_t>(p,3),2);
+                addresses[threadIdx.x]=valid?peer_pointer<uint64_t>(p,0)[owner]+
+                    uint64_t(source_row%InputBlockM)*InputWidth*sizeof(__ppu_bfloat16):0;
+            }
+            __syncthreads();
+            const int lane=threadIdx.x&15;
+            for(int group=threadIdx.x/16;group<128*segments;group+=16) {
+                const int row=group/segments,segment=group%segments;
+                const auto* source=reinterpret_cast<const __ppu_bfloat16*>(addresses[row]);
+                uint4 raw{};
+                if(source)raw=*reinterpret_cast<const uint4*>(source+segment*128+lane*8);
+                const int64_t at=(base+row)*InputWidth+segment*128+lane*8;
+                *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,2)+at)=raw;
+                float scale;
+                *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,5)+at)=peer_quantize_eight(raw,scale);
+                if(lane==0)scales[row*(segments+1)+segment]=scale;
+            }
+            __syncthreads();
+            for(int item=threadIdx.x;item<128*segments;item+=blockDim.x) {
+                const int row=item%128,segment=item/128;
+                peer_pointer<float>(p,6)[int64_t(segment)*p.dim[0]+base+row]=scales[row*(segments+1)+segment];
+            }
+            // Every writer fences all three outputs before READY publication.
+            __threadfence();
+            __syncthreads();
+            if(threadIdx.x==0)tix::red_add_rel(peer_pointer<uint32_t>(p,7)+tile,1u);
+            __syncthreads();
+        }
     } else if constexpr (Op == PeerOperation::PackActiveQuantized) {
         const int64_t rows=int64_t(peer_pointer<int32_t>(p,4)[0])*128;
         if(rows<0 || rows>p.dim[0]) {

@@ -30,7 +30,8 @@ public:
         const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
         const bool tiled_quant=args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) ||
                                args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached);
-        const bool fused_quant = args.operation == int(PeerOperation::PackActiveQuantized) ||
+        const bool input_tiles = args.operation == int(PeerOperation::PackQuantizedInputTiles);
+        const bool fused_quant = input_tiles || args.operation == int(PeerOperation::PackActiveQuantized) ||
                                  args.operation == int(PeerOperation::ExpertLocalGradientsQuantized) ||
                                  tiled_quant;
         const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
@@ -41,9 +42,9 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
     deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}{}>(params);
 }}
 )", args.launch_args.block_dim.x, args.operation, args.operation,
-       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : tiled_quant ? args.params.dim[2] : 0,
+       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : (tiled_quant || input_tiles) ? args.params.dim[2] : 0,
        args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
-       tiled_quant ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
+       (tiled_quant || input_tiles) ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -52,7 +53,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PackQuantizedInputTiles));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -84,6 +85,19 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
                 reinterpret_cast<uintptr_t>(tensors[5].data_ptr())%16==0 &&
                 reinterpret_cast<uintptr_t>(tensors[8].data_ptr())%8==0);
             blocks=int64_t(get_num_sms())*4;
+            break;
+        case PeerOperation::PackQuantizedInputTiles:
+            schema(8,7);
+            DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192 &&
+                           dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 &&
+                           dims[4]<=64 && dims[5]==128 && dims[6]>0 && dims[6]<get_num_sms());
+            expect(0,dims[4],i64);expect(1,dims[0],i32);expect(2,dims[0]*dims[1],bf);
+            expect(3,1,i32);expect(4,1,i32);expect(5,dims[0]*dims[1],torch::kFloat8_e4m3fn);
+            expect(6,dims[0]*(dims[1]/128),torch::kFloat32);expect(7,dims[0]/128,i32);
+            DG_HOST_ASSERT(dims[0]*dims[1]<=INT32_MAX &&
+                           reinterpret_cast<uintptr_t>(tensors[2].data_ptr())%16==0 &&
+                           reinterpret_cast<uintptr_t>(tensors[5].data_ptr())%8==0);
+            blocks=dims[6];
             break;
         case PeerOperation::PackActiveQuantized:
             schema(7,6);
