@@ -135,7 +135,7 @@ class NativeMoEPlan:
         def allocate(name, shape, dtype=torch.bfloat16):
             if packed_rows is not None:
                 unused = {"gathered_x", "gathered_ids", "route_values", "local_values", "local_dy"}
-                if self.transport == "peer":
+                if self.transport == "peer" and not getattr(self, "fp8_peer_compute", False):
                     unused.add("group_ids")
                 if name in unused:
                     # These reference-transport matrices are replaced/deleted
