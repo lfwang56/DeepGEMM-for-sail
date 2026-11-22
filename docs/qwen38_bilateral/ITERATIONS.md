@@ -11226,3 +11226,83 @@ Keep established .02CPU/.012Native pair error limits.
     "passed": true
   }
 ]
+
+
+## Iteration77 — evaluate complete FP8 peer training at Qwen EP32
+
+76 all88 actual8 reference records passed with clean whole-host exits:
+BF16 skew regression, FP8 fused/separate return mutable-graph CPU STE
+and Native comparisons plus zero capacity. Primitive54 local byte/Torch
+routing checks also passed. Production defaults remain BF16.
+
+Extend the existing independent FP32 full-Qwen reference harness and
+full-capacity skew harness to the explicit staged-input FP8 Peer recipe,
+with accurate backend/mode fields and unchanged .13 FP8/.04 BF16 limits.
+At actualEP32 require full H8192/I2048/E16/K10 every-element graph
+checks and C4096 all-to-one-expert skew before completeT4096/C4096
+FWD+rematerialized BWD+FP32 DW timing. Compare otherwise identical
+FP8 Peer separate/fused returns against best FP8 DeepEP activeMN +
+cachedinteger quantization + early DY, and immutable best BF16Peer49.
+All quantization/transposes/gradient zeros remain inside timed work.
+Input communication is still staged; no bilateral input fusion claim.
+Single-GPU primitive timings were mixed, so require complete-step
+results before making a speedup claim.
+
+[
+  {
+    "phase": "qwen38-r2-fp8peer77-deepep-control-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 102.05262451171875,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-frozen49-bf16-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": 77.24907836914062,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-fused-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": 91.58281860351562,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-reference-c4096-skew-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer77-separate-r1",
+    "clean": true,
+    "backend": "peer",
+    "ms": 94.34469604492188,
+    "passed": null
+  }
+]

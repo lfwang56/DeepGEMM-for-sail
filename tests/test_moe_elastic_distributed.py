@@ -28,7 +28,8 @@ def relative_rms(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("deepep",), default="deepep")
+    parser.add_argument("--backend", choices=("deepep", "peer"), default="deepep")
+    parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--elastic-hybrid-mode", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dag-fusion", action="store_true")
@@ -102,6 +103,11 @@ def main():
                          dispatch_external=args.dispatch_external, dispatch_external_serial=args.serialize_external_dispatch,
                          producer_input_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas),
                          producer_local_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas)))
+    if args.backend == "peer":
+        plan_options["fuse_return"] = not args.no_fuse_return
+        if args.compute == "fp8":
+            plan_options = dict(fuse_dispatch=False, fuse_return=not args.no_fuse_return,
+                                expert_local_grad=True, reuse_packed_dy=True)
     plan = (DeepEPMoEPlan if args.backend == "deepep" else PeerMoEPlan)(h, i, e, k, t, chunk_tokens=args.chunk_tokens,
                         group=dist.group.WORLD, device=device, **plan_options,
                         ring_rows=args.ring_rows,
@@ -168,14 +174,18 @@ def main():
             ("y", "dx", "dw1", "dw2", "dscores"), compared, expected)}
         limit = .13 if args.compute == "fp8" else .04
         passed = all(math.isfinite(error) and error < limit for error in errors.values())
-        print(json.dumps(dict(case="large_distributed_elastic_reference", rank=rank,
+        print(json.dumps(dict(case="large_distributed_elastic_reference" if args.backend == "deepep" else "large_distributed_peer_reference", rank=rank,
             ranks=size, compute=args.compute, tolerance=limit, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens=t, chunk_tokens=args.chunk_tokens, pattern=pattern,
             graph=args.graph, relative_rms=errors, every_element_compared=True,
             ring_rows=args.ring_rows, packed_ring_rows=plan.rows,
             block_m=plan.block_m,
             route_window_count=plan.route_window_count,
-            backend="elastic", elastic_hybrid_mode=args.elastic_hybrid_mode, gemm_config=args.gemm_config, gate_up_layout=args.gate_up_layout,
+            backend="elastic" if args.backend == "deepep" else "peer",
+            elastic_hybrid_mode=args.elastic_hybrid_mode if args.backend == "deepep" else None,
+            peer_fp8_input_mode=getattr(plan, "fp8_input_mode", None),
+            fused_return=getattr(plan, "fuse_return", None),
+            gemm_config=args.gemm_config, gate_up_layout=args.gate_up_layout,
             dag_fusion=args.dag_fusion, dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return,
             input_copy_ilp=args.input_copy_ilp if args.backend == "peer" else None,
             inline_dispatch=getattr(plan, "inline_dispatch", None),

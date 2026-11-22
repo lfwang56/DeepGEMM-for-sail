@@ -25,6 +25,7 @@ from deep_gemm.training.layout import to_g8_weight, from_g8_weight
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
+    parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--intermediate", type=int, default=2048)
     parser.add_argument("--local-experts", type=int, default=16)
@@ -72,8 +73,8 @@ def main():
     parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
     args = parser.parse_args()
-    if args.compute == "fp8" and args.backends != ["deepep"]:
-        parser.error("FP8 full-skew validation requires the DeepEP transport")
+    if args.compute == "fp8" and any(backend not in ("deepep", "peer") for backend in args.backends):
+        parser.error("FP8 full-skew validation supports DeepEP or a single peer domain")
     if args.gemm_config is None and args.compute == "bf16":
         args.gemm_config = (256,64,64,64,2)
     if "peer" in args.backends and args.process_group_backend != "nccl":
@@ -154,6 +155,11 @@ def main():
                            dag_input_prefetch=args.dag_input_prefetch,
                            dag_backward=args.dag_backward, dag_direct_return=args.dag_direct_return)
             options["input_copy_ilp"] = args.input_copy_ilp
+            options["fuse_return"] = not args.no_fuse_return
+            if args.compute == "fp8":
+                options.update(fuse_dispatch=False, dispatch_producer=False,
+                               producer_input_aiu=False, producer_local_aiu=False,
+                               fuse_activation_backward=False, inline_dispatch=False)
         else:
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
