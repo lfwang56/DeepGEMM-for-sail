@@ -10125,3 +10125,44 @@ Failure tail:
 {"case": "idle_node_gate", "host": "e01-cn-2n550vu1t01-a0006", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
 python: can't open file '/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/run-quant66.py': [Errno 2] No such file or directory
 {"case": "idle_node_postflight", "host": "e01-cn-2n550vu1t01-a0006", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 2}
+
+
+## Iteration67 — corrected cached quantizer launch
+
+66 launch failed before compilation: helper was published at repository root,
+while command incorrectly named build/campaign/run-quant66.py. Preserve
+failed whole-host audit, correct command to root/run-quant66.py and rerun
+the unchanged66 C++ and bitwise/graph fixture.
+
+64 paired exact three-graph profiles: control121.719230ms versus
+async126.565480ms. Weight quantization26.903903->29.2738ms,
+DeepEP main12.271229->19.364288ms, weight transpose2.5809->4.368ms.
+Only2.633699ms weight quantization overlaps the DeepEP family, no
+weight-quant/GEMM overlap. Keep the serial path. The trace shows
+simultaneous work but not a step-time reduction.
+
+Add opt-in device operations29/30, retaining operation10 and all
+production-plan defaults. Each256-thread CTA loads its128x128 BF16
+block once using eight uint4 vectors per thread, retains packed words,
+reduces the unchanged block scale, converts with the same native
+E4M3 pair operation and division, and writes uint2 vectors. Two max
+strategies: four FP32 chains versus integer BF16 absolute-value bits
+(ignoring NaNs and retaining infinity). Restrict the active-row MN
+layout specialization to operations26--28; weight dimensions must not
+be interpreted as that layout flag. Params ABI unchanged.
+
+Validate every output byte/scale plus canaries against operation10
+with random/zero/nonfinite/subnormal/extreme BF16 inputs and changed
+weights under graph replay. Shapes include actual Qwen W1/W2 and
+both transposed weights. Isolated events only; no full-step promotion.
+
+{
+  "clean": false,
+  "reference_count": 0,
+  "every_reference_passed": false,
+  "measurements": [],
+  "scope": "isolated weight quantizer, no EP/full-step fusion speedup"
+}
+
+Failure tail:
+{"case": "idle_node_gate", "host": "e01-cn-2n550vu1t01-a0006", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": false, "processes": [{"gpu": 0, "pid": 3205466, "owned": false}, {"gpu": 1, "pid": 3205467, "owned": false}, {"gpu": 2, "pid": 3205468, "owned": false}, {"gpu": 3, "pid": 3205469, "owned": false}, {"gpu": 4, "pid": 3205470, "owned": false}, {"gpu": 5, "pid": 3205471, "owned": false}, {"gpu": 6, "pid": 3205472, "owned": false}, {"gpu": 7, "pid": 3205473, "owned": false}]}
