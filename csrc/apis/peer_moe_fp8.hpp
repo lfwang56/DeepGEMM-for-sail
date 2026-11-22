@@ -81,6 +81,14 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
         cfg = std::make_tuple(num_sms, 128, config[0], config[1], config[2], config[3], config[4],
             deep_gemm_fp8_common::get_smem_config(config[4], k, 128, config[0], config[1]));
     }
+    // Small-K two-stage heuristics may select the native N-stage expansion.
+    // This return wrapper currently preserves the regular mainloop only.
+    if (k <= 512 && std::get<6>(cfg) == 2) {
+        TORCH_CHECK(config.empty(), "FP8 peer return with K<=512 requires at least three stages");
+        std::get<6>(cfg) = 3;
+        std::get<7>(cfg) = deep_gemm_fp8_common::get_smem_config(
+            3, k, std::get<1>(cfg), std::get<2>(cfg), std::get<3>(cfg));
+    }
     const auto [sms, bm, bn, bk, wm, wn, stages, smem] = cfg;
     DG_HOST_ASSERT(bk == 128);
     using Stride = cute::Stride<int64_t, cute::Int<1>, int64_t>;

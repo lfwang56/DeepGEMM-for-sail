@@ -10994,3 +10994,97 @@ Keep established .02CPU/.012Native pair error limits.
     "passed": true
   }
 ]
+
+
+## Iteration75 — use the regular FP8 return mainloop for small K
+
+74 BF16 regression passed, metadata guard fixed. FP8 then reached
+JIT compilation: small K<=512 with two-stage heuristic selected the
+native N-stage kernel, which is explicitly outside this regular
+blockwise return wrapper. For automatic small-K configs, increase
+stages2->3 and recompute shared memory, retaining all other tile choices.
+Reject explicit unsupported two-stage small-K configs with a host error.
+Large Qwen K2048/4096/8192 configs are unchanged. Rebuild native and
+repeat54 local byte/Torch-routing checks before actual8 transport gates.
+
+73 BF16 full-skew regression passed all8ranks, but FP8 preparation
+failed a shape guard before peer payload work. Native bounded peer
+allocation intentionally creates an empty group_ids placeholder for
+BF16. Retaining its attribute in73 prevented allocate_route_windows
+from replacing it, so the window kernel rejected zero capacity.
+Preserve physical group metadata for the explicit FP8 peer recipe;
+BF16 keeps the prior allocation elision. No quantization/GEMM math
+change and no tolerance relaxation. Rerun all73 gates.
+
+72 repaired the scatter test control and independently checked its routing
+with Torch index_copy. All54 byte/canary/mutable graph checks passed.
+Single-GPU local fake-owner timings are mixed: FC2 native+scatter4.94557ms
+vs fused discard4.79350/keep5.16773; DX7.26651 vs7.96149/8.41655.
+No actual communication or complete-step benefit inferred from that signal.
+
+Permit a narrow explicit FP8 Peer recipe: staged BF16 input, active M128/
+split quantization with MN scales, separate backward kernels, BF16-input
+FP32 DW. Reject producer/DAG/cache/G8/overlap/helper combinations before
+allocation. Retain the dummy Native group IDs for the existing FP8 NoPad
+API with explicit GPU lengths. Refresh all weight quantizations inside
+FWD/BWD, use cached operation30 by default, and precompile pointwise
+operations with zero GPU lengths/offsets during cold warming. Preserve
+activation-fused prequantized inputs at FC2/DX boundaries rather than
+requantizing the BF16 output (which would alter the established recipe).
+
+Return-only fusion uses the new primitive for both forward output and DX,
+discarding the unneeded local return output exactly as the BF16 peer path.
+Backward expert-local score/gradient calculation uses locally retained
+FP8 rematerialized FC2 output through a regular local GEMM. Staged input
+can also use independent scatter as an otherwise identical control.
+No input/GEMM fusion yet. BF16 defaults preserve prior behavior.
+
+Gate a BF16 full-skew regression plus actualEP8 fused/separate FP8
+independent CPU quantized STE/native comparisons, every output/gradient,
+mutable inputs/weights/routes under graph replay and zero-capacity graphs.
+Keep established .02CPU/.012Native pair error limits.
+
+[
+  {
+    "phase": "qwen38-r2-fp8peer75-bf16-skew-regression-r1-attempt0",
+    "clean": true,
+    "backend": "peer",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer75-ep8-fused-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer75-ep8-fused-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer75-ep8-fused-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer75-ep8-fused-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8peer75-ep8-fused-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  }
+]
