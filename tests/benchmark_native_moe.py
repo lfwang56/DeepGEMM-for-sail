@@ -422,6 +422,7 @@ def main():
                     "hybrid_pair_forward_reused_last_backward": getattr(plan, "hybrid_pair_forward_reused_last_backward", None),
                     "hybrid_source_pipeline": getattr(plan, "hybrid_source_pipeline", None),
                     "hybrid_source_serialized": getattr(plan, "hybrid_source_serialized", None),
+                    "hybrid_share_fp8_weights": getattr(plan, "hybrid_share_fp8_weights", None),
                     "hybrid_tail_dw_overlap": getattr(plan, "hybrid_tail_dw_overlap", None),
                     "hybrid_tail_dw_serialized": getattr(plan, "hybrid_tail_dw_serialized", None),
                     "hybrid_deferred_dw1_scheduled_last_backward": getattr(plan, "hybrid_deferred_dw1_scheduled_last_backward", None),

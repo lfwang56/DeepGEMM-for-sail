@@ -43,6 +43,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
                  fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None,
                  fp8_input_cache_scales=None, reuse_forward_context=None, **kwargs):
+        self._shared_fp8_weights_ready=False
         self._pending_last_dw1=None
         self._defer_last_dw1_enabled=False
         # Optional CTA helper recipe; environment values allow the same large
@@ -642,6 +643,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fp8_peer_compute:
             self._fp8_prequantized_input = None
             self._fp8_backward = backward
+            if self._shared_fp8_weights_ready:
+                return
         if self.transpose_free_dgrad:
             self.w1_t, self.w2_t = w1, w2
             return

@@ -1,9 +1,21 @@
 """Two independent source-half contexts overlap pair collectives with local work."""
+from contextlib import contextmanager
 import torch
 import torch.distributed as dist
 from .native import _launch
 from .bf16 import _validate_accumulators
 from .peer import PeerMoEPlan
+
+
+@contextmanager
+def _weights_from_owner(plan):
+    inner=plan.remote_inner
+    previous=inner._shared_fp8_weights_ready
+    inner._shared_fp8_weights_ready=plan.hybrid_share_fp8_weights
+    try:
+        yield
+    finally:
+        inner._shared_fp8_weights_ready=previous
 
 
 def _mask(plan,ids,valid_tokens=None):
@@ -90,7 +102,8 @@ def forward(plan,x,ids,scores,w1,w2,valid_tokens):
         own=plan.inner.forward(x,own_mask,scores,w1,w2,valid_tokens)
         if not plan.hybrid_source_serialized:_join(plan,work)
         remote_mask=_mask(plan,plan.source_remote_ids)
-        remote=plan.remote_inner.forward(plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid)
+        with _weights_from_owner(plan):
+            remote=plan.remote_inner.forward(plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid)
         output=plan._reduce_pair(_pair_result(plan,own,remote),x.shape[0])
         tensors=(x,ids,scores,w1,w2,valid_tokens)
         plan._source_forward_fingerprint=PeerMoEPlan._context_fingerprint(*tensors)
@@ -134,9 +147,10 @@ def backward(plan,dy,x,ids,scores,w1,w2,valid_tokens,accumulators=None):
         own_dx,dw1,dw2,own_ds=_backward(plan.inner,reuse,dy,x,own_mask,scores,w1,w2,valid_tokens,accumulators)
         if not plan.hybrid_source_serialized:_join(plan,work)
         if not reuse:remote_mask=_mask(plan,plan.source_remote_ids)
-        remote_dx,dw1,dw2,remote_ds=_backward(plan.remote_inner,reuse,plan.source_remote_dy,
-            plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid,(dw1,dw2),
-            defer_dw1=reuse and plan.hybrid_tail_dw_overlap)
+        with _weights_from_owner(plan):
+            remote_dx,dw1,dw2,remote_ds=_backward(plan.remote_inner,reuse,plan.source_remote_dy,
+                plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid,(dw1,dw2),
+                defer_dw1=reuse and plan.hybrid_tail_dw_overlap)
         plan.hybrid_deferred_dw1_scheduled_last_backward=plan.remote_inner._pending_last_dw1 is not None
         if plan.hybrid_tail_dw_overlap:
             partials=(_pair_result(plan,own_dx,remote_dx),_pair_result(plan,own_ds,remote_ds))

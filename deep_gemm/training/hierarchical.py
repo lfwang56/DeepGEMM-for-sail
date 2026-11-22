@@ -86,7 +86,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  groups, chunk_tokens=128, device=None, check_errors=True, gradient_group=None,
-                 reuse_pair_context=None, source_pipeline=None, source_serialized=None, tail_dw_overlap=None, tail_dw_serialized=None, **peer_options):
+                 reuse_pair_context=None, source_pipeline=None, source_serialized=None, tail_dw_overlap=None, tail_dw_serialized=None, share_fp8_weights=None, **peer_options):
         if not isinstance(groups, HierarchicalGroups) or groups._closed:
             raise ValueError('create and retain live HierarchicalGroups before constructing a plan')
         if min(max_tokens, chunk_tokens) < 1 or 2 * max_tokens * topk > 2**31 - 1:
@@ -122,6 +122,8 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         source_serialized=flag(source_serialized,'DG_MOE_HYBRID_SOURCE_SERIALIZED')
         tail_dw_overlap=flag(tail_dw_overlap,'DG_MOE_HYBRID_TAIL_DW_OVERLAP')
         tail_dw_serialized=flag(tail_dw_serialized,'DG_MOE_HYBRID_TAIL_DW_SERIALIZED')
+        share_fp8_weights=flag(share_fp8_weights,'DG_MOE_HYBRID_SHARE_FP8_WEIGHTS')
+        self.hybrid_share_fp8_weights=share_fp8_weights
         self.hybrid_tail_dw_overlap=tail_dw_overlap
         self.hybrid_tail_dw_serialized=tail_dw_serialized
         self.hybrid_deferred_dw1_scheduled_last_backward=False
@@ -137,7 +139,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self._pair_forward_mask=None
         self._pair_forward_tensors=None
         description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                       groups.domain_size, compute, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized)
+                       groups.domain_size, compute, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized,share_fp8_weights)
         descriptions = [None] * self.size
         dist.all_gather_object(descriptions, description, group=self.group)
         if any(item != description for item in descriptions):
@@ -152,6 +154,8 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             raise ValueError('tail DW serialization requires deferred tail overlap')
         if tail_dw_overlap and compute!='bf16':
             raise ValueError('deferred tail DW currently requires BF16 compute')
+        if share_fp8_weights and (compute!='fp8' or not source_pipeline):
+            raise ValueError('shared FP8 weights require the native FP8 source pipeline')
         factor=1 if source_pipeline else 2
         self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, factor * max_tokens,
                                  chunk_tokens=factor * chunk_tokens, group=groups.domain,
@@ -165,6 +169,16 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         if source_pipeline:
             self.remote_inner=PeerMoEPlan(hidden,intermediate,local_experts,topk,max_tokens,
                 chunk_tokens=chunk_tokens,group=groups.domain,device=self.device,compute=compute,check_errors=False,**peer_options)
+            if share_fp8_weights:
+                if not self.inner.fp8_fused_weight_prepare:
+                    raise ValueError('shared FP8 weights require fused Q/QT preparation')
+                # Both source plans execute serially on the caller stream.
+                # The owning plan refreshes these weights on every invocation.
+                for name in ('w1','w2','w1_t','w2_t'):
+                    data,scales=self.inner.quantized[name]
+                    self.remote_inner.quantized[name]=(data,scales)
+                    self.remote_inner.buffers[name+'_fp8']=data
+                    self.remote_inner.buffers[name+'_scale']=scales
             self.buffers.update({'remote_inner_'+key:value for key,value in self.remote_inner.buffers.items()})
             self._source_pair_stream=torch.cuda.Stream(device=self.device)
 

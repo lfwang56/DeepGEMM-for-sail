@@ -93,7 +93,7 @@ if args.freeze_library:
                 raise RuntimeError('library changed while freezing: '+str(path))
     frozen_tests = library_parent / 'tests'
     frozen_tests.mkdir()
-    for test_name in ('train_moe_lm.py', 'train_moe_lm_distributed.py', 'evaluate_moe_lm.py', 'moe_distributed_utils.py'):
+    for test_name in ('train_moe_lm.py', 'train_moe_lm_distributed.py', 'evaluate_moe_lm.py', 'moe_distributed_utils.py', 'run_moe_lm_seeds.py'):
         shutil.copy2(root / 'tests' / test_name, frozen_tests / test_name)
     if lut_directory:
         frozen_lut = library_parent / 'runtime-lut'
@@ -123,7 +123,7 @@ if args.backend == "elastic":
         recipe += ["--fp8-active-quantization", "--fp8-mn-major-scales"]
         if args.fp8_async_weights:
             recipe.append("--fp8-async-weights")
-if args.backend == "peer" and args.compute == "fp8":
+if args.backend in ("peer", "hybrid") and args.compute == "fp8":
     recipe = ["--ring-rows", "65536", "--expert-local-grad", "--reuse-packed-dy"]
 fixed_route_seeds = {int(value) for value in args.fixed_route_seeds.split(",") if value}
 if args.dag_fusion:

@@ -15,7 +15,7 @@ import os
 import torch
 import torch.distributed as dist
 
-from deep_gemm.training import DeepEPMoEPlan
+from deep_gemm.training import DeepEPMoEPlan, NativeMoEPlan
 from deep_gemm.training.hierarchical import HierarchicalPeerMoEPlan, make_hierarchical_groups
 from moe_distributed_utils import destroy_training_process_group
 from test_moe_training import reference
@@ -29,6 +29,7 @@ def relative_rms(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--native-fp8-reference", action="store_true")
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--backend", choices=("deepep", "hybrid"), default="hybrid")
     parser.add_argument("--hybrid-domain-size", type=int, required=True)
@@ -128,6 +129,13 @@ def main():
         y = plan.forward(x, ids, scores, w1, w2, valid)
         return y, *plan.backward(dy, x, ids, scores, w1, w2, valid)
 
+    quantized_reference=None
+    if args.native_fp8_reference:
+        if args.compute!='fp8':raise ValueError('native FP8 oracle requires FP8 compute')
+        quantized_reference=NativeMoEPlan(h,i,e,k,size*t,chunk_tokens=args.chunk_tokens,
+            device=device,compute='fp8',check_errors=False)
+        oracle_x=all_x.to(device);oracle_dy=all_dy.to(device);oracle_scores=all_scores.to(device)
+        oracle_valid=torch.tensor(size*t,device=device,dtype=torch.int32)
     stream = torch.cuda.Stream(device)
     stream.wait_stream(torch.cuda.current_stream())
     graph = None
@@ -205,6 +213,27 @@ def main():
         dist.all_reduce(passed_tensor, op=dist.ReduceOp.MIN, group=reference_group)
         if not passed_tensor.item():
             raise AssertionError("at least one rank failed the independent reference")
+        if quantized_reference is not None:
+            oracle_ids=local_ids.to(device)
+            ny=quantized_reference.forward(oracle_x,oracle_ids,oracle_scores,w1,w2,oracle_valid)
+            ndx,ndw1,ndw2,nds=quantized_reference.backward(oracle_dy,oracle_x,oracle_ids,oracle_scores,w1,w2,oracle_valid)
+            torch.cuda.synchronize(device);quantized_reference.check()
+            quantized_totals=[]
+            for partial in (ny,ndx,nds):
+                total=partial.detach().cpu().contiguous()
+                dist.all_reduce(total,group=reference_group)
+                quantized_totals.append(total[local_slice].to(device))
+            expected_native=(quantized_totals[0],quantized_totals[1],ndw1,ndw2,quantized_totals[2])
+            native_errors={name:relative_rms(a,b) for name,a,b in zip(('y','dx','dw1','dw2','dscores'),outputs,expected_native)}
+            passed_native=all(math.isfinite(error) and error<.025 for error in native_errors.values())
+            print(json.dumps(dict(case='large_distributed_hybrid_reference',rank=rank,ranks=size,
+                compute='fp8',pattern=pattern,graph=args.graph,relative_rms=native_errors,
+                relative_rms_tolerance=.025,every_element_compared=True,
+                reference='Independent NativeMoEPlan FP8 local experts on all global inputs + CPU sum',
+                passed=passed_native)),flush=True)
+            passed_tensor=torch.tensor(int(passed_native));dist.all_reduce(passed_tensor,op=dist.ReduceOp.MIN,group=reference_group)
+            if not passed_tensor.item():raise AssertionError('hierarchy differs from independent FP8 Native oracle')
+            del ny,ndx,ndw1,ndw2,nds,expected_native,quantized_totals
         del rx, rp, rw1, rw2, ry, gx, gw1, gw2, gp, expected, totals
         gc.collect()
     del graph, outputs

@@ -94765,3 +94765,39 @@ before promoting the added precision path.
   "excluded": [],
   "raw_sha256": "06b605ec401b293b8a2c5a0cc5536e2a485b6ff82f29762e9f965ef974baa8b8"
 }
+
+## Iteration130 — share current FP8 Q/QT weights between source halves
+
+129passed448checks. The source pipeline owns two serial expert plans with
+identical current weights. Add an opt-in shared Q/QT storage set; the owning
+source refreshes it on every forward or rematerialized backward. The remote
+source skips only that invocation's redundant weight preparation, using a
+scoped private flag that is restored on success/failure. Matching live backward
+already reuses forward weights on BOTH baseline and fused paths; this change
+removes duplicate preparation introduced specifically by the two-source wrapper.
+No inter-step stale-weight cache, compute overlap or numerical recipe change.
+Require native FP8 source pipeline plus fused Q/QT preparation. BF16 and ordinary
+FP8 peer defaults remain unchanged. Expose the flag in benchmark metadata.
+
+Extend the public-text training launcher/checkpoint evaluator to the new FP8
+hierarchy and freeze the seed-runner itself. Add independent per-rank native
+FP8 expert evaluation on all global source tokens plus CPU sums. This separates
+hierarchy errors (.025 tolerance) from FP8-vs-FP32 numerical error (.12).
+Existing context comparisons retain .0001. Exercise current weights, one-rank
+mutations, fallback, preparation retry, mutable graphs, and BF16 tail regression.
+Seven gated EP8phases require288focused plus120CPU/native-oracle records,
+and an eight-rank12-update/full-model gradient-check smoke test.
+
+{
+  "passed": false,
+  "focused": 288,
+  "independent_reference_records": 120,
+  "lm_finished": 0,
+  "lm_references": 8,
+  "clean_lm": false,
+  "accepted": 6,
+  "excluded": [
+    "qwen38-r2-sharedfp130-ep8-lm-smoke"
+  ],
+  "raw_sha256": "0b717ef5860c8f486284dc4db9c8a7e6cda15e1b3ab61b934b6881133d341270"
+}

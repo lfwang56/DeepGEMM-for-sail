@@ -164,18 +164,18 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
     path.parent.mkdir(parents=True, exist_ok=True)
     common = dict(configuration=asdict(config), manifest=manifest, compute=options.compute,
                   backend="native" if options.backend == "collective" else options.backend,
-                  evaluation_backend="peer" if options.backend == "hybrid" else "native" if options.backend in ("collective", "elastic") or (options.backend == "peer" and options.compute == "fp8") else options.backend,
+                  evaluation_backend="peer" if options.backend == "hybrid" and options.compute == "bf16" else "native" if options.backend in ("collective", "elastic") or (options.backend in ("peer", "hybrid") and options.compute == "fp8") else options.backend,
                   hybrid_domain_size=options.hybrid_domain_size if options.backend == "hybrid" else None,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
-                                    fuse_dispatch=not (options.backend == "peer" and options.compute == "fp8"),
+                                    fuse_dispatch=not (options.backend in ("peer", "hybrid") and options.compute == "fp8"),
                                     fuse_return=not options.no_fuse_return,
                                     fp8_transpose_quantized_weights=os.environ.get("DG_MOE_FP8_TRANSPOSE_QUANTIZED_WEIGHTS", "0") == "1",
                                     reuse_forward_context=os.environ.get("DG_MOE_REUSE_FORWARD_CONTEXT", "0") == "1",
                                     deepep_comm_sms=options.deepep_comm_sms,
-                                    fp8_active_quantization=options.fp8_active_quantization or (options.backend == "peer" and options.compute == "fp8"),
-                                    fp8_mn_major_scales=options.fp8_mn_major_scales or (options.backend == "peer" and options.compute == "fp8"),
-                                    fp8_weight_quantization=2 if options.backend == "peer" and options.compute == "fp8" else None,
+                                    fp8_active_quantization=options.fp8_active_quantization or (options.backend in ("peer", "hybrid") and options.compute == "fp8"),
+                                    fp8_mn_major_scales=options.fp8_mn_major_scales or (options.backend in ("peer", "hybrid") and options.compute == "fp8"),
+                                    fp8_weight_quantization=2 if options.backend in ("peer", "hybrid") and options.compute == "fp8" else None,
                                     fp8_async_weight_quantization=options.fp8_async_weights,
                                     fuse_fc1_activation=options.fuse_fc1_activation,
                                     fuse_dhidden_scores=options.fuse_dhidden_scores,
@@ -326,7 +326,7 @@ def main():
         if options.peer_fc1_config:
             plan_options.setdefault("gemm_configs", {})["fc1"] = options.peer_fc1_config
         plan_options["fuse_return"] = not options.no_fuse_return
-        if options.backend == "peer" and options.compute == "fp8":
+        if options.backend in ("peer", "hybrid") and options.compute == "fp8":
             plan_options.update(fuse_dispatch=False, expert_local_grad=True, reuse_packed_dy=True,
                                 fp8_weight_quantization=2)
     if options.backend == "elastic":
