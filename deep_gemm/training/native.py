@@ -508,7 +508,11 @@ class NativeMoEPlan:
         self._return_routes()
 
     @torch.no_grad()
-    def forward(self, x, ids, scores, w1, w2, valid_tokens):
+    def forward(self, x, ids, scores, w1, w2, valid_tokens, *, _chunk_output_callback=None):
+        if _chunk_output_callback is not None:
+            if not callable(_chunk_output_callback):raise TypeError('chunk callback must be callable')
+            if self.transport!='peer' or getattr(self,'ring_rows',None) is None:
+                raise ValueError('chunk callbacks require bounded peer source execution')
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         with self._execution():
             self.prepare(w1, w2)
@@ -521,6 +525,8 @@ class NativeMoEPlan:
                 self._chunk_forward(w1, w2)
                 _launch(6, [self.local_values, scores, output],
                         [self.chunk_tokens, self.h, self.k, x.shape[0], start, 1])
+                if _chunk_output_callback is not None:
+                    _chunk_output_callback(output,start,max(0,min(self.chunk_tokens,x.shape[0]-start)))
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             return output

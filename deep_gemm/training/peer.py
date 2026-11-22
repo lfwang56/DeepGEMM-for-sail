@@ -1378,7 +1378,7 @@ class PeerMoEPlan(NativeMoEPlan):
             return True
 
     @torch.no_grad()
-    def forward(self, x, ids, scores, w1, w2, valid_tokens):
+    def forward(self, x, ids, scores, w1, w2, valid_tokens, *, _chunk_output_callback=None):
         if self._pending_last_dw1 is not None:
             raise RuntimeError('complete deferred DW1 before reusing this workspace')
         with self._execution():
@@ -1388,17 +1388,21 @@ class PeerMoEPlan(NativeMoEPlan):
             if self.reuse_forward_context:
                 self.forward_context_reused_windows.zero_()
                 self.forward_context_reused_rows.zero_()
-            output = super().forward(x, ids, scores, w1, w2, valid_tokens)
+            output = super().forward(x, ids, scores, w1, w2, valid_tokens, _chunk_output_callback=_chunk_output_callback)
             if self.reuse_forward_context:
                 self._forward_context_fingerprint = self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens)
                 self._forward_context_available = True
             return output
 
     @torch.no_grad()
-    def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None, *, _defer_last_dw1=False):
+    def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None, *, _defer_last_dw1=False, _chunk_output_callback=None):
         if self._pending_last_dw1 is not None:
             raise RuntimeError('complete deferred DW1 before reusing this workspace')
         if type(_defer_last_dw1) is not bool:raise TypeError('_defer_last_dw1 must be bool')
+        if _chunk_output_callback is not None:
+            if not callable(_chunk_output_callback):raise TypeError('chunk callback must be callable')
+            if self.ring_rows is None or not self.expert_local_grad or self.wgrad_overlap!="none" or _defer_last_dw1:
+                raise ValueError('chunk callbacks require bounded serial source gradients without deferred DW')
         if _defer_last_dw1 and (self.compute!='bf16' or self.ring_rows is None
                 or not self.expert_local_grad or not self.reuse_forward_context or self.wgrad_overlap!='none'):
             raise ValueError('deferred DW1 requires serial routed BF16 live-context gradients')
@@ -1433,6 +1437,8 @@ class PeerMoEPlan(NativeMoEPlan):
                     self._route_chunk(x, ids, valid_tokens, start, zero_values=not self.expert_local_grad)
                 if self.ring_rows is not None:
                     self._backward_windows(dy, scores, w1, w2, dw1, dw2, dx, dscores, start)
+                    if _chunk_output_callback is not None:
+                        _chunk_output_callback(dx,dscores,start,max(0,min(self.chunk_tokens,x.shape[0]-start)))
                     continue
                 self._chunk_forward(w1, w2, pack_input=True, return_output=not self.expert_local_grad)
                 dims = [self.chunk_tokens, self.h, self.k, x.shape[0], start]

@@ -102,9 +102,18 @@ def forward(plan,x,ids,scores,w1,w2,valid_tokens):
         own=plan.inner.forward(x,own_mask,scores,w1,w2,valid_tokens)
         if not plan.hybrid_source_serialized:_join(plan,work)
         remote_mask=_mask(plan,plan.source_remote_ids)
+        reducer=None
+        if plan.hybrid_chunk_reduce:
+            from .hierarchical_chunk_reduce import ChunkReductions
+            reducer=ChunkReductions(plan,(own,))
         with _weights_from_owner(plan):
-            remote=plan.remote_inner.forward(plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid)
-        output=plan._reduce_pair(_pair_result(plan,own,remote),x.shape[0])
+            remote=plan.remote_inner.forward(plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid,
+                _chunk_output_callback=reducer.forward if reducer is not None else None)
+        if reducer is not None:
+            output=reducer.finish(x.shape[0])[0]
+            plan.hybrid_chunk_reduce_calls_last_forward=reducer.calls
+        else:
+            output=plan._reduce_pair(_pair_result(plan,own,remote),x.shape[0])
         tensors=(x,ids,scores,w1,w2,valid_tokens)
         plan._source_forward_fingerprint=PeerMoEPlan._context_fingerprint(*tensors)
         plan._source_forward_tensors=tensors
@@ -114,12 +123,12 @@ def forward(plan,x,ids,scores,w1,w2,valid_tokens):
         return output
 
 
-def _backward(inner,reuse,dy,x,ids,scores,w1,w2,valid,accumulators,defer_dw1=False):
+def _backward(inner,reuse,dy,x,ids,scores,w1,w2,valid,accumulators,defer_dw1=False,chunk_callback=None):
     previous=inner.reuse_forward_context
     if not reuse:
         inner.reuse_forward_context=False
         inner._forward_context_available=False
-    try:return inner.backward(dy,x,ids,scores,w1,w2,valid,accumulators,_defer_last_dw1=defer_dw1)
+    try:return inner.backward(dy,x,ids,scores,w1,w2,valid,accumulators,_defer_last_dw1=defer_dw1,_chunk_output_callback=chunk_callback)
     finally:inner.reuse_forward_context=previous
 
 
@@ -147,12 +156,21 @@ def backward(plan,dy,x,ids,scores,w1,w2,valid_tokens,accumulators=None):
         own_dx,dw1,dw2,own_ds=_backward(plan.inner,reuse,dy,x,own_mask,scores,w1,w2,valid_tokens,accumulators)
         if not plan.hybrid_source_serialized:_join(plan,work)
         if not reuse:remote_mask=_mask(plan,plan.source_remote_ids)
+        reducer=None
+        if plan.hybrid_chunk_reduce:
+            from .hierarchical_chunk_reduce import ChunkReductions
+            reducer=ChunkReductions(plan,(own_dx,own_ds))
         with _weights_from_owner(plan):
             remote_dx,dw1,dw2,remote_ds=_backward(plan.remote_inner,reuse,plan.source_remote_dy,
                 plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid,(dw1,dw2),
-                defer_dw1=reuse and plan.hybrid_tail_dw_overlap)
+                defer_dw1=reuse and plan.hybrid_tail_dw_overlap,
+                chunk_callback=reducer.backward if reducer is not None else None)
         plan.hybrid_deferred_dw1_scheduled_last_backward=plan.remote_inner._pending_last_dw1 is not None
-        if plan.hybrid_tail_dw_overlap:
+        if reducer is not None:
+            reduced_dx,reduced_ds=reducer.finish(x.shape[0])
+            plan.hybrid_chunk_reduce_calls_last_backward=reducer.calls
+            result=(reduced_dx,dw1,dw2,reduced_ds)
+        elif plan.hybrid_tail_dw_overlap:
             partials=(_pair_result(plan,own_dx,remote_dx),_pair_result(plan,own_ds,remote_ds))
             work,outputs=_start_reduce(plan,partials)
             if plan.hybrid_tail_dw_serialized:_join(plan,work)

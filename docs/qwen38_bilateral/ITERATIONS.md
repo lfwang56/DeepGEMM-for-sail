@@ -94829,3 +94829,35 @@ independent FP32/native oracles,BF16 tail regressions and full-model smoke.
   "excluded": [],
   "raw_sha256": "7ca4fd77ec36dbe568937538f523be7db5a85e63819c2fb01a15d33c40b7266d"
 }
+
+## Iteration132 — pipeline output reductions across source chunks
+
+Physical128tail overlap hid only fractions of a millisecond and did not
+improve16K. Its source-overlap profile spans303.85ms with29.44ms pair
+all-gather and22.92ms BF16pair reduce-scatter kernel sums. Input gather is
+already overlapped; the output reductions remain exposed at source end.
+
+Add private completed-chunk callbacks to bounded peer FWD/BWD. On each
+remote source chunk completion,build the matching own/remote partials and
+queue paired output or dX/dScore reduce-scatter on the auxiliary stream.
+Continue computing the next remote chunk on main,then join all reductions
+before returning. Each chunk owns its communication buffers; final short
+chunks,padded local inputs and output lifetimes are explicit. DW/dGrad stay
+serial on main. Reject combining this opt-in with deferred tail DW.
+
+An exact serialized control uses identical chunks,precision and operators,
+joining after each reduction. Support BF16direct/producer and FP8shared
+Q/QT source plans. Global recipe agreement includes both chunk-reduce flags.
+No quantization,expert layout,weight preparation or timing scope change.
+Seven EP8phases require480focused context/mutation/graph checks and72
+independent FP32/native quantized references. Physical full-layer timing
+and actual overlap/resource inflation remain necessary before selection.
+
+{
+  "passed": true,
+  "focused": 480,
+  "independent_fp32_reference_records": 72,
+  "accepted": 7,
+  "excluded": [],
+  "raw_sha256": "5f950de7e67c249fa1074b7eadaea14985b5187ffed9b058f13b12895479a1ab"
+}
