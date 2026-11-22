@@ -61262,3 +61262,58 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0003", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 4002451, "start_ticks": "219193523"}, {"pid": 4064235, "start_ticks": "219217038"}, {"pid": 4066370, "start_ticks": "219217810"}, {"pid": 4068326, "start_ticks": "219218568"}, {"pid": 4069917, "start_ticks": "219219265"}, {"pid": 4071500, "start_ticks": "219219942"}, {"pid": 4073482, "start_ticks": "219220709"}, {"pid": 4075058, "start_ticks": "219221391"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+## Iteration122 — reuse a matching two-domain forward context
+
+The prior hierarchical backward allocates new masked IDs and repeats
+pairwise activation/ID/score all-gathers, invalidating the domain-local
+forward context. Add opt-in DG_MOE_HYBRID_REUSE_PAIR_CONTEXT=1 requiring
+inner live-context reuse. Retain only the last matching pair inputs,
+masked IDs and inner activation context. Fingerprint original tensor
+storage/version/shape and confirm that the inner context still matches.
+Agree across the full world using its existing CPU Gloo metadata group
+before skipping any pair payload collectives. A one-rank mutation must
+invalidate both domains. No token payload moves through CPU metadata.
+
+Consume the pair context before backward. On fallback, rebuild pair
+inputs and temporarily disable inner context reuse so its ordinary
+backward rematerializes once, including backward-only graph capture.
+Always restore the inner setting. A new dispatch invalidates any old
+pair context before its side effects. Do not retain stale forward inputs
+across calls. Domain partial rounding and BF16 DW precision stay fixed.
+
+Three single-host EP8 phases are correctness evidence for TWO LOGICAL
+4-rank domains, not physical cross-domain performance:88focused records
+cover matching live context,one-rank x/score/ID/weight mutations,
+overwritten and consumed contexts,backward-only graph,and mutable full
+multi-chunk graphs.48independent FP32 CPU-reference records cover
+balanced/masked,duplicate/skewed,reversed routes in eager and graphs.
+Actual cross-domain EP64 timing remains a separate gate on eight idle
+hosts in two physical domains. Stable114 is unchanged.
+
+{
+  "passed": false,
+  "audited": {
+    "phases": [
+      {
+        "name": "qwen38-r2-hybridctx122-ep8-focused-attempt0",
+        "clean": false,
+        "hosts": [
+          "e01-cn-2n550vu1t02-a0007"
+        ],
+        "metrics": [],
+        "reference_record_count": 0,
+        "reasons": [
+          "launch-qwen38-r2-hybridctx122-ep8-focused-attempt0-node227.log: postflight not clean",
+          "launch-qwen38-r2-hybridctx122-ep8-focused-attempt0-node227.log: local ranks failed"
+        ]
+      }
+    ],
+    "accepted": [],
+    "excluded": [
+      "qwen38-r2-hybridctx122-ep8-focused-attempt0"
+    ]
+  },
+  "focused_records": [],
+  "reference_records": []
+}

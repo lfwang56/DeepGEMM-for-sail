@@ -7,6 +7,7 @@ No token payload is transferred through the CPU metadata process group.
 from dataclasses import dataclass, field
 from datetime import timedelta
 import threading
+import os
 
 import torch
 import torch.distributed as dist
@@ -76,14 +77,16 @@ def make_hierarchical_groups(domain_size, metadata_group):
 class HierarchicalPeerMoEPlan(NativeMoEPlan):
     """Pairwise inter-domain AG/RS plus an ordinary domain-local PeerMoEPlan.
 
-    Backward rematerializes both pairwise dispatch and the complete inner MoE.
-    Domain partials are BF16-rounded before reduction. This can differ from a
+    Optional live-context reuse retains the matching pair inputs and inner
+    activations from forward. Otherwise backward rematerializes both dispatch
+    and the inner MoE. Domain partials are BF16-rounded before reduction. This can differ from a
     flat dispatch/combine backend; validate both gradients and model quality.
     """
     transport = 'hierarchical_peer'
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
-                 groups, chunk_tokens=128, device=None, check_errors=True, gradient_group=None, **peer_options):
+                 groups, chunk_tokens=128, device=None, check_errors=True, gradient_group=None,
+                 reuse_pair_context=None, **peer_options):
         if not isinstance(groups, HierarchicalGroups) or groups._closed:
             raise ValueError('create and retain live HierarchicalGroups before constructing a plan')
         if min(max_tokens, chunk_tokens) < 1 or 2 * max_tokens * topk > 2**31 - 1:
@@ -100,8 +103,21 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         if self.device.index is None:
             self.device = torch.device('cuda', torch.cuda.current_device())
         self._lock, self._stream, self._prepared = threading.RLock(), None, False
+        if reuse_pair_context is None:
+            raw=os.environ.get('DG_MOE_HYBRID_REUSE_PAIR_CONTEXT','0')
+            if raw not in ('0','1'):
+                raise ValueError('DG_MOE_HYBRID_REUSE_PAIR_CONTEXT must be0or1')
+            reuse_pair_context=raw=='1'
+        if type(reuse_pair_context) is not bool:
+            raise TypeError('reuse_pair_context must be bool')
+        self.hybrid_reuse_pair_context=reuse_pair_context
+        self.hybrid_pair_forward_reused_last_backward=False
+        self._pair_forward_available=False
+        self._pair_forward_fingerprint=None
+        self._pair_forward_mask=None
+        self._pair_forward_tensors=None
         description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                       groups.domain_size, repr(sorted(peer_options.items())))
+                       groups.domain_size, repr(sorted(peer_options.items())),reuse_pair_context)
         descriptions = [None] * self.size
         dist.all_gather_object(descriptions, description, group=self.group)
         if any(item != description for item in descriptions):
@@ -109,6 +125,9 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, 2 * max_tokens,
                                  chunk_tokens=2 * chunk_tokens, group=groups.domain,
                                  device=self.device, check_errors=False, **peer_options)
+        if reuse_pair_context and not self.inner.reuse_forward_context:
+            self.inner.close()
+            raise ValueError('pair context reuse requires domain-local forward context reuse')
         self.status = self.inner.status
         self.buffers = {'inner_' + key: value for key, value in self.inner.buffers.items()}
 
@@ -178,6 +197,11 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             self._finish_preparation(error)
 
     def _dispatch_pair(self, x, ids, scores, valid_tokens):
+        # Any new dispatch overwrites pair inputs and invalidates the previous
+        # live forward, even when a later launch or collective fails.
+        self._pair_forward_available=False
+        self._pair_forward_tensors=None
+        self._pair_forward_mask=None
         _launch(13, [x, ids, self.send_x, self.send_ids, valid_tokens, self.status],
                 [x.shape[0], self.max_tokens, self.h, self.k, 0])
         self.send_scores.zero_()
@@ -195,6 +219,22 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
                  & (self.pair_ids < (self.groups.domain_id + 1) * domain_experts))
         return torch.where(local, self.pair_ids - self.groups.domain_id * domain_experts, -1)
 
+    def _matching_pair_forward(self, tensors):
+        if not self.hybrid_reuse_pair_context:
+            return False
+        fingerprint=PeerMoEPlan._context_fingerprint(*tensors)
+        local=(self._pair_forward_available and self._pair_forward_fingerprint==fingerprint
+               and self._pair_forward_mask is not None and self.inner._forward_context_available)
+        if local:
+            local=(self.inner._forward_context_fingerprint==PeerMoEPlan._context_fingerprint(
+                self.pair_x,self._pair_forward_mask,self.pair_scores,tensors[3],tensors[4],self.inner_valid))
+        # The metadata group is explicitly Gloo/CPU, including capture-time
+        # agreement. A mutation on one rank must invalidate BOTH domains before
+        # any rank skips GPU pair collectives. These decisions are not replayed.
+        decisions=[None]*self.size
+        dist.all_gather_object(decisions,bool(local),group=self.group)
+        return all(decisions)
+
     def _reduce_pair(self, partial, actual_tokens):
         # Fresh allocation: later layer calls must not overwrite autograd outputs.
         output = torch.empty_like(partial[:self.max_tokens])
@@ -211,6 +251,12 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             masked = self._dispatch_pair(x, ids, scores, valid_tokens)
             partial = self.inner.forward(self.pair_x, masked, self.pair_scores, w1, w2, self.inner_valid)
             output = self._reduce_pair(partial, x.shape[0])
+            if self.hybrid_reuse_pair_context:
+                tensors=(x,ids,scores,w1,w2,valid_tokens)
+                self._pair_forward_fingerprint=PeerMoEPlan._context_fingerprint(*tensors)
+                self._pair_forward_tensors=tensors
+                self._pair_forward_mask=masked
+                self._pair_forward_available=True
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             return output
@@ -225,12 +271,28 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
-            masked = self._dispatch_pair(x, ids, scores, valid_tokens)
+            reuse=self._matching_pair_forward((x,ids,scores,w1,w2,valid_tokens))
+            masked=self._pair_forward_mask if reuse else self._dispatch_pair(x,ids,scores,valid_tokens)
+            self.hybrid_pair_forward_reused_last_backward=reuse
+            # Consume the live pair context before any backward side effect.
+            self._pair_forward_available=False
+            self._pair_forward_tensors=None
+            self._pair_forward_mask=None
             self.send_dy.zero_()
             self.send_dy[:x.shape[0]].copy_(dy)
             dist.all_gather_into_tensor(self.pair_dy, self.send_dy, group=self.groups.pair)
-            dx, dw1, dw2, ds = self.inner.backward(self.pair_dy, self.pair_x, masked,
-                        self.pair_scores, w1, w2, self.inner_valid, accumulators)
+            # A fallback must rematerialize on every rank, including a
+            # backward-only graph. Temporarily disable reuse so the ordinary
+            # inner backward supplies that rematerialization exactly once.
+            previous_reuse=self.inner.reuse_forward_context
+            if not reuse:
+                self.inner.reuse_forward_context=False
+                self.inner._forward_context_available=False
+            try:
+                dx, dw1, dw2, ds = self.inner.backward(self.pair_dy, self.pair_x, masked,
+                            self.pair_scores, w1, w2, self.inner_valid, accumulators)
+            finally:
+                self.inner.reuse_forward_context=previous_reuse
             result = self._reduce_pair(dx, x.shape[0]), dw1, dw2, self._reduce_pair(ds, x.shape[0])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
