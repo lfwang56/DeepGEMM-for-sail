@@ -33,6 +33,7 @@ public:
         bool cta_probe = false;
         bool output_tile_range = false;
         int b_padding_bytes = 0;
+        int tsm_load_order = 0;
     };
 
     struct Args {
@@ -93,7 +94,9 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
             args.launch_info.cta_probe ? ", unsigned long long* cta_probe"
                 : args.launch_info.output_tile_range ? ", const uint2 tile_range" : "",
             args.launch_info.cta_probe ? "const unsigned long long cta_begin = __ppu_read_clock64();" : "",
-            args.launch_info.b_padding_bytes ? fmt::format(", {}", args.launch_info.b_padding_bytes) : "",
+            args.launch_info.tsm_load_order
+                ? fmt::format(", {}, {}", args.launch_info.b_padding_bytes, args.launch_info.tsm_load_order)
+                : args.launch_info.b_padding_bytes ? fmt::format(", {}", args.launch_info.b_padding_bytes) : "",
             args.launch_info.output_tile_range ? ", tile_range.x, tile_range.y" : "",
             args.launch_info.cta_probe ?
                 "__syncthreads(); if (threadIdx.x == 0) { "
@@ -119,6 +122,8 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const bool device_lengths = false,
     const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
+    const int tsm_load_order = get_env<int>("DG_BF16_WGRAD_TSM_LOAD_ORDER", 0);
+    DG_HOST_ASSERT(tsm_load_order >= 0 && tsm_load_order <= 2);
     const int b_padding_bytes = get_env<int>("DG_BF16_WGRAD_B_PAD_BYTES", 0);
     DG_HOST_ASSERT(b_padding_bytes >= 0 && b_padding_bytes <= 16384 && b_padding_bytes % 1024 == 0);
     const int tile_chunk = device_lengths ? get_env<int>("DG_BF16_WGRAD_TILE_CHUNK", 0) : 0;
@@ -145,10 +150,11 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     std::string kernel_name = tile_chunk ? "bf16_k_grouped_gemm_tile_range"
         : cta_probe.has_value() ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
     if (b_padding_bytes) kernel_name += fmt::format("_bpad{}", b_padding_bytes);
+    if (tsm_load_order) kernel_name += fmt::format("_tsmorder{}", tsm_load_order);
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,
-                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0, b_padding_bytes},
+                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0, b_padding_bytes, tsm_load_order},
         .launch_args = {get_grid_shape(num_sms), dim3(block_size), smem_size},
         .kernel_params = {
             .a_ptr = a.data_ptr(),

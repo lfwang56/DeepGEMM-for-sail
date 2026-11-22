@@ -22,7 +22,7 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
-          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0>
+          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0>
 __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args,
         uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u) {
     static_assert(is_k_grouped_contiguous(kGemmType), "K-grouped GEMM type required");
@@ -33,6 +33,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                   "BLOCK_K must divide the 128-element K-group alignment");
     static_assert(WarpMap <= 3, "Unknown MMA warp ownership map");
     static_assert(BPadBytes % 1024 == 0 && BPadBytes <= 16384);
+    static_assert(TsmLoadOrder <= 2);
 
     constexpr uint32_t STRIDE_CM = SHAPE_N;
     constexpr uint32_t STRIDE_CG = SHAPE_M * SHAPE_N;
@@ -201,8 +202,26 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
 
         cp_async_wait<kNumStages-2>();
         __syncthreads();
-        copy(smem_tiled_copy_A, tCsA_p(_,_,Int<0>{}), tCrA_copy_view(_,_,Int<0>{}));
-        copy(smem_tiled_copy_B, tCsB_p(_,_,Int<0>{}), tCrB_copy_view(_,_,Int<0>{}));
+        // Warp-uniform load order changes only independent TSM requests.
+        // MMA ownership, synchronization, and complete-K accumulation stay fixed.
+        auto load_ab = [&](auto fragment) {
+            if constexpr (TsmLoadOrder != 0) {
+                const bool reverse = (warp_idx & (TsmLoadOrder == 1 ? 1 : 2)) != 0;
+                if (reverse) {
+                    copy(smem_tiled_copy_B, tCsB_p(_,_,fragment), tCrB_copy_view(_,_,fragment));
+                    asm volatile("" ::: "memory");
+                    copy(smem_tiled_copy_A, tCsA_p(_,_,fragment), tCrA_copy_view(_,_,fragment));
+                } else {
+                    copy(smem_tiled_copy_A, tCsA_p(_,_,fragment), tCrA_copy_view(_,_,fragment));
+                    asm volatile("" ::: "memory");
+                    copy(smem_tiled_copy_B, tCsB_p(_,_,fragment), tCrB_copy_view(_,_,fragment));
+                }
+            } else {
+                copy(smem_tiled_copy_A, tCsA_p(_,_,fragment), tCrA_copy_view(_,_,fragment));
+                copy(smem_tiled_copy_B, tCsB_p(_,_,fragment), tCrB_copy_view(_,_,fragment));
+            }
+        };
+        load_ab(Int<0>{});
 
         // Peel the first K tile as in actlize so the zero accumulator can
         // become overwrite MMA instructions instead of explicit register clears.
@@ -220,8 +239,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                 // register fragments; only independent request issue moves.
                 const auto k_block_next = (k_block + Int<1>{}) % K_BLOCK_MAX;
                 if constexpr (!AiuBeforeTsm) {
-                    copy(smem_tiled_copy_A, tCsA_p(_,_,k_block_next), tCrA_copy_view(_,_,k_block_next));
-                    copy(smem_tiled_copy_B, tCsB_p(_,_,k_block_next), tCrB_copy_view(_,_,k_block_next));
+                    load_ab(k_block_next);
                 }
 
                 // Refill the free stage before consuming the current register fragment.
@@ -242,8 +260,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                 // actlize AIU_BEFORE_TSMLD=true for a 256x256 CTA tile.
                 // Prefetch the next register fragment, then consume this one.
                 if constexpr (AiuBeforeTsm) {
-                    copy(smem_tiled_copy_A, tCsA_p(_,_,k_block_next), tCrA_copy_view(_,_,k_block_next));
-                    copy(smem_tiled_copy_B, tCsB_p(_,_,k_block_next), tCrB_copy_view(_,_,k_block_next));
+                    load_ab(k_block_next);
                 }
                 CUTLASS_PRAGMA_UNROLL
                 for (int k_loop = 0; k_loop < K_ATOM_PER_COPY; ++k_loop) {

@@ -4094,3 +4094,327 @@ Whole-host-clean signal: True.
     "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
   }
 ]
+
+
+## Iteration52 — stagger independent A/B TSM loads across physical warps
+
+Accepted stage3 Asight Compute DW1 counters show elevated TSM load group
+conflicts. Padding B alone (51) reduced local DW1+DW2+zero by only1.36%.
+Add optional DG_BF16_WGRAD_TSM_LOAD_ORDER=1/2 to reverse A/B TSM request
+order on alternating warps/warp pairs, retaining MMA ownership, every K
+accumulation, barriers, beta=1 and output store order. A compiler memory
+clobber separates independent operand reads. Default0 retains original
+request order and generated shader string; positive orders use unique JIT
+kernel names. GPU KGroupedGemmArgs ABI is unchanged.
+
+Reference gates use identical packed inputs, nonzero initial FP32 gradients,
+both full Qwen WGrad templates, changed input/K lengths, all-empty and graphs.
+Local factorial pads0/2048 x orders0/1/2 uses five warmups,20 graph iterations
+x5repeats and includes mandatory FP32 output zero identically. It is a local
+screening signal, not a distributed or complete-layer speedup. Any candidate
+needs full EP checks and a strongest matched compute baseline before adoption.
+
+Whole-host-clean local signal: True.
+
+[
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 10.515222930908203,
+    "samples": [
+      10.379389190673828,
+      10.515222930908203,
+      10.47003173828125,
+      10.584101104736328,
+      10.523377990722656
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 12.184712219238282,
+    "samples": [
+      12.18862533569336,
+      12.196791839599609,
+      12.184712219238282,
+      12.177423858642578,
+      12.170243835449218
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 12.123152160644532,
+    "samples": [
+      12.120340728759766,
+      12.093617248535157,
+      12.123152160644532,
+      12.127861785888673,
+      12.134794616699219
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 10.502095794677734,
+    "samples": [
+      10.612409210205078,
+      10.502095794677734,
+      10.430024719238281,
+      10.560294342041015,
+      10.491192626953126
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 11.700691223144531,
+    "samples": [
+      11.700691223144531,
+      11.643817138671874,
+      11.638277435302735,
+      11.710547637939452,
+      11.732985687255859
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 12.08740234375,
+    "samples": [
+      12.083716583251952,
+      12.031949615478515,
+      12.1749267578125,
+      12.09560775756836,
+      12.08740234375
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 5.446236419677734,
+    "samples": [
+      5.446236419677734,
+      5.489290618896485,
+      5.431325912475586,
+      5.42365608215332,
+      5.497438049316406
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 6.191566467285156,
+    "samples": [
+      6.201131057739258,
+      6.1910655975341795,
+      6.191717147827148,
+      6.1867115020751955,
+      6.191566467285156
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 6.151581954956055,
+    "samples": [
+      6.117538070678711,
+      6.151581954956055,
+      6.1365234375,
+      6.159386444091797,
+      6.169504928588867
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 5.5250701904296875,
+    "samples": [
+      5.509661483764648,
+      5.5250701904296875,
+      5.558026504516602,
+      5.491828918457031,
+      5.55901985168457
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 5.996044921875,
+    "samples": [
+      5.990584182739258,
+      5.996044921875,
+      5.995930099487305,
+      6.012250518798828,
+      5.998077011108398
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 6.168782043457031,
+    "samples": [
+      6.182635498046875,
+      6.194488143920898,
+      6.143127059936523,
+      6.167647933959961,
+      6.168782043457031
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "27864c71ead2d53a816796370c09e1b5f459b7de2f2ac8dd5539f894d05323c9",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  }
+]

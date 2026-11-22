@@ -469,6 +469,7 @@ def main():
                     "transpose_free_dgrad": getattr(plan, "transpose_free_dgrad", None),
                     "wgrad_tile_chunk": int(os.environ.get("DG_BF16_WGRAD_TILE_CHUNK", "0")),
                     "wgrad_b_padding_bytes": int(os.environ.get("DG_BF16_WGRAD_B_PAD_BYTES", "0")),
+                    "wgrad_tsm_load_order": int(os.environ.get("DG_BF16_WGRAD_TSM_LOAD_ORDER", "0")),
                     "replay_gradient_warp_reduction": os.environ.get("DG_REPLAY_GRAD_WARP_REDUCTION", "0"),
                     "wgrad_compute_cus": os.environ.get("DG_BF16_WGRAD_COMPUTE_CUS", "0"),
                     "overlap_expert_dy": plan.overlap_expert_dy,
