@@ -38072,3 +38072,1055 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2206131, "start_ticks": "217993489"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration111 — native-scheduled return copies with cached routes and ILP
+
+110all21componentand8EP8phasegatespassed,closed0fdc63a171.
+Raw256-threadcopywith4/8CTAswas26.68/13.06ms vsoldscatter1.672ms.
+It cannot establish an overlap win from correctness alone.
+
+NewTrainingFp8PeerTileCopy uses the SAME expert-group/two-M swizzled
+TileScheduler as its GEMM producer. Cache resolved destinations as a CTA
+advances through the same M tile, specialize destination stride to remove
+runtime64-bitdivision, load4independentvectorsbeforetheirpeerstores,
+and measure256/512/1024threads at1/2/4/8/12/16/24/32copyCTAs.
+Copy kernels use static row scratch and zero dynamicTSM, independent
+launch bounds and actual function occupancy checks; do not apply a
+TensorCell GEMM occupancy estimate to a memory-only kernel.
+Both producers/consumers validate aligned bounded GPU group lengths.
+DG_MOE_FP8_RETURN_THREADS controls copy threads, allrank-agreed.
+The original110Op26 is retained as a component control, notselected
+by the new pipeline. BF16 output bytes/protocol remain unchanged.
+
+Require13every-elementcopyreferences+24componenttimings+12EP8
+mutable/multichunk/combinedinputreturnintegrationphasesbefore
+actual32performancepromotion. No2xclaimfromlocalcomponents.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 1,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 72.3108642578125,
+      "speedup": 0.0230446425767923,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 1,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 50.320498657226565,
+      "speedup": 0.033115292290548964,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 1,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 41.90304260253906,
+      "speedup": 0.039767470754958074,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 2,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 33.58883361816406,
+      "speedup": 0.04961107135137601,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 2,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 22.267732238769533,
+      "speedup": 0.07483375511130697,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 2,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 18.34215545654297,
+      "speedup": 0.09084962916099416,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 4,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 16.517471313476562,
+      "speedup": 0.10088578267308028,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 4,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 10.889556121826171,
+      "speedup": 0.15302533938002094,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 4,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 9.00684814453125,
+      "speedup": 0.18501233666874026,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 8,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 8.037238311767577,
+      "speedup": 0.20733216517923042,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 8,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 5.2960559844970705,
+      "speedup": 0.3146450917660529,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 8,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 4.502563858032227,
+      "speedup": 0.370095366502697,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 12,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 5.3240821838378904,
+      "speedup": 0.312988786367497,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 12,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 3.523624038696289,
+      "speedup": 0.47291595327428293,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 12,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 3.0961639404296877,
+      "speedup": 0.5382072956411259,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 16,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 4.004914093017578,
+      "speedup": 0.4160833372544754,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 16,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.700383949279785,
+      "speedup": 0.617089292685461,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 16,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.3737939834594726,
+      "speedup": 0.7019893187241639,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 24,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.6808940887451174,
+      "speedup": 0.6215754767172614,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 24,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.8361440658569337,
+      "speedup": 0.9075420890040733,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 24,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.6325220108032226,
+      "speedup": 1.0207384710362062,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 32,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.0705539703369142,
+      "speedup": 0.8047981579389049,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 32,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.4439640045166016,
+      "speedup": 1.1540301669764204,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 32,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.2671699523925781,
+      "speedup": 1.3150390901345952,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0003",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 256,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "every_element": true,
+      "gates": {
+        "torch_index_copy": true,
+        "legacy_copy_bits": true,
+        "outer_guards": true,
+        "ready_read_only": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 1,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 72.3108642578125,
+      "speedup": 0.0230446425767923,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 1,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 50.320498657226565,
+      "speedup": 0.033115292290548964,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 1,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 41.90304260253906,
+      "speedup": 0.039767470754958074,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 2,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 33.58883361816406,
+      "speedup": 0.04961107135137601,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 2,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 22.267732238769533,
+      "speedup": 0.07483375511130697,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 2,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 18.34215545654297,
+      "speedup": 0.09084962916099416,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 4,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 16.517471313476562,
+      "speedup": 0.10088578267308028,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 4,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 10.889556121826171,
+      "speedup": 0.15302533938002094,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 4,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 9.00684814453125,
+      "speedup": 0.18501233666874026,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 8,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 8.037238311767577,
+      "speedup": 0.20733216517923042,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 8,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 5.2960559844970705,
+      "speedup": 0.3146450917660529,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 8,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 4.502563858032227,
+      "speedup": 0.370095366502697,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 12,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 5.3240821838378904,
+      "speedup": 0.312988786367497,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 12,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 3.523624038696289,
+      "speedup": 0.47291595327428293,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 12,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 3.0961639404296877,
+      "speedup": 0.5382072956411259,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 16,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 4.004914093017578,
+      "speedup": 0.4160833372544754,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 16,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.700383949279785,
+      "speedup": 0.617089292685461,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 16,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.3737939834594726,
+      "speedup": 0.7019893187241639,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 24,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.6808940887451174,
+      "speedup": 0.6215754767172614,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 24,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.8361440658569337,
+      "speedup": 0.9075420890040733,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 24,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.6325220108032226,
+      "speedup": 1.0207384710362062,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 32,
+      "threads": 256,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 2.0705539703369142,
+      "speedup": 0.8047981579389049,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 32,
+      "threads": 512,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.4439640045166016,
+      "speedup": 1.1540301669764204,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "fp8_scheduled_return_copy_performance",
+      "copy_ctas": 32,
+      "threads": 1024,
+      "before_ms": 1.6663780212402344,
+      "after_ms": 1.2671699523925781,
+      "speedup": 1.3150390901345952,
+      "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0003",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 1120312,
+          "start_ticks": "218128943"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-mode3-tiled2-copy4-c4-th256",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-multichunk-tiled2-copy4-c4-th256",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-mode3-tiled2-copy4-c2-th512",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-multichunk-tiled2-copy4-c2-th512",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-mode3-tiled2-copy4-c4-th512",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-multichunk-tiled2-copy4-c4-th512",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-mode3-tiled2-copy4-c4-th1024",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-multichunk-tiled2-copy4-c4-th1024",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-mode3-tiled2-copy4-c8-th1024",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-multichunk-tiled2-copy4-c8-th1024",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-mode3-tiled2-copy4-c4-th1024-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-returnpipe111-ep8-multichunk-tiled2-copy4-c4-th1024-input32",
+      "returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 1, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 41.90304260253906, "speedup": 0.039767470754958074, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 2, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 33.58883361816406, "speedup": 0.04961107135137601, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 2, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 22.267732238769533, "speedup": 0.07483375511130697, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 2, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 18.34215545654297, "speedup": 0.09084962916099416, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 4, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 16.517471313476562, "speedup": 0.10088578267308028, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 4, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 10.889556121826171, "speedup": 0.15302533938002094, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 4, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 9.00684814453125, "speedup": 0.18501233666874026, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 8, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 8.037238311767577, "speedup": 0.20733216517923042, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 8, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 5.2960559844970705, "speedup": 0.3146450917660529, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 8, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 4.502563858032227, "speedup": 0.370095366502697, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 12, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 5.3240821838378904, "speedup": 0.312988786367497, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 12, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 3.523624038696289, "speedup": 0.47291595327428293, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 12, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 3.0961639404296877, "speedup": 0.5382072956411259, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 16, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 4.004914093017578, "speedup": 0.4160833372544754, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 16, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 2.700383949279785, "speedup": 0.617089292685461, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 16, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 2.3737939834594726, "speedup": 0.7019893187241639, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 24, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 2.6808940887451174, "speedup": 0.6215754767172614, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 24, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 1.8361440658569337, "speedup": 0.9075420890040733, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 24, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 1.6325220108032226, "speedup": 1.0207384710362062, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 32, "threads": 256, "before_ms": 1.6663780212402344, "after_ms": 2.0705539703369142, "speedup": 0.8047981579389049, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 32, "threads": 512, "before_ms": 1.6663780212402344, "after_ms": 1.4439640045166016, "speedup": 1.1540301669764204, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "fp8_scheduled_return_copy_performance", "copy_ctas": 32, "threads": 1024, "before_ms": 1.6663780212402344, "after_ms": 1.2671699523925781, "speedup": 1.3150390901345952, "scope": "Local native-scheduled BF16 scatter with READY already published; no GEMM or cross-host traffic", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0003", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1120312, "start_ticks": "218128943"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

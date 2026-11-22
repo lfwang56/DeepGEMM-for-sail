@@ -488,6 +488,7 @@ def main():
                     "peer_fp8_return_fused": plan.fuse_return if getattr(plan, "fp8_peer_compute", False) else None,
                     "peer_fp8_return_pipeline": getattr(plan, "fp8_return_pipeline", False),
                     "peer_fp8_return_ctas": getattr(plan, "fp8_return_ctas", None),
+                    "peer_fp8_return_threads": getattr(plan, "fp8_return_threads", None),
                     "fp8_active_quantization": getattr(plan, "fp8_active_quantization", None),
                     "fp8_mn_major_scales": getattr(plan, "fp8_mn_major_scales", None),
                     "communication_dtype": getattr(plan, "communication_dtype", "bf16"),

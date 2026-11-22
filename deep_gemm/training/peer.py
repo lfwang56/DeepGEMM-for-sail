@@ -198,6 +198,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_bf16_input_pipeline = fp8_flag(None, "DG_MOE_FP8_BF16_INPUT_PIPELINE")
         self.fp8_return_pipeline = fp8_flag(None, "DG_MOE_FP8_RETURN_PIPELINE")
         self.fp8_return_ctas = helper_value(None, "DG_MOE_FP8_RETURN_CTAS", 4)
+        self.fp8_return_threads = helper_value(None, "DG_MOE_FP8_RETURN_THREADS", 512)
+        if self.fp8_return_threads not in (256,512,1024):
+            raise ValueError("FP8 return copy threads must be256,512or1024")
         if self.fp8_return_pipeline and (not self.fp8_peer_compute or not fuse_return or ring_rows is None):
             raise ValueError("FP8 return pipeline requires fused return and bounded FP8 routing windows")
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
@@ -403,7 +406,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -1090,24 +1093,25 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.rows, self.h, self.chunk_tokens * self.k, self.size, self.block_m], compile_only)
 
     def _fp8_return_tiles(self, activation, weight, output, destination, config, compile_only):
-        tensors = [output, self.permutation, self.pointer_tables[destination], self.num_blocks,
-                   self.fp8_return_ready, self.status]
-        dims = [self.rows, self.h, self.chunk_tokens * self.k, self.size, 256, self.fp8_return_ctas]
         main = torch.cuda.current_stream(self.device)
+        def launch(copy_only):
+            return dg._C._moe_training_peer_fp8_gemm(
+                activation, weight, output, self.lengths, self.permutation,
+                self.pointer_tables[destination], self.chunk_tokens * self.k,
+                keep_local=True, compile_only=compile_only, config=config,
+                return_control=[self.fp8_return_ready,self.status],reserved_return_ctas=self.fp8_return_ctas,
+                copy_only=copy_only,copy_threads=self.fp8_return_threads)
         if compile_only:
-            _peer(26, tensors, dims, True)
+            launch(True)
         else:
             self.fp8_return_ready.zero_()
             self._fp8_return_stream.wait_stream(main)
             with torch.cuda.stream(self._fp8_return_stream):
-                for tensor in tensors:
+                for tensor in (output,self.lengths,self.permutation,self.pointer_tables[destination],
+                               self.fp8_return_ready,self.status,*activation,*weight):
                     tensor.record_stream(self._fp8_return_stream)
-                _peer(26, tensors, dims)
-        grid = dg._C._moe_training_peer_fp8_gemm(
-            activation, weight, output, self.lengths, self.permutation,
-            self.pointer_tables[destination], self.chunk_tokens * self.k,
-            keep_local=True, compile_only=compile_only, config=config,
-            return_control=[self.fp8_return_ready, self.status], reserved_return_ctas=self.fp8_return_ctas)
+                launch(True)
+        grid=launch(False)
         if not compile_only:
             main.wait_stream(self._fp8_return_stream)
         return grid

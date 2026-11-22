@@ -52,6 +52,20 @@ public:
       }
     }
 
+#if DG_TRAINING_FP8_RETURN_PIPELINE
+    __shared__ int return_layout_bad;
+    if(threadIdx.x==0) {
+      return_layout_bad=0;int64_t total_rows=0;
+      for(uint32_t g=0;g<TileScheduler::kNumGroups;++g) {
+        const int rows=params.scheduler.grouped_layout[g];
+        if(rows<0 || rows%128)return_layout_bad=1;
+        total_rows+=rows;
+      }
+      if(total_rows>params.scheduler.shape_m)return_layout_bad=1;
+      if(return_layout_bad)atomicOr(output.status,2u);
+    }
+    __syncthreads();if(return_layout_bad)return;
+#endif
     TileScheduler deep_scheduler{params.scheduler};
 
     // Preconditions
@@ -221,6 +235,85 @@ public:
       }
     } // Scheduler work fetch loop
   }
+};
+
+// Copy consumers share the producer scheduler, including expert groups and
+// its two-M-tile swizzle. They retain row destinations while N tiles advance.
+template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_,
+          bool EnableSbo, bool UseNStage>
+class TrainingFp8PeerTileCopy {
+public:
+    using Producer=TrainingFp8PeerReturn<ProblemShape_,CollectiveMainloop_,CollectiveEpilogue_,TileScheduler_,EnableSbo,UseNStage>;
+    using Params=typename Producer::Params;
+    using TileScheduler=TileScheduler_;
+    static constexpr int MaxThreadsPerBlock=1024;
+    static constexpr int SharedStorageSize=0; // Dynamic TSM; row addresses are static shared.
+    static constexpr int MinBlocksPerMultiprocessor=1;
+    CUTLASS_DEVICE void operator()(Params const& params,const training::PeerGemmParams& peers,
+        const training::PeerDispatchPipeline&,const training::PeerDispatchPipeline& output,char*) {
+        static_assert(TileScheduler::BLOCK_M==128 && TileScheduler::BLOCK_N==256);
+        static_assert(TileScheduler::GEMM_TYPE==GemmType::MGroupedNoPad);
+        constexpr uint32_t width=TileScheduler::SHAPE_N,stride=DG_TRAINING_FP8_RETURN_STRIDE;
+        static_assert(width%256==0 && stride>0);
+        __shared__ int failed;
+        __shared__ uint64_t destinations[128];
+        if(threadIdx.x==0) {
+            failed=0;int64_t total=0;
+            for(uint32_t g=0;g<TileScheduler::kNumGroups;++g) {
+                const int rows=params.scheduler.grouped_layout[g];
+                if(rows<0 || rows%128)failed=1;
+                total+=rows;
+            }
+            if(total>params.scheduler.shape_m)failed=1;
+            if(failed)atomicOr(output.status,2u);
+        }
+        __syncthreads();
+        if(failed)return;
+        TileScheduler scheduler{params.scheduler};
+        uint32_t mi,ni;int last_row=-1;
+        while(scheduler.fetch_next_work(mi,ni)) {
+            const uint32_t row_base=uint32_t(scheduler.curr_offset_m())+mi*128;
+            if(int(row_base)!=last_row) {
+                if(threadIdx.x<128) {
+                    const int route=__ldg(peers.permutation+row_base+threadIdx.x);
+                    const bool valid=route>=0 && uint64_t(route)<uint64_t(stride)*peers.num_ranks;
+                    if(route>=0 && !valid)atomicOr(output.status,2u);
+                    destinations[threadIdx.x]=valid?__ldg(peers.destination_peers+uint32_t(route)/stride)+
+                        uint64_t(uint32_t(route)%stride)*width*sizeof(cutlass::bfloat16_t):0;
+                }
+                __syncthreads();last_row=row_base;
+            }
+            if(threadIdx.x==0) {
+                failed=0;const uint32_t tile=(row_base/128)*(width/256)+ni;
+                const uint64_t begin=clock64();
+                if(tile>=output.signal_capacity){failed=1;atomicOr(output.status,2u);}
+                else while(tix::ld_acq(output.ready+tile)!=1u) {
+                    if(tix::ld_acq(output.status) || clock64()-begin>output.timeout_cycles) {
+                        failed=1;atomicOr(output.status,8u);break;
+                    }
+                }
+            }
+            __syncthreads();if(failed)return;
+            for(int base=threadIdx.x;base<128*(256/8);base+=blockDim.x*4) {
+                uint4 values[4];uint64_t addresses[4];
+                #pragma unroll
+                for(int j=0;j<4;++j) {
+                    const int item=base+j*blockDim.x,row=item/(256/8),column=(item%(256/8))*8;
+                    uint64_t address=0;uint4 value{};
+                    if(item<128*(256/8) && destinations[row]) {
+                        address=destinations[row]+uint64_t(ni*256+column)*sizeof(cutlass::bfloat16_t);
+                        value=*reinterpret_cast<const uint4*>(params.epilogue.ptr_D+
+                            int64_t(row_base+row)*width+ni*256+column);
+                    }
+                    values[j]=value;addresses[j]=address;
+                }
+                #pragma unroll
+                for(int j=0;j<4;++j)if(addresses[j])*reinterpret_cast<uint4*>(addresses[j])=values[j];
+            }
+            __syncthreads();
+        }
+        __threadfence();
+    }
 };
 
 } // namespace deep_gemm
