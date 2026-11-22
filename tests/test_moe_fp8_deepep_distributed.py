@@ -148,7 +148,8 @@ def main():
         passed = finite and max(v for row in errors for v in row.values()) < .02 and max(pair.values()) < .012
         if pattern == 'empty':passed = passed and all(not torch.count_nonzero(v) for row in actual for v in row)
         print(json.dumps(dict(case='fp8_deepep_mutable_graph_reference', rank=rank,
-              ranks=size, pattern=pattern, compute='fp8_e4m3', communication='bf16',
+              ranks=size, pattern=pattern, compute='fp8_e4m3', communication=plans[1].communication_dtype,
+              fp8_source_dispatch=plans[1].fp8_source_dispatch,
               activation_scales='row_128', weight_scales='128x128_fp32',
               wgrad='bf16_inputs_fp32_accumulation', early_dy=args.early_dy,
               oracle_errors=errors, native_pair_errors=pair, every_element=True, passed=passed)), flush=True)

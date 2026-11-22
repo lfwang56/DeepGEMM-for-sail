@@ -475,6 +475,7 @@ def main():
                     "fp8_weight_quantization": getattr(plan, "fp8_weight_quantization", None),
                     "peer_fp8_input_mode": getattr(plan, "fp8_input_mode", None),
                     "peer_fp8_input_ctas": getattr(plan, "fp8_input_ctas", None),
+                    "peer_fp8_input_threads": getattr(plan, "fp8_input_threads", None),
                     "peer_fp8_input_serialized": getattr(plan, "fp8_input_serialize", False),
                     "fp8_source_dispatch": getattr(plan, "fp8_source_dispatch", False),
                     "peer_fp8_return_fused": plan.fuse_return if getattr(plan, "fp8_peer_compute", False) else None,

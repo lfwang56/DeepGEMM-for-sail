@@ -41,7 +41,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, transpose_free_dgrad=False,
                  input_helper_threads=None, input_helper_block_m=None, input_helper_block_n=None,
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
-                 fp8_input_ctas=None, fp8_input_serialize=None, **kwargs):
+                 fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None, **kwargs):
         # Optional CTA helper recipe; environment values allow the same large
         # reference and capacity harnesses to exercise the exact candidate.
         def helper_value(value, key, default):
@@ -196,6 +196,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
         self.fp8_input_ctas = helper_value(fp8_input_ctas, "DG_MOE_FP8_INPUT_CTAS", 8)
+        self.fp8_input_threads = helper_value(fp8_input_threads, "DG_MOE_FP8_INPUT_THREADS", 128)
+        if self.fp8_input_threads not in (128, 256, 512):
+            raise ValueError("FP8 producer threads must be128,256or512")
         if self.fp8_input_pipeline and not self.fp8_peer_compute:
             raise ValueError("FP8 input pipeline requires FP8 peer compute")
         if self.fp8_input_serialize and not self.fp8_input_pipeline:
@@ -349,7 +352,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.fuse_dhidden_scores, self.transpose_free_dgrad,
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
-                      self.fp8_input_ctas, self.fp8_input_serialize)
+                      self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -917,7 +920,8 @@ class PeerMoEPlan(NativeMoEPlan):
                    self.pointer_tables['local_x'], self.source_rows, self.quantized[self.h][0],
                    self.quantized_scale_storage[self.h], self.packed_x, self.num_blocks,
                    self.fp8_input_ready, self.status],
-              [self.rows, self.h, self.chunk_tokens, self.size, self.fp8_input_ctas, 0], compile_only)
+              [self.rows, self.h, self.chunk_tokens, self.size, self.fp8_input_ctas, 0,
+               self.fp8_input_threads], compile_only)
 
     def _join_fp8_bf_input(self):
         if self._fp8_bf_input_pending:

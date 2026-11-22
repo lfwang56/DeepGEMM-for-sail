@@ -65,7 +65,8 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
         case PeerOperation::StageFp8InputTiles:
             // Three source pointer tables (FP8, row scales, original BF16),
             // global source rows, local FP8/MN scales/BF16, count, ready, status.
-            schema(10, 6);
+            DG_HOST_ASSERT(dims.size() == 6 || dims.size() == 7);
+            schema(10, dims.size());
             DG_HOST_ASSERT(dims[0] > 0 && dims[0] % 128 == 0 && dims[1] > 0 && dims[1] % 128 == 0
                            && dims[2] > 0 && dims[3] > 0 && dims[3] <= 64
                            && dims[4] > 0 && dims[4] < get_num_sms() && dims[5] <= 1);
@@ -75,7 +76,8 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             expect(6, dims[0] * dims[1], bf); expect(7, 1, i32);
             expect(8, dims[0] / 128, i32); expect(9, 1, i32);
             DG_HOST_ASSERT(dims[0] * dims[1] <= INT32_MAX);
-            threads = 128;
+            threads = dims.size() == 7 ? dims[6] : 128;
+            DG_HOST_ASSERT(threads == 128 || threads == 256 || threads == 512);
             blocks = dims[4];
             break;
         case PeerOperation::AssistInputTiles:

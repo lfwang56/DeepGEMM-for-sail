@@ -29,6 +29,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
         __shared__ uint64_t q_addresses[128], scale_addresses[128], bf_addresses[128];
         for (int tile = block_index; tile < blocks; tile += gridDim.x) {
             const int64_t base_row = int64_t(tile) * 128;
+            if (threadIdx.x < 128) {
             const int source = peer_pointer<int32_t>(p, 3)[base_row + threadIdx.x];
             const bool valid = source >= 0 && source < tokens * p.dim[3];
             const int owner = valid ? source / tokens : 0;
@@ -36,13 +37,14 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             q_addresses[threadIdx.x] = valid ? peer_pointer<uint64_t>(p, 0)[owner] + int64_t(row) * width : 0;
             scale_addresses[threadIdx.x] = valid ? peer_pointer<uint64_t>(p, 1)[owner] + int64_t(row) * (width / 128) * 4 : 0;
             bf_addresses[threadIdx.x] = valid && p.dim[5] ? peer_pointer<uint64_t>(p, 2)[owner] + int64_t(row) * width * 2 : 0;
+            }
             __syncthreads();
             const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
             // Pipeline independent 16-byte loads before stores. Serial
             // load/store pairs leave too little memory-level parallelism
             // when only a few producer CTAs share the device with GEMM.
             #pragma clang loop unroll(disable)
-            for (int r = warp; r < 128; r += 4) {
+            for (int r = warp; r < 128; r += blockDim.x / 32) {
                 const auto* src_q = reinterpret_cast<const uint4*>(q_addresses[r]);
                 const auto* src_bf = reinterpret_cast<const uint4*>(bf_addresses[r]);
                 #pragma clang loop unroll(disable)
