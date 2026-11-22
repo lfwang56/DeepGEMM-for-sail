@@ -4746,3 +4746,105 @@ Whole-host-clean local signal: True.
     "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
   }
 ]
+
+
+## Iteration54 — register-resident BF16 Tensor Cell throughput diagnostic
+
+No production path changes. After small TSM scheduling changes failed to
+improve local WG, measure independent register-resident BF16/FP32 MMA using
+the actual production256x256/64x64 and two alternative warp geometries.
+Reserve196608B shared as stage3 WG; no TSM or global operand supply in the
+MMA mainloop. Fresh runtime scalar input pairs1/1,2/3,3/1 must produce the
+exact independently calculated result at every output element. Poison all
+outputs first and verify again after timing. Only exact representable FP32
+integer sums are used, to validate all MMA iterations without tolerances.
+
+HGGC-O3 ppu15 executable, five warmups,20 launches x5 event repeats on its
+calling stream. Includes launch prologue and final stores. Record actual
+register/local resources. This is a diagnostic of measured arithmetic
+throughput, not a formal physical ceiling or achievable full-layer floor.
+Production GEMMs still include AIU, TSM, nonlinearities and networking.
+Original full-layer reference/quality/baseline requirements remain.
+
+Clean diagnostic: True.
+
+[
+  {
+    "case": "register_bf16_compute_diagnostic",
+    "chip": "ZW-M890P",
+    "active_cus": 39,
+    "block_m": 256,
+    "block_n": 256,
+    "warp_m": 64,
+    "warp_n": 64,
+    "threads": 512,
+    "registers": 144,
+    "local_bytes": 0,
+    "dynamic_shared_bytes": 196608,
+    "steps": 4096,
+    "every_output_exact": true,
+    "fresh_seed_pairs": 3,
+    "median_event_ms": 3.255326509,
+    "observed_tflops": 411.6422093,
+    "samples_ms": [
+      3.255448818,
+      3.255326509,
+      3.255305052,
+      3.255278111,
+      3.255420685
+    ],
+    "scope": "Register-resident BF16/FP32 MMA plus launch prologue and result store; no AIU mainloop or networking; measured throughput is not an upper bound"
+  },
+  {
+    "case": "register_bf16_compute_diagnostic",
+    "chip": "ZW-M890P",
+    "active_cus": 39,
+    "block_m": 128,
+    "block_n": 256,
+    "warp_m": 64,
+    "warp_n": 64,
+    "threads": 256,
+    "registers": 144,
+    "local_bytes": 0,
+    "dynamic_shared_bytes": 196608,
+    "steps": 4096,
+    "every_output_exact": true,
+    "fresh_seed_pairs": 3,
+    "median_event_ms": 1.661400437,
+    "observed_tflops": 403.283208016,
+    "samples_ms": [
+      1.661400437,
+      1.661334038,
+      1.661414504,
+      1.661476493,
+      1.661341071
+    ],
+    "scope": "Register-resident BF16/FP32 MMA plus launch prologue and result store; no AIU mainloop or networking; measured throughput is not an upper bound"
+  },
+  {
+    "case": "register_bf16_compute_diagnostic",
+    "chip": "ZW-M890P",
+    "active_cus": 39,
+    "block_m": 256,
+    "block_n": 256,
+    "warp_m": 32,
+    "warp_n": 128,
+    "threads": 512,
+    "registers": 144,
+    "local_bytes": 0,
+    "dynamic_shared_bytes": 196608,
+    "steps": 4096,
+    "every_output_exact": true,
+    "fresh_seed_pairs": 3,
+    "median_event_ms": 3.255348921,
+    "observed_tflops": 411.639375362,
+    "samples_ms": [
+      3.255348921,
+      3.25535059,
+      3.25532341,
+      3.255336285,
+      3.255414486
+    ],
+    "scope": "Register-resident BF16/FP32 MMA plus launch prologue and result store; no AIU mainloop or networking; measured throughput is not an upper bound"
+  }
+]
