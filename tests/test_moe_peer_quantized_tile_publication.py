@@ -52,7 +52,7 @@ def fixture(width,capacity=512,tokens=83,measure=False):
                 e.record();e.synchronize();samples.append(b.elapsed_time(e)/5)
             return sorted(samples)[2]
         before=timing(cg)
-        for ctas in (4,8,12,16,24,32):
+        for ctas in (4,8,12,16,24,32,39,78,156,312):
             g=torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):producer(ctas)
             cg.replay();g.replay();torch.cuda.synchronize()

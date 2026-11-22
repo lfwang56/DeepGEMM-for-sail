@@ -367,8 +367,10 @@ class PeerMoEPlan(NativeMoEPlan):
                 raise ValueError("BF16 quantized input pipeline supports hidden<=8192")
             if self.fp8_input_cache_scales and self.h > 8192:
                 raise ValueError("cached FP8 input scales support hidden<=8192")
-            if not 0 < self.fp8_input_ctas < dg.get_num_sms():
-                raise ValueError("FP8 producer CTAs must leave at least one GEMM CU")
+            producer_limit = (8 * dg.get_num_sms() if self.fp8_bf16_input_pipeline and self.fp8_serial_full_grid
+                              else dg.get_num_sms() - 1)
+            if not 0 < self.fp8_input_ctas <= producer_limit:
+                raise ValueError("FP8 producer CTA budget exceeds its serialized or concurrent limit")
             self._fp8_input_stream = torch.cuda.Stream(device=self.device)
             self._fp8_bf_input_stream = torch.cuda.Stream(device=self.device)
         if self.transpose_free_dgrad:
@@ -744,7 +746,7 @@ class PeerMoEPlan(NativeMoEPlan):
                 self.fp8_input_ready.zero_()
                 self._fp8_input_stream.wait_stream(main)
                 with torch.cuda.stream(self._fp8_input_stream):
-                    for tensor in (self.source_rows, self.num_blocks, self.fp8_input_ready, self.status,
+                    for tensor in (self.permutation, self.num_blocks, self.fp8_input_ready, self.status,
                                    *self.quantized[self.h], self.quantized_scale_storage[self.h],
                                    self.packed_x, self.pointer_tables['local_x']):
                         tensor.record_stream(self._fp8_input_stream)
@@ -1069,7 +1071,7 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.rows, self.h, self.chunk_tokens * self.k, self.size, self.block_m], compile_only)
 
     def _fp8_stage_bf16_input(self, compile_only=False):
-        _peer(25, [self.pointer_tables['local_x'], self.source_rows, self.packed_x,
+        _peer(25, [self.pointer_tables['local_x'], self.permutation, self.packed_x,
                    self.status, self.num_blocks, self.quantized[self.h][0],
                    self.quantized_scale_storage[self.h], self.fp8_input_ready],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size, 128, self.fp8_input_ctas], compile_only)

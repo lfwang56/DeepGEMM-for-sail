@@ -90,7 +90,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             schema(8,7);
             DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192 &&
                            dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 &&
-                           dims[4]<=64 && dims[5]==128 && dims[6]>0 && dims[6]<get_num_sms());
+                           dims[4]<=64 && dims[5]==128 && dims[6]>0 && dims[6]<=8*get_num_sms());
             expect(0,dims[4],i64);expect(1,dims[0],i32);expect(2,dims[0]*dims[1],bf);
             expect(3,1,i32);expect(4,1,i32);expect(5,dims[0]*dims[1],torch::kFloat8_e4m3fn);
             expect(6,dims[0]*(dims[1]/128),torch::kFloat32);expect(7,dims[0]/128,i32);

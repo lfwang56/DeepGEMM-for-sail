@@ -36502,3 +36502,878 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1574238, "start_ticks": "217755004"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration109 — allow full producer grids in the serialized input control
+
+108 closed2580d57147 with19clean component gates. The measured producer
+at8CTAs took34.54ms, at32CTAs8.58ms versus staged21with156CTAs2.50ms.
+This is insufficient producer occupancy, not an overlap win. Actual old
+FP8Asys traces show512threads/block,256registers/thread,232576Bshared,
+zero stack; an unqualified co-resident producer could deadlock.
+
+108 EP8 adapter failed independent gradients: producer25 received source_rows
+(token indexes) but its contract expects permutation (token*topk+slot).
+Fix the adapter and record the permutation buffer on its producer stream.
+No threshold changes; six EP8 mutable/multichunk/zero-capacity integration
+phases join the109 candidate gate group before closure.
+
+Keep the concurrent producer budget strictly below39. Only serialized
+full-grid mode may now launch up to8producerCTAs/CU, after which the
+producer stream joins before native FC1 uses its original full grid.
+This isolates the tile address caching/coalesced SF contribution without
+claiming communication/compute overlap. GPU arithmetic/protocol unchanged.
+Measure producer CTAs4/8/12/16/24/32/39/78/156/312 and require exact bytes,
+BF16, scales, active READY counts and inactive/outer canaries.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 4,
+      "before_ms": 2.494930076599121,
+      "after_ms": 68.91966552734375,
+      "speedup": 0.03620055404374042,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 8,
+      "before_ms": 2.494930076599121,
+      "after_ms": 34.4859375,
+      "speedup": 0.07234630279658545,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 12,
+      "before_ms": 2.494930076599121,
+      "after_ms": 23.179510498046874,
+      "speedup": 0.10763514944844697,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 16,
+      "before_ms": 2.494930076599121,
+      "after_ms": 17.174845886230468,
+      "speedup": 0.14526651902008464,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 24,
+      "before_ms": 2.494930076599121,
+      "after_ms": 12.003723907470704,
+      "speedup": 0.20784633967183822,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 32,
+      "before_ms": 2.494930076599121,
+      "after_ms": 8.572604370117187,
+      "speedup": 0.29103525240195066,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 39,
+      "before_ms": 2.494930076599121,
+      "after_ms": 7.694084167480469,
+      "speedup": 0.3242660233876957,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 78,
+      "before_ms": 2.494930076599121,
+      "after_ms": 4.430023956298828,
+      "speedup": 0.5631865879758292,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 156,
+      "before_ms": 2.494930076599121,
+      "after_ms": 2.8479480743408203,
+      "speedup": 0.8760447913631965,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 312,
+      "before_ms": 2.494930076599121,
+      "after_ms": 2.1096540451049806,
+      "speedup": 1.1826252187594901,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 4,
+      "before_ms": 2.494930076599121,
+      "after_ms": 68.91966552734375,
+      "speedup": 0.03620055404374042,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 8,
+      "before_ms": 2.494930076599121,
+      "after_ms": 34.4859375,
+      "speedup": 0.07234630279658545,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 12,
+      "before_ms": 2.494930076599121,
+      "after_ms": 23.179510498046874,
+      "speedup": 0.10763514944844697,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 16,
+      "before_ms": 2.494930076599121,
+      "after_ms": 17.174845886230468,
+      "speedup": 0.14526651902008464,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 24,
+      "before_ms": 2.494930076599121,
+      "after_ms": 12.003723907470704,
+      "speedup": 0.20784633967183822,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 32,
+      "before_ms": 2.494930076599121,
+      "after_ms": 8.572604370117187,
+      "speedup": 0.29103525240195066,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 39,
+      "before_ms": 2.494930076599121,
+      "after_ms": 7.694084167480469,
+      "speedup": 0.3242660233876957,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 78,
+      "before_ms": 2.494930076599121,
+      "after_ms": 4.430023956298828,
+      "speedup": 0.5631865879758292,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 156,
+      "before_ms": 2.494930076599121,
+      "after_ms": 2.8479480743408203,
+      "speedup": 0.8760447913631965,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 312,
+      "before_ms": 2.494930076599121,
+      "after_ms": 2.1096540451049806,
+      "speedup": 1.1826252187594901,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 1814088,
+          "start_ticks": "217841742"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-fullinput109-ep8-mode3-parallel-ctas8",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-fullinput109-ep8-multichunk-parallel-ctas8",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-fullinput109-ep8-mode3-parallel-ctas32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-fullinput109-ep8-multichunk-parallel-ctas32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-fullinput109-ep8-mode3-serial-ctas156",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-fullinput109-ep8-multichunk-serial-ctas156",
+      "returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+rue, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 128, "capacity": 512, "active": 512, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 0, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 128, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 256, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 512, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 0, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 128, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 256, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 512, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 65536, "active": 40960, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 4, "before_ms": 2.494930076599121, "after_ms": 68.91966552734375, "speedup": 0.03620055404374042, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 8, "before_ms": 2.494930076599121, "after_ms": 34.4859375, "speedup": 0.07234630279658545, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 12, "before_ms": 2.494930076599121, "after_ms": 23.179510498046874, "speedup": 0.10763514944844697, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 16, "before_ms": 2.494930076599121, "after_ms": 17.174845886230468, "speedup": 0.14526651902008464, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 24, "before_ms": 2.494930076599121, "after_ms": 12.003723907470704, "speedup": 0.20784633967183822, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 32, "before_ms": 2.494930076599121, "after_ms": 8.572604370117187, "speedup": 0.29103525240195066, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 39, "before_ms": 2.494930076599121, "after_ms": 7.694084167480469, "speedup": 0.3242660233876957, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 78, "before_ms": 2.494930076599121, "after_ms": 4.430023956298828, "speedup": 0.5631865879758292, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 156, "before_ms": 2.494930076599121, "after_ms": 2.8479480743408203, "speedup": 0.8760447913631965, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 312, "before_ms": 2.494930076599121, "after_ms": 2.1096540451049806, "speedup": 1.1826252187594901, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1814088, "start_ticks": "217841742"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```
