@@ -20,7 +20,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
 
     def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None,
                  fp8_active_quantization=None, fp8_mn_major_scales=None,
-                 fp8_async_weight_quantization=None, fp8_weight_quantization=None, **kwargs):
+                 fp8_async_weight_quantization=None, fp8_weight_quantization=None,
+                 fp8_source_dispatch=None, **kwargs):
         def quant_flag(value, key):
             if value is None:
                 raw = os.environ.get(key, "0")
@@ -33,6 +34,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.fp8_active_quantization = quant_flag(fp8_active_quantization, "DG_MOE_FP8_ACTIVE_QUANTIZATION")
         self.fp8_mn_major_scales = quant_flag(fp8_mn_major_scales, "DG_MOE_FP8_MN_MAJOR_SCALES")
         self.fp8_async_weight_quantization = quant_flag(fp8_async_weight_quantization, "DG_MOE_FP8_ASYNC_WEIGHTS")
+        self.fp8_source_dispatch = quant_flag(fp8_source_dispatch, "DG_MOE_FP8_SOURCE_DISPATCH")
+        if self.fp8_source_dispatch and (kwargs.get('compute', 'bf16') != 'fp8' or elastic_hybrid is None
+                or not self.fp8_active_quantization or not self.fp8_mn_major_scales):
+            raise ValueError('source FP8 dispatch requires Elastic FP8 compute with active MN scales')
+        self._fp8_dispatch_backward = False
         if fp8_weight_quantization is None:
             raw = os.environ.get("DG_MOE_FP8_WEIGHT_QUANTIZER", "0")
             if raw not in ("0", "1", "2"):
@@ -55,9 +61,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
             raise ValueError("use ring_rows to enable routed-row scheduling")
         self.ring_rows = ring_rows
         self.communication_dtype = "bf16"
+        if self.fp8_source_dispatch:
+            self.communication_dtype = 'fp8_forward_input_bf16_backward_input_and_return'
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
         recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales, self.fp8_async_weight_quantization,
-                  self.fp8_weight_quantization)
+                  self.fp8_weight_quantization, self.fp8_source_dispatch)
         recipes = [None] * self.size
         dist.all_gather_object(recipes, recipe, group=self.group)
         if any(other != recipe for other in recipes):
@@ -127,6 +135,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.local_dy_input = self._allocate("deepep_local_dy", (self.chunk_tokens, self.h), torch.bfloat16)
         self.reduced = self._allocate("deepep_reduced", (n, self.h), torch.bfloat16)
         self.recv_dscores = self._allocate("deepep_dscores", (n, self.k), torch.float32)
+        if self.fp8_source_dispatch:
+            self.source_qx = self._allocate('deepep_source_qx', (self.chunk_tokens, self.h), torch.float8_e4m3fn)
+            self.source_qsf = self._allocate('deepep_source_qsf', (self.chunk_tokens, self.h // 128), torch.float32)
+            self.recv_qx = self._allocate('deepep_recv_qx', (n, self.h), torch.float8_e4m3fn)
+            self.recv_qsf = self._allocate('deepep_recv_qsf', (n, self.h // 128), torch.float32)
         self.route_window_count = 1
         if ring_rows is not None:
             allocate_route_windows(self)
@@ -143,6 +156,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
         _launch(operation, [weight, data, scales], list(weight.shape))
 
     def _prepare_weights(self, w1, w2, backward=False):
+        self._fp8_dispatch_backward = backward
         if not self.fp8_async_weight_quantization:
             return super()._prepare_weights(w1, w2, backward=backward)
         main = torch.cuda.current_stream(self.device)
@@ -207,6 +221,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 operations.append((10, 29, 30)[self.fp8_weight_quantization])
             if self.fp8_active_quantization:
                 operations.extend((26, 27, 28))
+            if self.fp8_source_dispatch:
+                operations.append(31)
         if self.fast_weight_transpose:
             operations.append(22)
         if self.ring_rows is not None:
@@ -246,14 +262,35 @@ class DeepEPMoEPlan(NativeMoEPlan):
         counts, rdma_counts, expert_counts, in_rank, event = buffer.get_dispatch_layout(
             self.local_ids, self.e * self.size, async_finish=True)
         event.current_stream_wait()
-        rx, ri, rw, _, handle, event = buffer.dispatch(self.local_x,
+        payload = self.local_x
+        if self.fp8_source_dispatch and not self._fp8_dispatch_backward:
+            _launch(9, [self.local_x, self.source_qx, self.source_qsf], [c, h])
+            payload = (self.source_qx, self.source_qsf)
+        rx, ri, rw, _, handle, event = buffer.dispatch(payload,
             topk_idx=self.local_ids, topk_weights=self.local_scores,
             num_tokens_per_rank=counts, num_tokens_per_rdma_rank=rdma_counts,
             num_tokens_per_expert=expert_counts, is_token_in_rank=in_rank,
             num_worst_tokens=self.recv_capacity, async_finish=True)
         event.current_stream_wait()
-        if rx.shape != (self.recv_capacity, h) or ri.shape != (self.recv_capacity, k):
+        data = rx[0] if isinstance(rx, tuple) else rx
+        if data.shape != (self.recv_capacity, h) or ri.shape != (self.recv_capacity, k):
             raise RuntimeError("unexpected DeepEP fixed-capacity receive layout")
+        if self.fp8_source_dispatch:
+            if isinstance(rx, tuple):
+                self.window_recv_q, self.window_recv_qsf = rx
+                self.window_recv_x = None
+            else:
+                # Preserve original BF16 input for DW; quantize the unique
+                # received token prefix once before expert/window expansion.
+                self.window_recv_x = rx
+                received = handle.psum_num_recv_tokens_per_scaleup_rank[-1:]
+                _launch(26, [rx, self.recv_qx, self.recv_qsf, received, self.status],
+                        [self.recv_capacity, h, 0])
+                self.window_recv_q, self.window_recv_qsf = self.recv_qx, self.recv_qsf
+            if (self.window_recv_qsf.dtype != torch.float32
+                    or self.window_recv_qsf.shape != (self.recv_capacity, h // 128)
+                    or not self.window_recv_qsf.is_contiguous()):
+                raise RuntimeError('source FP8 dispatch requires row-major FP32 receive scales')
         # DeepEP converts global expert IDs into destination-local expert IDs.
         self.counts.zero_()
         _launch(0, [ri, self.counts, self.route_experts, self.route_rows, self.status],
@@ -271,14 +308,18 @@ class DeepEPMoEPlan(NativeMoEPlan):
         _launch(19, [self.route_experts, self.route_rows, offsets, permutation, self.status],
                 [self.routes, capacity])
         if self.ring_rows is not None:
-            self.window_recv_x = rx
+            if not self.fp8_source_dispatch:
+                self.window_recv_x = rx
             return rw, handle
-        _launch(20, [rx, self.permutation, self.packed_x, self.current_rows, self.status],
-                [self.rows, h, self.recv_capacity, k])
+        if not self.fp8_source_dispatch or self._fp8_dispatch_backward:
+            _launch(20, [data, self.permutation, self.packed_x, self.current_rows, self.status],
+                    [self.rows, h, self.recv_capacity, k])
+        if self.fp8_source_dispatch:
+            self._pack_received_fp8()
         return rw, handle
 
     def _expert_forward(self, w1, w2):
-        self._gemm(self.packed_x, w1, self.gate_up, "w1")
+        self._gemm(self.packed_x, w1, self.gate_up, "w1", prequantized=self.fp8_source_dispatch)
         fused = self._activation()
         self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
 
@@ -301,8 +342,16 @@ class DeepEPMoEPlan(NativeMoEPlan):
         # both forward and backward. Auxiliary wgrads must finish reading them.
         self._join_wgrad()
         set_route_window(self, start)
-        _launch(20, [self.window_recv_x, self.permutation, self.packed_x, self.current_rows, self.status],
-                [self.rows, self.h, self.recv_capacity, self.k])
+        if not self.fp8_source_dispatch or self._fp8_dispatch_backward:
+            _launch(20, [self.window_recv_x, self.permutation, self.packed_x, self.current_rows, self.status],
+                    [self.rows, self.h, self.recv_capacity, self.k])
+        if self.fp8_source_dispatch:
+            self._pack_received_fp8()
+
+    def _pack_received_fp8(self):
+        _launch(31, [self.window_recv_q, self.window_recv_qsf, self.permutation,
+                     self.quantized[self.h][0], self.quantized_scale_storage[self.h],
+                     self.current_rows, self.status], [self.rows, self.h, self.recv_capacity, self.k])
 
     def _reduce_window(self, rw, start, weighted):
         _launch(25, [self.packed_output, self.route_experts, self.route_rows, self.global_offsets,

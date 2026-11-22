@@ -13401,3 +13401,93 @@ quantization gains must not be mislabeled as overlap-only gains.
     ]
   }
 ]
+
+
+## Iteration83 — a stronger FP8 source-transport DeepEP control
+
+82 gates allpassed/clean5EP8+10actual32phases. CompleteT4096C4096
+FP8 input pipeline8/12CTAs88.029132/88.012366ms, oldstaged91.534937,
+samepipeline8serialized104.825964, separate-return890.790308,
+DeepEPBFpayload102.013953, immutablebestBF1649 77.294635.
+Overlap hides substantial work but net FP8 pipeline improvement remains
+about4%; it still trails BF16best and no2x claim is made.
+
+Installed ElasticBuffer supports E4M3/scales tuples. Add opt-in source
+FP8 forward dispatch and once-per-unique-received-token backward
+quantization. Backward retains BF16 input transport for exact original
+DW inputs; all return/DY and DW formats remain unchanged. Add GPUop31
+for exact byte/scale expert-window gathering into local MN scales,
+with GPU active counts, padding and invalid-count guards. FC1 consumes
+these prequantized rows without redundant expert-expanded quantization.
+Keep weight quantization/mutable-route/weight updates in timing.
+
+Make Elastic adapter tuple-aware when masking receive metadata.
+Gate every quantization byte, FP32 scale bit (including NaN payload),
+canaries, changed captured counts/routes and invalid counts locally.
+Then realEP8 CPU STE/native fullgrad/mutable graphs/zerocapacity with
+H512/I256, actual32 QwenFP32 gradients, strongestBFpayload control,
+source-FP8 DeepEP comm38/24/16 and fresh FP8Peer8CTAs control.
+A failure remains opt-in and is logged; no weaker baseline substitution.
+
+82 source/package/native/vendor/LUT frozen before83 publication;
+paired actual32 inputserial/parallel Asight captures completed from
+that immutable library. Profiling is fixed-source diagnostic work.
+
+[
+  {
+    "name": "qwen38-r2-fp8source83-ep8-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-fp8source83-reference-qwen-attempt0",
+    "clean": false,
+    "metrics": []
+  }
+]

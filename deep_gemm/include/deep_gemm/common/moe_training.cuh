@@ -43,6 +43,7 @@ enum class Operation : int {
     ActivationBackwardQuantizeDeviceRows,
     QuantizeWeightsCachedFloat,
     QuantizeWeightsCachedInteger,
+    PackQuantizedRouteRows,
 };
 
 }  // namespace deep_gemm::training

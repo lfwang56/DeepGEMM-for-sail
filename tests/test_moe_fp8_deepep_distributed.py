@@ -70,6 +70,8 @@ def rms(a, b):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--hidden', type=int, default=256)
+    ap.add_argument('--intermediate', type=int, default=128)
     ap.add_argument('--early-dy', action='store_true')
     ap.add_argument('--check-zero-capacity', action='store_true')
     args = ap.parse_args()
@@ -80,7 +82,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     dist.init_process_group('nccl', device_id=device, timeout=timedelta(seconds=600))
     cpu_group = dist.new_group(backend='gloo', timeout=timedelta(seconds=600))
-    h, i, e, k, t, c = 256, 128, 2, 3, 17, 32
+    h, i, e, k, t, c = args.hidden, args.intermediate, 2, 3, 17, 32
     if size * e < k:
         raise ValueError('test requires at least2 ranks')
     rng = torch.Generator().manual_seed(607821)

@@ -39,6 +39,39 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     const int warp = thread >> 5;
     const int64_t index = block_index * blockDim.x + thread;
 
+    if constexpr (Op == Operation::PackQuantizedRouteRows) {
+        const int64_t capacity = p.dim[0], width = p.dim[1], source_rows = p.dim[2], topk = p.dim[3];
+        const int32_t active = __ldg(pointer<int32_t>(p, 5));
+        if (active < 0 || active > capacity) {
+            if (index == 0) atomicOr(pointer<int32_t>(p, 6), 2);
+            return;
+        }
+        const int64_t vectors = width / 16;
+        for (int64_t position = index; position < int64_t(active) * vectors;
+             position += int64_t(gridDim.x) * blockDim.x) {
+            const int route = pointer<int32_t>(p, 2)[position / vectors];
+            uint4 value{};
+            if (route >= 0) {
+                const int64_t source = route / topk;
+                if (source < source_rows)
+                    value = pointer<uint4>(p, 0)[source * vectors + position % vectors];
+                else atomicOr(pointer<int32_t>(p, 6), 2);
+            }
+            pointer<uint4>(p, 3)[position] = value;
+        }
+        // Row-major receive scales become MN-major local scales. Each warp
+        // writes neighboring destination rows; every scale bit is retained.
+        for (int64_t position = index; position < int64_t(active) * (width / 128);
+             position += int64_t(gridDim.x) * blockDim.x) {
+            const int64_t row = position % active, segment = position / active;
+            const int route = pointer<int32_t>(p, 2)[row];
+            float scale = 1e-4f / 448.f;
+            if (route >= 0 && route / topk < source_rows)
+                scale = pointer<float>(p, 1)[int64_t(route / topk) * (width / 128) + segment];
+            pointer<float>(p, 4)[segment * capacity + row] = scale;
+        }
+        return;
+    }
     if constexpr (Op == Operation::QuantizeRowsDeviceRows ||
                   Op == Operation::ActivationQuantizeDeviceRows ||
                   Op == Operation::ActivationBackwardQuantizeDeviceRows) {

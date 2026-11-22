@@ -47,7 +47,8 @@ class ElasticBufferAdapter:
             # receive tensor but only initializes its GPU-counted prefix. The
             # legacy Buffer ABI instead guarantees -1 IDs in padding rows.
             event.current_stream_wait()
-            valid = (torch.arange(rx.shape[0], device=rx.device)
+            data = rx[0] if isinstance(rx, tuple) else rx
+            valid = (torch.arange(data.shape[0], device=data.device)
                      < new_handle.psum_num_recv_tokens_per_scaleup_rank[-1])
             ri.masked_fill_(~valid[:, None], -1)
             if rw is not None:
