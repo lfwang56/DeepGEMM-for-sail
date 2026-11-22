@@ -212,3 +212,72 @@ traffic and waits; expert gradient kernels also contain pointwise reductions.
 Their full durations are not pure wire time. Cumulative kernel durations can
 overlap and must not be added as wall time. State the rank, source hash, profiled
 span and unprofiled maximum-rank median separately.
+
+
+## Source pipeline, chunk reductions and final-DW launch budgets
+
+Use the delivered selected-case JSON and report for the accepted per-shape
+recipe. Every flag below defaults to off. Numerical verification is mandatory
+before timing; preserve current-weight preparation, live forward contexts,
+FP32 DW accumulation, dX and dScore on both compared backends.
+
+A physical supernode contains eight hosts /64PPUs in this campaign. A cross64
+run selects four hosts /32ranks from each of two such supernodes. Construct
+`make_hierarchical_groups(32, metadata_group)` for this layout; only the inner
+domain uses direct peer addressing. Pair groups cross the physical fabric via
+PCCL. Across supernodes the DeepEP control uses its RDMA/hybrid path with
+`DEEPEP_NUM_MAX_ICN_PEERS=32`; do not pass `--deepep-scaleup` for that control.
+
+The source hierarchy requires domain-local live context reuse and pair reuse:
+
+```text
+DG_MOE_REUSE_FORWARD_CONTEXT=1
+DG_MOE_HYBRID_REUSE_PAIR_CONTEXT=1
+DG_MOE_HYBRID_SOURCE_PIPELINE=1
+DG_MOE_HYBRID_SOURCE_SERIALIZED=0
+```
+
+Source own compute overlaps pair input gathers. `SOURCE_SERIALIZED=1` is its
+same-geometry serialized gather control. It does not serialize ordinary DW
+against dGrad differently; those GEMMs remain serial by the selected recipe.
+
+Optional completed-chunk return reductions:
+
+```text
+DG_MOE_HYBRID_CHUNK_REDUCE=1
+DG_MOE_HYBRID_CHUNK_REDUCE_SERIALIZED=0
+```
+
+These send each completed remote-source output / dX / dScore chunk while later
+source chunks compute. The serialized control joins each identical chunk before
+continuing. All auxiliary communication is joined before the outer API returns.
+The final short chunk and local padding are explicit; no output is returned early.
+
+BF16 may defer the remote source's final DW1 under output-gradient reductions,
+including the final reduction of the chunk pipeline:
+
+```text
+DG_BF16_WGRAD_COMPUTE_CUS=0
+DG_MOE_HYBRID_TAIL_DW_OVERLAP=1
+DG_MOE_HYBRID_TAIL_DW_SERIALIZED=0
+DG_MOE_TAIL_DW_COMPUTE_CUS=35
+```
+
+The CU value caps only the final DW launch. Other DW calls retain the global
+budget (0 selects the original full grid). This is not CU affinity or pinning.
+The exact tail control sets `TAIL_DW_SERIALIZED=1`, keeping the same per-launch
+budget and operators. The device-length wgrad API also accepts the optional
+`compute_cus` keyword; invalid values outside the current device range fail.
+
+The FP8 source pipeline may share its current Q/QT weight storage between source
+halves with `DG_MOE_HYBRID_SHARE_FP8_WEIGHTS=1`, requiring fused Q/QT preparation.
+The owner refreshes it per invocation, not across optimizer steps. FP8 compute
+uses BF16 pair payloads and BF16 operands /FP32 accumulation for DW; it is not
+hardware MXFP8. Deferred tail DW currently requires BF16 compute.
+
+The target layer tests use synthetic inputs, weights and balanced routes at
+QwenH8192/I2048/E512/top-k10. Separate public-text LM runs validate full-model
+math and heldout loss on a small model; neither establishes2.4T pretraining
+convergence. Accept timings only with clean whole-host audits and zero exits
+on all ranks. Kernel sums, profiled rank0 spans and unprofiled max-rank graph
+medians are distinct metrics.

@@ -1409,8 +1409,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if type(_defer_last_dw1) is not bool:raise TypeError('_defer_last_dw1 must be bool')
         if _chunk_output_callback is not None:
             if not callable(_chunk_output_callback):raise TypeError('chunk callback must be callable')
-            if self.ring_rows is None or not self.expert_local_grad or self.wgrad_overlap!="none" or _defer_last_dw1:
-                raise ValueError('chunk callbacks require bounded serial source gradients without deferred DW')
+            if self.ring_rows is None or not self.expert_local_grad or self.wgrad_overlap!="none":
+                raise ValueError('chunk callbacks require bounded serial source gradients')
         if _defer_last_dw1 and (self.compute!='bf16' or self.ring_rows is None
                 or not self.expert_local_grad or not self.reuse_forward_context or self.wgrad_overlap!='none'):
             raise ValueError('deferred DW1 requires serial routed BF16 live-context gradients')

@@ -164,8 +164,8 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             raise ValueError('shared FP8 weights require the native FP8 source pipeline')
         if share_fp8_weights and os.environ.get('DG_MOE_FP8_FUSED_WEIGHT_PREPARE','0')!='1':
             raise ValueError('shared FP8 weights require fused Q/QT preparation')
-        if chunk_reduce and (not source_pipeline or tail_dw_overlap):
-            raise ValueError('chunk reductions require source pipeline without deferred tail DW')
+        if chunk_reduce and not source_pipeline:
+            raise ValueError('chunk reductions require the source pipeline')
         if chunk_reduce_serialized and not chunk_reduce:
             raise ValueError('chunk reduction serialization requires chunk reductions')
         factor=1 if source_pipeline else 2

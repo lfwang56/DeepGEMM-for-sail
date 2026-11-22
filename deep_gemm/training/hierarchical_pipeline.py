@@ -167,7 +167,13 @@ def backward(plan,dy,x,ids,scores,w1,w2,valid_tokens,accumulators=None):
                 chunk_callback=reducer.backward if reducer is not None else None)
         plan.hybrid_deferred_dw1_scheduled_last_backward=plan.remote_inner._pending_last_dw1 is not None
         if reducer is not None:
+            # Only the final chunk/window can retain deferred operands. Its
+            # dX/dScore copies are already queued; no later metadata overwrites.
+            if plan.hybrid_tail_dw_overlap and not plan.hybrid_tail_dw_serialized:
+                plan.remote_inner._run_deferred_dw1()
             reduced_dx,reduced_ds=reducer.finish(x.shape[0])
+            if plan.hybrid_tail_dw_overlap and plan.hybrid_tail_dw_serialized:
+                plan.remote_inner._run_deferred_dw1()
             plan.hybrid_chunk_reduce_calls_last_backward=reducer.calls
             result=(reduced_dx,dw1,dw2,reduced_ds)
         elif plan.hybrid_tail_dw_overlap:

@@ -94896,3 +94896,32 @@ controls and profiling must decide whether the reserved capacity helps.
   "excluded": [],
   "raw_sha256": "abf084799ab57aa9d9c109e46567bdfbf785df97de99f2850bacff969b88f087"
 }
+
+## Iteration134 — combine chunk return and reserved final-DW scheduling
+
+132chunk return and133per-launch DW budget each passed their independent
+numeric/graph gates. Allow their BF16composition: callbacks queue completed
+output-gradient chunks; the final cached DW1 alone retains its operands,
+executes with the selected launch budget,and joins outstanding reductions
+before return. The exact tail-serialized control joins the same chunk
+reductions first,then enqueues the same DW. Fallback has no pending DW and
+rematerializes normally. No later source chunk/window can overwrite operands.
+FP8 tail remains rejected; its existing chunk/shared-weight path is unchanged.
+
+Document source/pair topology,explicit flags,precision,stream lifetime,
+current-weight preparation and timing boundaries in REPRODUCE.md. Seven
+EP8phases require384focused BF16combo/serialized andFP8regression checks,
+72independent FP32/native references,and80private deferred-API contracts.
+No new C++ kernel or dtype is introduced; reuse the validated133native API.
+Physical64rank comparisons decide whether composition improves whole-layer
+latency. Keep all experimental flags off unless selected by measured cases.
+
+{
+  "passed": true,
+  "focused": 384,
+  "independent_reference_records": 72,
+  "deferred_contract": 80,
+  "accepted": 7,
+  "excluded": [],
+  "raw_sha256": "caea387de979a45d3abe991c0704062f355f5724a8f5a94ce2ae65bd805e757b"
+}
