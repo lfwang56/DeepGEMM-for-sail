@@ -297,7 +297,8 @@ def main():
                         options.setdefault("gemm_configs", {})[role] = config
             if backend == "persistent": options = {"maximize_ctas": args.maximize_ctas}
             if backend in ("deepep", "elastic"):
-                options = {"comm_sms": args.deepep_comm_sms}
+                options = {"comm_sms": args.deepep_comm_sms,
+                           "fuse_activation_quant": not args.separate_fp8_quantization}
                 if backend == "elastic":
                     options["elastic_hybrid"] = args.elastic_hybrid_mode
                 if args.gemm_config:
@@ -470,6 +471,9 @@ def main():
                     "wgrad_tile_chunk": int(os.environ.get("DG_BF16_WGRAD_TILE_CHUNK", "0")),
                     "wgrad_b_padding_bytes": int(os.environ.get("DG_BF16_WGRAD_B_PAD_BYTES", "0")),
                     "wgrad_tsm_load_order": int(os.environ.get("DG_BF16_WGRAD_TSM_LOAD_ORDER", "0")),
+                    "communication_dtype": getattr(plan, "communication_dtype", "bf16"),
+                    "wgrad_recipe": "bf16_inputs_fp32_accumulation",
+                    "weight_quantization_in_timing": args.compute == "fp8",
                     "peer_input_helper_threads": getattr(plan, "input_helper_threads", None),
                     "peer_input_helper_block_m": getattr(plan, "input_helper_block_m", None),
                     "peer_input_helper_block_n": getattr(plan, "input_helper_block_n", None),

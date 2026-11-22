@@ -51,9 +51,9 @@ class NativeMoEPlan:
         self.wgrad_overlap = wgrad_overlap
         if not isinstance(overlap_expert_dy, bool):
             raise TypeError("overlap_expert_dy must be bool")
-        if overlap_expert_dy and (compute != "bf16" or packed_rows is None
+        if overlap_expert_dy and ((compute != "bf16" and self.transport != "deepep") or packed_rows is None
                                   or self.transport not in ("peer", "deepep")):
-            raise ValueError("DY overlap requires a bounded BF16 peer or DeepEP plan")
+            raise ValueError("DY overlap requires a bounded peer/DeepEP plan; peer requires BF16")
         self.overlap_expert_dy = overlap_expert_dy
         if type(block_m) is not int or block_m not in (128, 256) or (block_m != 128 and compute != "bf16"):
             raise ValueError("block_m must be128, or256 for BF16")
@@ -96,8 +96,9 @@ class NativeMoEPlan:
         self.full_row_capacity = math.ceil((self.routes + local_experts * (self.alignment - 1)) / self.alignment) * self.alignment
         if packed_rows is not None:
             if (type(packed_rows) is not int or packed_rows <= 0 or packed_rows % self.alignment
-                    or self.transport not in ("peer", "deepep") or compute != "bf16"):
-                raise ValueError("packed-row windows require aligned BF16 peer/DeepEP workspaces")
+                    or self.transport not in ("peer", "deepep")
+                    or (compute != "bf16" and self.transport != "deepep")):
+                raise ValueError("packed-row windows require aligned peer/DeepEP workspaces; peer requires BF16")
         self.rows = self.full_row_capacity if packed_rows is None else min(packed_rows, self.full_row_capacity)
         if self.full_row_capacity > 2**31 - 1 or self.routes > 2**31 - 1:
             raise ValueError("native route capacity exceeds int32 metadata")

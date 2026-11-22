@@ -1,0 +1,26 @@
+[
+  {
+    "name": "qwen38-r2-fp8compute60-reference-serial-r1",
+    "script": "tests/test_moe_fp8_deepep_distributed.py",
+    "arguments": [],
+    "environment": {
+      "PYTHONPATH": "build/campaign/deepep-native-scope:.:tests",
+      "CPATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/compat/deepep:/usr/local/pccl/include:/usr/local/pccl/nccl_wrapper/include:/usr/local/PPU_SDK/include",
+      "DEEPEP_NUM_MAX_ICN_PEERS": "8",
+      "DG_MOE_INPUT_HELPER_THREADS": "0"
+    }
+  },
+  {
+    "name": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "script": "tests/test_moe_fp8_deepep_distributed.py",
+    "arguments": [
+      "--early-dy"
+    ],
+    "environment": {
+      "PYTHONPATH": "build/campaign/deepep-native-scope:.:tests",
+      "CPATH": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/compat/deepep:/usr/local/pccl/include:/usr/local/pccl/nccl_wrapper/include:/usr/local/PPU_SDK/include",
+      "DEEPEP_NUM_MAX_ICN_PEERS": "8",
+      "DG_MOE_INPUT_HELPER_THREADS": "0"
+    }
+  }
+]

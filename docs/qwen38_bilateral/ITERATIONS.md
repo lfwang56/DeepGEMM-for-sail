@@ -6377,3 +6377,2010 @@ is treated as a distributed win.
     "passed": null
   }
 ]
+
+
+## Iteration60 — FP8 expert compute with DeepEP BF16 dispatch/combine
+
+Add FP8 E4M3 grouped expert GEMMs to the existing DeepEP adapter, retaining
+BF16 transport, row/128 activation scales,128x128 weight scales, BF16
+intermediate and weight-gradient inputs and FP32 DW. This is not MXFP8
+communication or the still-BF16-only Peer fusion path. Allow only the
+DeepEP FP8 bounded workspace/DY prefetch recipe, retain Peer precision
+guards and the FP8 BM128/split-layout contract. Quantize current weights
+every forward and backward, inside timed/captured work, so in-place
+updates cannot reuse stale initialization quantization. Forward/backward
+activation epilogues hand prequantized data to the next GEMM.
+
+Actual eight-rank gates compare all five complete outputs/gradients
+against an independent CPU quantized STE oracle and the pre-existing
+Native FP8 implementation. Graph replays mutate inputs, weights and routes;
+cover balanced/ragged/zero-weight, skewed unique routes, empty and reversed
+assignments with small bounded rings, both serial and early DY dispatch.
+Do not infer an FP8 fusion speedup from this baseline implementation.
+
+[
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009797634556889534,
+        "dw2": 0.0009211087599396706,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.000979763688519597,
+        "dw2": 0.000921109109185636,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 2.95291613383597e-08,
+      "dw2": 3.006816129413892e-08,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0010193610796704888,
+        "dw2": 0.001108555938117206,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0010193618945777416,
+        "dw2": 0.001108555938117206,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 1.1034011748733974e-07,
+      "dw2": 1.1073542083295251e-07,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009675679029896855,
+        "dw2": 0.0010721925646066666,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009675677865743637,
+        "dw2": 0.0010721924481913447,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 3.207346566114211e-08,
+      "dw2": 3.3279029310051556e-08,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.005749503616243601,
+        "dx": 0.0035084006376564503,
+        "dw1": 0.0008764806552790105,
+        "dw2": 0.0008849724545143545,
+        "dscores": 0.0037320167757570744
+      },
+      {
+        "y": 0.005974738392978907,
+        "dx": 0.003775127464905381,
+        "dw1": 0.0008764804806560278,
+        "dw2": 0.0008849722798913717,
+        "dscores": 0.0037320272531360388
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002666722983121872,
+      "dx": 0.0021963652689009905,
+      "dw1": 3.35638823401041e-08,
+      "dw2": 3.5307351708979695e-08,
+      "dscores": 7.563368598084708e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.006175451911985874,
+        "dx": 0.004165369551628828,
+        "dw1": 0.0009858265984803438,
+        "dw2": 0.0009318398660980165,
+        "dscores": 0.005884362384676933
+      },
+      {
+        "y": 0.006306886672973633,
+        "dx": 0.00441815285012126,
+        "dw1": 0.0009858262492343783,
+        "dw2": 0.0009318368975073099,
+        "dscores": 0.00588435772806406
+      }
+    ],
+    "pair_errors": {
+      "y": 0.003043977078050375,
+      "dx": 0.002435138914734125,
+      "dw1": 1.1499844276841031e-07,
+      "dw2": 1.1288880585880179e-07,
+      "dscores": 5.820074733264846e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.005158334504812956,
+        "dx": 0.004827829077839851,
+        "dw1": 0.0011402064701542258,
+        "dw2": 0.0011466400464996696,
+        "dscores": 0.0035877262707799673
+      },
+      {
+        "y": 0.005530246999114752,
+        "dx": 0.004958080593496561,
+        "dw1": 0.0011402067029848695,
+        "dw2": 0.001146640395745635,
+        "dscores": 0.003587728599086404
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029574413783848286,
+      "dx": 0.002161348471418023,
+      "dw1": 3.930743730506947e-08,
+      "dw2": 3.8469757157599815e-08,
+      "dscores": 6.60805952179544e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.005954194813966751,
+        "dx": 0.004026231821626425,
+        "dw1": 0.0010632252087816596,
+        "dw2": 0.0009076944552361965,
+        "dscores": 0.003801827784627676
+      },
+      {
+        "y": 0.0062162079848349094,
+        "dx": 0.004381174221634865,
+        "dw1": 0.0010632254416123033,
+        "dw2": 0.0009076945716515183,
+        "dscores": 0.003801847342401743
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0026962996926158667,
+      "dx": 0.0024321351666003466,
+      "dw1": 3.102983470171239e-08,
+      "dw2": 3.1092476149297e-08,
+      "dscores": 7.288414849426772e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.0037538371980190277,
+        "dx": 0.004831607919186354,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.002434397581964731
+      },
+      {
+        "y": 0.004216491244733334,
+        "dx": 0.004983427003026009,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.002434408525004983
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0028754351660609245,
+      "dx": 0.002251222962513566,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 9.113195176269073e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.004053820855915546,
+        "dx": 0.004405945539474487,
+        "dw1": 0.0009274499025195837,
+        "dw2": 0.001250903238542378,
+        "dscores": 0.006841504015028477
+      },
+      {
+        "y": 0.004463759250938892,
+        "dx": 0.00460955360904336,
+        "dw1": 0.0009274507756344974,
+        "dw2": 0.0012509031221270561,
+        "dscores": 0.006841497030109167
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002858137944713235,
+      "dx": 0.0021063294261693954,
+      "dw1": 3.367806655774075e-08,
+      "dw2": 3.38893997309242e-08,
+      "dscores": 7.139234980968467e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.009609762579202652,
+        "dx": 0.006750408560037613,
+        "dw1": 0.0007893602014519274,
+        "dw2": 0.001160333282314241,
+        "dscores": 0.005733679514378309
+      },
+      {
+        "y": 0.009827636182308197,
+        "dx": 0.0069536990486085415,
+        "dw1": 0.0007893601432442665,
+        "dw2": 0.0011603337479755282,
+        "dscores": 0.005733699072152376
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029052437748759985,
+      "dx": 0.002529871417209506,
+      "dw1": 3.0874264922431394e-08,
+      "dw2": 3.196395681470676e-08,
+      "dscores": 7.676641899934111e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.003784189000725746,
+        "dx": 0.0036107900086790323,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.005372003652155399
+      },
+      {
+        "y": 0.004212968982756138,
+        "dx": 0.003919914364814758,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.005371996201574802
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0027675738092511892,
+      "dx": 0.00244304072111845,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 8.674193452407053e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.0048638577573001385,
+        "dx": 0.004649926908314228,
+        "dw1": 0.0008222328615374863,
+        "dw2": 0.0014591347426176071,
+        "dscores": 0.003594357054680586
+      },
+      {
+        "y": 0.005147759336978197,
+        "dx": 0.0048376936465501785,
+        "dw1": 0.0008222322212532163,
+        "dw2": 0.001459134859032929,
+        "dscores": 0.003594369860365987
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0026250656228512526,
+      "dx": 0.0021549873054027557,
+      "dw1": 3.923759805957161e-08,
+      "dw2": 3.8225905996114307e-08,
+      "dscores": 8.308526133760097e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.0024684143718332052,
+        "dx": 0.004153745248913765,
+        "dw1": 0.0014325251104310155,
+        "dw2": 0.001141942455433309,
+        "dscores": 0.003194952616468072
+      },
+      {
+        "y": 0.0030542383901774883,
+        "dx": 0.0043297428637743,
+        "dw1": 0.0014325265074148774,
+        "dw2": 0.0011419432703405619,
+        "dscores": 0.0031949521508067846
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029683883767575026,
+      "dx": 0.002253004815429449,
+      "dw1": 3.708748508302051e-08,
+      "dw2": 3.538066550845542e-08,
+      "dscores": 7.875654262079479e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.006130004767328501,
+        "dx": 0.003506612963974476,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0051892478950321674
+      },
+      {
+        "y": 0.006387365981936455,
+        "dx": 0.0038243767339736223,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.005189246963709593
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002992002060636878,
+      "dx": 0.0022191850002855062,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 7.548849367822186e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.015895957127213478,
+        "dx": 0.004867431242018938,
+        "dw1": 0.001439899206161499,
+        "dw2": 0.0011206489289179444,
+        "dscores": 0.003322869073599577
+      },
+      {
+        "y": 0.016021139919757843,
+        "dx": 0.005038414150476456,
+        "dw1": 0.0014398988569155335,
+        "dw2": 0.0011206490453332663,
+        "dscores": 0.003322865581139922
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002896495396271348,
+      "dx": 0.002235159743577242,
+      "dw1": 2.7744414765606962e-08,
+      "dw2": 2.8398877915947196e-08,
+      "dscores": 5.7554853327701494e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.007033649366348982,
+        "dx": 0.005095875356346369,
+        "dw1": 0.0010150743182748556,
+        "dw2": 0.0010275128297507763,
+        "dscores": 0.0030790595337748528
+      },
+      {
+        "y": 0.007247815374284983,
+        "dx": 0.005194628611207008,
+        "dw1": 0.0010150742018595338,
+        "dw2": 0.0010275129461660981,
+        "dscores": 0.0030790455639362335
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0027121263556182384,
+      "dx": 0.001946851727552712,
+      "dw1": 3.586537289379521e-08,
+      "dw2": 3.663369696482732e-08,
+      "dscores": 8.8006650855732e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.005969054996967316,
+        "dx": 0.005827776622027159,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0046165152452886105
+      },
+      {
+        "y": 0.00617145886644721,
+        "dx": 0.006034857593476772,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.004616504535079002
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002855906495824456,
+      "dx": 0.002538139931857586,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 7.746922392470879e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.0039886911399662495,
+        "dx": 0.00679578073322773,
+        "dw1": 0.001060010981746018,
+        "dw2": 0.0012960480526089668,
+        "dscores": 0.005062390584498644
+      },
+      {
+        "y": 0.004255945328623056,
+        "dx": 0.00695143872871995,
+        "dw1": 0.0010600112145766616,
+        "dw2": 0.0012960477033630013,
+        "dscores": 0.005062407348304987
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0026494725607335567,
+      "dx": 0.0020926492288708687,
+      "dw1": 3.358111655415996e-08,
+      "dw2": 3.4426651751573445e-08,
+      "dscores": 7.440431204486231e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.0025499328039586544,
+        "dx": 0.004391548223793507,
+        "dw1": 0.0010562811512500048,
+        "dw2": 0.0021391522604972124,
+        "dscores": 0.0035956664942204952
+      },
+      {
+        "y": 0.003086566459387541,
+        "dx": 0.004504705313593149,
+        "dw1": 0.001056281733326614,
+        "dw2": 0.002139149233698845,
+        "dscores": 0.003595672082155943
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029516217764467,
+      "dx": 0.0021585258655250072,
+      "dw1": 3.929251946033219e-08,
+      "dw2": 4.024045097139606e-08,
+      "dscores": 7.052420869513298e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.006652104202657938,
+        "dx": 0.004580227192491293,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.002081364393234253
+      },
+      {
+        "y": 0.006877524312585592,
+        "dx": 0.004740349482744932,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0020813634619116783
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002801918424665928,
+      "dx": 0.002261708490550518,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 5.936544056339699e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.005441670771688223,
+        "dx": 0.0067390454933047295,
+        "dw1": 0.0009156723390333354,
+        "dw2": 0.0011216806014999747,
+        "dscores": 0.0040494888089597225
+      },
+      {
+        "y": 0.0056888144463300705,
+        "dx": 0.006831966806203127,
+        "dw1": 0.0009156725136563182,
+        "dw2": 0.0011216782731935382,
+        "dscores": 0.004049481824040413
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0028637133073061705,
+      "dx": 0.002056804718449712,
+      "dw1": 3.795823033669876e-08,
+      "dw2": 3.6731577779391955e-08,
+      "dscores": 7.336902996257777e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.006567209959030151,
+        "dx": 0.004163537174463272,
+        "dw1": 0.0009234387543983757,
+        "dw2": 0.0008430402376689017,
+        "dscores": 0.006260508671402931
+      },
+      {
+        "y": 0.006847612094134092,
+        "dx": 0.004313563462346792,
+        "dw1": 0.0009234387543983757,
+        "dw2": 0.0008430403540842235,
+        "dscores": 0.006260516121983528
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0028938527684658766,
+      "dx": 0.002210951177403331,
+      "dw1": 3.695343409049201e-08,
+      "dw2": 3.737110887414019e-08,
+      "dscores": 9.018554436579507e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.005932551808655262,
+        "dx": 0.003840808058157563,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.004815223626792431
+      },
+      {
+        "y": 0.0061243027448654175,
+        "dx": 0.004071954637765884,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.004815234337002039
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002710625994950533,
+      "dx": 0.0023031525779515505,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 7.592100814690639e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-early-dy-r1",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.007777142804116011,
+        "dx": 0.004247371573001146,
+        "dw1": 0.0008610884542576969,
+        "dw2": 0.0014045534189790487,
+        "dscores": 0.00372659252025187
+      },
+      {
+        "y": 0.00792275182902813,
+        "dx": 0.0044506993144750595,
+        "dw1": 0.000861087697558105,
+        "dw2": 0.0014045517891645432,
+        "dscores": 0.003726585302501917
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002774151973426342,
+      "dx": 0.0023274344857782125,
+      "dw1": 3.324130304349637e-08,
+      "dw2": 3.5564525546760706e-08,
+      "dscores": 6.728679835532603e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009797638049349189,
+        "dw2": 0.0009211089345626533,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009797639213502407,
+        "dw2": 0.000921109109185636,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 3.023570727123115e-08,
+      "dw2": 3.186150365763751e-08,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.001019362360239029,
+        "dw2": 0.0011085578007623553,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0010193604975938797,
+        "dw2": 0.001108555938117206,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 1.1199536942285704e-07,
+      "dw2": 1.108632901036799e-07,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009675673791207373,
+        "dw2": 0.0010721926810219884,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0009675677865743637,
+        "dw2": 0.0010721927974373102,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 3.580183971507722e-08,
+      "dw2": 3.565961037566012e-08,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.005749503616243601,
+        "dx": 0.0035084006376564503,
+        "dw1": 0.0008764807716943324,
+        "dw2": 0.0008849721634760499,
+        "dscores": 0.0037320167757570744
+      },
+      {
+        "y": 0.005974738392978907,
+        "dx": 0.003775127464905381,
+        "dw1": 0.0008764804224483669,
+        "dw2": 0.0008849722798913717,
+        "dscores": 0.0037320272531360388
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002666722983121872,
+      "dx": 0.0021963652689009905,
+      "dw1": 2.645946217683104e-08,
+      "dw2": 2.8338362767499348e-08,
+      "dscores": 7.563368598084708e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.006175451911985874,
+        "dx": 0.004165369551628828,
+        "dw1": 0.000985829159617424,
+        "dw2": 0.0009318387019447982,
+        "dscores": 0.005884362384676933
+      },
+      {
+        "y": 0.006306886672973633,
+        "dx": 0.00441815285012126,
+        "dw1": 0.0009858261328190565,
+        "dw2": 0.00093183817807585,
+        "dscores": 0.00588435772806406
+      }
+    ],
+    "pair_errors": {
+      "y": 0.003043977078050375,
+      "dx": 0.002435138914734125,
+      "dw1": 1.1532334553976398e-07,
+      "dw2": 1.1473689198737702e-07,
+      "dscores": 5.820074733264846e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.005158334504812956,
+        "dx": 0.004827829077839851,
+        "dw1": 0.0011402067029848695,
+        "dw2": 0.0011466400464996696,
+        "dscores": 0.0035877262707799673
+      },
+      {
+        "y": 0.005530246999114752,
+        "dx": 0.004958080593496561,
+        "dw1": 0.0011402067029848695,
+        "dw2": 0.0011466394644230604,
+        "dscores": 0.003587728599086404
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029574413783848286,
+      "dx": 0.002161348471418023,
+      "dw1": 4.007369014402684e-08,
+      "dw2": 4.180948209864255e-08,
+      "dscores": 6.60805952179544e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.005954194813966751,
+        "dx": 0.004026231821626425,
+        "dw1": 0.0010632246267050505,
+        "dw2": 0.000907694164197892,
+        "dscores": 0.003801827784627676
+      },
+      {
+        "y": 0.0062162079848349094,
+        "dx": 0.004381174221634865,
+        "dw1": 0.0010632250923663378,
+        "dw2": 0.0009076945716515183,
+        "dscores": 0.003801847342401743
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0026962996926158667,
+      "dx": 0.0024321351666003466,
+      "dw1": 3.7428023347274575e-08,
+      "dw2": 3.649754276580097e-08,
+      "dscores": 7.288414849426772e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.0037538371980190277,
+        "dx": 0.004831607919186354,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.002434397581964731
+      },
+      {
+        "y": 0.004216491244733334,
+        "dx": 0.004983427003026009,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.002434408525004983
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0028754351660609245,
+      "dx": 0.002251222962513566,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 9.113195176269073e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.004053820855915546,
+        "dx": 0.004405945539474487,
+        "dw1": 0.000927449727896601,
+        "dw2": 0.0012509021908044815,
+        "dscores": 0.006841504015028477
+      },
+      {
+        "y": 0.004463759250938892,
+        "dx": 0.00460955360904336,
+        "dw1": 0.0009274499607272446,
+        "dw2": 0.0012509034713730216,
+        "dscores": 0.006841497030109167
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002858137944713235,
+      "dx": 0.0021063294261693954,
+      "dw1": 3.4986825880878314e-08,
+      "dw2": 3.5494952754788756e-08,
+      "dscores": 7.139234980968467e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.009609762579202652,
+        "dx": 0.006750408560037613,
+        "dw1": 0.0007893603760749102,
+        "dw2": 0.001160333980806172,
+        "dscores": 0.005733679514378309
+      },
+      {
+        "y": 0.009827636182308197,
+        "dx": 0.0069536990486085415,
+        "dw1": 0.0007893598522059619,
+        "dw2": 0.0011603340972214937,
+        "dscores": 0.005733699072152376
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029052437748759985,
+      "dx": 0.002529871417209506,
+      "dw1": 3.617047283910324e-08,
+      "dw2": 3.6135748615606644e-08,
+      "dscores": 7.676641899934111e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.003784189000725746,
+        "dx": 0.0036107900086790323,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.005372003652155399
+      },
+      {
+        "y": 0.004212968982756138,
+        "dx": 0.003919914364814758,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.005371996201574802
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0027675738092511892,
+      "dx": 0.00244304072111845,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 8.674193452407053e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.0048638577573001385,
+        "dx": 0.004649926908314228,
+        "dw1": 0.0008222327451221645,
+        "dw2": 0.001459134859032929,
+        "dscores": 0.003594357054680586
+      },
+      {
+        "y": 0.005147759336978197,
+        "dx": 0.0048376936465501785,
+        "dw1": 0.0008222322212532163,
+        "dw2": 0.0014591329963877797,
+        "dscores": 0.003594369860365987
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0026250656228512526,
+      "dx": 0.0021549873054027557,
+      "dw1": 3.668089476605019e-08,
+      "dw2": 3.738829690291823e-08,
+      "dscores": 8.308526133760097e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.0024684143718332052,
+        "dx": 0.004153745248913765,
+        "dw1": 0.0014325273223221302,
+        "dw2": 0.0011419435031712055,
+        "dscores": 0.003194952616468072
+      },
+      {
+        "y": 0.0030542383901774883,
+        "dx": 0.0043297428637743,
+        "dw1": 0.001432526740245521,
+        "dw2": 0.0011419435031712055,
+        "dscores": 0.0031949521508067846
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029683883767575026,
+      "dx": 0.002253004815429449,
+      "dw1": 3.516359114996703e-08,
+      "dw2": 3.320906571957494e-08,
+      "dscores": 7.875654262079479e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.006130004767328501,
+        "dx": 0.003506612963974476,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0051892478950321674
+      },
+      {
+        "y": 0.006387365981936455,
+        "dx": 0.0038243767339736223,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.005189246963709593
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002992002060636878,
+      "dx": 0.0022191850002855062,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 7.548849367822186e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.015895957127213478,
+        "dx": 0.004867431242018938,
+        "dw1": 0.0014398981584236026,
+        "dw2": 0.0011206488125026226,
+        "dscores": 0.003322869073599577
+      },
+      {
+        "y": 0.016021139919757843,
+        "dx": 0.005038414150476456,
+        "dw1": 0.001439897809177637,
+        "dw2": 0.0011206484632566571,
+        "dscores": 0.003322865581139922
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002896495396271348,
+      "dx": 0.002235159743577242,
+      "dw1": 2.4218826055744103e-08,
+      "dw2": 2.7092825760632877e-08,
+      "dscores": 5.7554853327701494e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.007033649366348982,
+        "dx": 0.005095875356346369,
+        "dw1": 0.0010150743182748556,
+        "dw2": 0.0010275131789967418,
+        "dscores": 0.0030790595337748528
+      },
+      {
+        "y": 0.007247815374284983,
+        "dx": 0.005194628611207008,
+        "dw1": 0.001015074667520821,
+        "dw2": 0.0010275127133354545,
+        "dscores": 0.0030790455639362335
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0027121263556182384,
+      "dx": 0.001946851727552712,
+      "dw1": 3.818638205643765e-08,
+      "dw2": 3.9189721690036095e-08,
+      "dscores": 8.8006650855732e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.005969054996967316,
+        "dx": 0.005827776622027159,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0046165152452886105
+      },
+      {
+        "y": 0.00617145886644721,
+        "dx": 0.006034857593476772,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.004616504535079002
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002855906495824456,
+      "dx": 0.002538139931857586,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 7.746922392470879e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.0039886911399662495,
+        "dx": 0.00679578073322773,
+        "dw1": 0.0010600099340081215,
+        "dw2": 0.001296047237701714,
+        "dscores": 0.005062390584498644
+      },
+      {
+        "y": 0.004255945328623056,
+        "dx": 0.00695143872871995,
+        "dw1": 0.0010600107489153743,
+        "dw2": 0.0012960480526089668,
+        "dscores": 0.005062407348304987
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0026494725607335567,
+      "dx": 0.0020926492288708687,
+      "dw1": 3.6455212182318064e-08,
+      "dw2": 3.749319077428481e-08,
+      "dscores": 7.440431204486231e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.0025499328039586544,
+        "dx": 0.004391548223793507,
+        "dw1": 0.0010562811512500048,
+        "dw2": 0.0021391522604972124,
+        "dscores": 0.0035956664942204952
+      },
+      {
+        "y": 0.003086566459387541,
+        "dx": 0.004504705313593149,
+        "dw1": 0.0010562819661572576,
+        "dw2": 0.0021391515620052814,
+        "dscores": 0.003595672082155943
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0029516217764467,
+      "dx": 0.0021585258655250072,
+      "dw1": 3.9375780858108556e-08,
+      "dw2": 3.889908484211446e-08,
+      "dscores": 7.052420869513298e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.006652104202657938,
+        "dx": 0.004580227192491293,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.002081364393234253
+      },
+      {
+        "y": 0.006877524312585592,
+        "dx": 0.004740349482744932,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0020813634619116783
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002801918424665928,
+      "dx": 0.002261708490550518,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 5.936544056339699e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.005441670771688223,
+        "dx": 0.0067390454933047295,
+        "dw1": 0.0009156722226180136,
+        "dw2": 0.0011216799030080438,
+        "dscores": 0.0040494888089597225
+      },
+      {
+        "y": 0.0056888144463300705,
+        "dx": 0.006831966806203127,
+        "dw1": 0.0009156723972409964,
+        "dw2": 0.001121680485084653,
+        "dscores": 0.004049481824040413
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0028637133073061705,
+      "dx": 0.002056804718449712,
+      "dw1": 3.5285104615923046e-08,
+      "dw2": 3.8510393096657936e-08,
+      "dscores": 7.336902996257777e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "balanced",
+    "oracle_errors": [
+      {
+        "y": 0.006567209959030151,
+        "dx": 0.004163537174463272,
+        "dw1": 0.0009234389872290194,
+        "dw2": 0.0008430405287072062,
+        "dscores": 0.006260508671402931
+      },
+      {
+        "y": 0.006847612094134092,
+        "dx": 0.004313563462346792,
+        "dw1": 0.0009234391618520021,
+        "dw2": 0.0008430402376689017,
+        "dscores": 0.006260516121983528
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0028938527684658766,
+      "dx": 0.002210951177403331,
+      "dw1": 3.735705078611318e-08,
+      "dw2": 3.8580711958502434e-08,
+      "dscores": 9.018554436579507e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "skewed_unique",
+    "oracle_errors": [
+      {
+        "y": 0.005932551808655262,
+        "dx": 0.003840808058157563,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.004815223626792431
+      },
+      {
+        "y": 0.0061243027448654175,
+        "dx": 0.004071954637765884,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.004815234337002039
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002710625994950533,
+      "dx": 0.0023031525779515505,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 7.592100814690639e-08
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "empty",
+    "oracle_errors": [
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      },
+      {
+        "y": 0.0,
+        "dx": 0.0,
+        "dw1": 0.0,
+        "dw2": 0.0,
+        "dscores": 0.0
+      }
+    ],
+    "pair_errors": {
+      "y": 0.0,
+      "dx": 0.0,
+      "dw1": 0.0,
+      "dw2": 0.0,
+      "dscores": 0.0
+    }
+  },
+  {
+    "phase": "qwen38-r2-fp8compute60-reference-serial-r1-attempt0",
+    "clean": false,
+    "backend": null,
+    "ms": null,
+    "passed": true,
+    "pattern": "reversed_changed_weights",
+    "oracle_errors": [
+      {
+        "y": 0.007777142804116011,
+        "dx": 0.004247371573001146,
+        "dw1": 0.0008610881050117314,
+        "dw2": 0.001404553884640336,
+        "dscores": 0.00372659252025187
+      },
+      {
+        "y": 0.00792275182902813,
+        "dx": 0.0044506993144750595,
+        "dw1": 0.0008610879303887486,
+        "dw2": 0.0014045506250113249,
+        "dscores": 0.003726585302501917
+      }
+    ],
+    "pair_errors": {
+      "y": 0.002774151973426342,
+      "dx": 0.0023274344857782125,
+      "dw1": 3.263541614728638e-08,
+      "dw2": 3.359162903393553e-08,
+      "dscores": 6.728679835532603e-08
+    }
+  }
+]

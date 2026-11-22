@@ -1,4 +1,4 @@
-"""Installed DeepEP Buffer dispatch/combine with native BF16 grouped GEMMs.
+"""Installed DeepEP BF16 dispatch/combine with BF16 or FP8 grouped GEMMs.
 
 DeepEP transports one copy per destination rank. Local GPU metadata expands
 only the expert rows needed by the grouped GEMMs. All receive capacities are
@@ -17,8 +17,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
     transport = "deepep"
 
     def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None, **kwargs):
-        if kwargs.get("compute", "bf16") != "bf16":
-            raise ValueError("the DeepEP comparison currently implements BF16")
+        if kwargs.get("compute", "bf16") == "fp8" and kwargs.get("m_schedule", "nopad") != "nopad":
+            raise ValueError("DeepEP FP8 GEMMs require the nopad expert schedule")
         if kwargs.get("group") is None:
             raise ValueError("DeepEP requires an initialized EP process group")
         import deep_ep
@@ -26,6 +26,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
         if "packed_rows" in kwargs:
             raise ValueError("use ring_rows to enable routed-row scheduling")
         self.ring_rows = ring_rows
+        self.communication_dtype = "bf16"
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
         if ring_rows is not None and (self.k > 32 or self.size * self.chunk_tokens * self.h > 2**31 - 1):
             raise ValueError("DeepEP routed-row windows require topk<=32 and an int32-bounded receive matrix")
@@ -83,6 +84,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
 
     def _prepare_pointwise(self):
         operations = [0, 1, 2, 7, 8, 13, 16, 19, 20, 23, 24]
+        if self.compute == "fp8":
+            operations.extend((9, 10, 14, 15))
         if self.fast_weight_transpose:
             operations.append(22)
         if self.ring_rows is not None:
@@ -94,8 +97,16 @@ class DeepEPMoEPlan(NativeMoEPlan):
         role = {"w1": "fc1", "w2": "fc2", "w2_t": "dhidden", "w1_t": "dx"}[name]
         config = self.gemm_configs.get(role)
         options = {} if config is None else {"configs": (dg.get_num_sms(), self.block_m, *config, (0, 0, 0))}
-        dg.m_grouped_bf16_gemm_nt_nopad(a, weight, output, self.group_ids,
-                                       m_rows=self.lengths, **options)
+        if self.compute == "fp8":
+            quantized_a = self.quantized[a.shape[1]]
+            if not prequantized:
+                _launch(9, [a, *quantized_a], list(a.shape))
+            dg.m_grouped_fp8_gemm_nt_nopad(
+                quantized_a, self.quantized[name], output, self.group_ids,
+                m_rows=self.lengths, disable_ue8m0_cast=True, **options)
+        else:
+            dg.m_grouped_bf16_gemm_nt_nopad(a, weight, output, self.group_ids,
+                                           m_rows=self.lengths, **options)
 
     def _dispatch_chunk(self, x, ids, scores, valid_tokens, start):
         t, c, h, k = x.shape[0], self.chunk_tokens, self.h, self.k
@@ -141,8 +152,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
 
     def _expert_forward(self, w1, w2):
         self._gemm(self.packed_x, w1, self.gate_up, "w1")
-        self._activation()
-        self._gemm(self.hidden, w2, self.packed_output, "w2")
+        fused = self._activation()
+        self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
 
     def _combine(self, rw, handle, weighted, dscores=None):
         if self.ring_rows is not None:
@@ -179,6 +190,10 @@ class DeepEPMoEPlan(NativeMoEPlan):
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
+            # Weights may change in-place between graph replays or eager calls.
+            # Match Native's dynamic FP8 recipe; quantization is inside timing.
+            if self.compute == "fp8":
+                self._prepare_weights(w1, w2)
             output = torch.empty_like(x)
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 rw, handle = self._dispatch_chunk(x, ids, scores, valid_tokens, start)
@@ -263,10 +278,10 @@ class DeepEPMoEPlan(NativeMoEPlan):
                     asynchronous=self.wgrad_overlap == "both")
         dhidden = self.hidden if self.backward_hidden is None else self.backward_hidden
         self._gemm(self.packed_dy, self.w2_t, dhidden, "w2_t")
-        self._activation(backward=True, hidden=dhidden)
+        fused = self._activation(backward=True, hidden=dhidden)
         self._wgrad(self.gate_up, self.packed_x, dw1,
                     asynchronous=self.wgrad_overlap != "none")
-        self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t")
+        self._gemm(self.gate_up, self.w1_t, self.packed_output, "w1_t", prequantized=fused)
 
     def close(self):
         if self.deep_ep_buffer is not None:
