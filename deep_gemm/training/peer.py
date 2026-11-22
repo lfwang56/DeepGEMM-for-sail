@@ -41,7 +41,8 @@ class PeerMoEPlan(NativeMoEPlan):
                  fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, transpose_free_dgrad=False,
                  input_helper_threads=None, input_helper_block_m=None, input_helper_block_n=None,
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
-                 fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None, **kwargs):
+                 fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None,
+                 fp8_input_cache_scales=None, **kwargs):
         # Optional CTA helper recipe; environment values allow the same large
         # reference and capacity harnesses to exercise the exact candidate.
         def helper_value(value, key, default):
@@ -195,6 +196,9 @@ class PeerMoEPlan(NativeMoEPlan):
             return value
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
+        self.fp8_input_cache_scales = fp8_flag(fp8_input_cache_scales, "DG_MOE_FP8_INPUT_CACHE_SCALES")
+        if self.fp8_input_cache_scales and not self.fp8_input_pipeline:
+            raise ValueError("FP8 input scale caching requires its input pipeline")
         self.fp8_input_ctas = helper_value(fp8_input_ctas, "DG_MOE_FP8_INPUT_CTAS", 8)
         self.fp8_input_threads = helper_value(fp8_input_threads, "DG_MOE_FP8_INPUT_THREADS", 128)
         if self.fp8_input_threads not in (128, 256, 512):
@@ -327,6 +331,8 @@ class PeerMoEPlan(NativeMoEPlan):
         self.reuse_packed_dy = reuse_packed_dy and (fuse_dispatch or self.fp8_peer_compute)
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
         if self.fp8_input_pipeline:
+            if self.fp8_input_cache_scales and self.h > 8192:
+                raise ValueError("cached FP8 input scales support hidden<=8192")
             if not 0 < self.fp8_input_ctas < dg.get_num_sms():
                 raise ValueError("FP8 producer CTAs must leave at least one GEMM CU")
             self._fp8_input_stream = torch.cuda.Stream(device=self.device)
@@ -352,7 +358,8 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.fuse_dhidden_scores, self.transpose_free_dgrad,
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
-                      self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads)
+                      self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
+                      self.fp8_input_cache_scales)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -921,7 +928,7 @@ class PeerMoEPlan(NativeMoEPlan):
                    self.quantized_scale_storage[self.h], self.packed_x, self.num_blocks,
                    self.fp8_input_ready, self.status],
               [self.rows, self.h, self.chunk_tokens, self.size, self.fp8_input_ctas, 0,
-               self.fp8_input_threads], compile_only)
+               self.fp8_input_threads, int(self.fp8_input_cache_scales)], compile_only)
 
     def _join_fp8_bf_input(self):
         if self._fp8_bf_input_pending:

@@ -9,7 +9,7 @@ import deep_gemm as dg
 from deep_gemm.training.native import _launch
 
 
-def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, threads=128):
+def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, threads=128, cache_scales=False):
     world=4
     source=(torch.randn(world*tokens,k,device='cuda')*.2).bfloat16()
     qs=torch.empty_like(source,dtype=torch.float8_e4m3fn)
@@ -38,7 +38,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
 
     def producer(copy_bf=True, compile_only=False):
         dg._C._moe_training_peer_launch(19,[qtables,stables,btables,rows,q,sf,bf,blocks,ready,status],
-            [capacity,k,tokens,world,ctas,int(copy_bf),threads],compile_only)
+            [capacity,k,tokens,world,ctas,int(copy_bf),threads,int(cache_scales)],compile_only)
 
     def consumer(output,compile_only=False):
         dg._C._moe_training_peer_fp8_gemm((q,sf.t()),(qw,sw),output,lengths,rows,btables,tokens,
@@ -111,12 +111,12 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
             assert torch.all(out[active:]==-23)
         assert torch.equal(serial,parallel)
         print(json.dumps(dict(case='fp8_peer_input_component_reference',shape=[groups,n,k,capacity],counts=counts,
-              graph=True,source_owners_local=True,producer_ctas=ctas,producer_threads=threads,all_quantization_bytes=True,all_scales=True,
+              graph=True,source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,all_quantization_bytes=True,all_scales=True,
               bf16_dw_copy=True,inactive_canaries=True,serial_parallel_exact=True,errors=errors,passed=True)),flush=True)
     # Copy omission must preserve BF16 scratch, without changing quantization.
     bf.fill_(-29);step(parallel,True,False);torch.cuda.synchronize()
     assert torch.all(bf==-29) and status.item()==0
-    print(json.dumps(dict(case='fp8_peer_input_no_bf16_reference',shape=[groups,n,k,capacity],producer_ctas=ctas,producer_threads=threads,passed=True)),flush=True)
+    print(json.dumps(dict(case='fp8_peer_input_no_bf16_reference',shape=[groups,n,k,capacity],producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,passed=True)),flush=True)
     if benchmark:
         for mode,graph in zip(('staged_bf16_native','serial','parallel'),[baseline_graph,*graphs]):
             for _ in range(5):graph.replay()
@@ -127,7 +127,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
                 for _ in range(20):graph.replay()
                 end.record();end.synchronize();samples.append(begin.elapsed_time(end)/20)
             print(json.dumps(dict(case='fp8_peer_input_component_performance',mode=mode,shape=[groups,n,k,capacity],
-                  source_owners_local=True,producer_ctas=ctas,producer_threads=threads,consumer_ctas=dg.get_num_sms()-ctas,
+                  source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,consumer_ctas=dg.get_num_sms()-ctas,
                   source_quantization_in_timing=mode!='staged_bf16_native',bf16_dw_copy=True,median_ms=statistics.median(samples),
                   samples_ms=samples,scope='source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step')),
                   flush=True)
@@ -140,8 +140,8 @@ def main():
     stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
         fixture(4,512,512,2048,256,[[128,256,384,512],[0,128,512,128],[0,0,0,0],[512]*4])
-        for ctas,threads in ((8,128),(8,256),(8,512),(4,512)):
-            fixture(16,4096,8192,65536,4096,[[0]*16,[2560]*16],benchmark=True,ctas=ctas,threads=threads)
+        for ctas,threads,cache in ((8,256,False),(8,256,True),(8,512,True),(4,512,True)):
+            fixture(16,4096,8192,65536,4096,[[0]*16,[2560]*16],benchmark=True,ctas=ctas,threads=threads,cache_scales=cache)
     stream.synchronize()
 
 

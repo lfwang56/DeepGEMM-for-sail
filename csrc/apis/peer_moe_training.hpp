@@ -28,15 +28,17 @@ public:
         const int warp_rows = get_env<int>("DG_INPUT_ASSIST_WARP_ROWS", 1);
         DG_HOST_ASSERT(warp_rows == 0 || warp_rows == 1);
         const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
+        const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_training.cuh>
 extern "C" __launch_bounds__({}, 1)
 __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {{
-    deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}>(params);
+    deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}{}>(params);
 }}
 )", args.launch_args.block_dim.x, args.operation, args.operation,
-       assist ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0,
-       args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false");
+       assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0,
+       args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
+       cache_fp8_scales ? ", true" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -65,7 +67,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
         case PeerOperation::StageFp8InputTiles:
             // Three source pointer tables (FP8, row scales, original BF16),
             // global source rows, local FP8/MN scales/BF16, count, ready, status.
-            DG_HOST_ASSERT(dims.size() == 6 || dims.size() == 7);
+            DG_HOST_ASSERT(dims.size() >= 6 && dims.size() <= 8);
             schema(10, dims.size());
             DG_HOST_ASSERT(dims[0] > 0 && dims[0] % 128 == 0 && dims[1] > 0 && dims[1] % 128 == 0
                            && dims[2] > 0 && dims[3] > 0 && dims[3] <= 64
@@ -76,7 +78,8 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             expect(6, dims[0] * dims[1], bf); expect(7, 1, i32);
             expect(8, dims[0] / 128, i32); expect(9, 1, i32);
             DG_HOST_ASSERT(dims[0] * dims[1] <= INT32_MAX);
-            threads = dims.size() == 7 ? dims[6] : 128;
+            if (dims.size() == 8) DG_HOST_ASSERT(dims[7] <= 1 && (!dims[7] || dims[1] <= 8192));
+            threads = dims.size() >= 7 ? dims[6] : 128;
             DG_HOST_ASSERT(threads == 128 || threads == 256 || threads == 512);
             blocks = dims[4];
             break;

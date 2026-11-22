@@ -14,12 +14,20 @@ __device__ __forceinline__ T* peer_pointer(const Params& p, int index) {
     return reinterpret_cast<T*>(p.ptr[index]);
 }
 
-template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false>
+template <uint32_t Width>
+__device__ __forceinline__ float* fp8_input_scale_tile() {
+    static_assert(Width >= 128 && Width <= 8192 && Width % 128 == 0);
+    __shared__ float scales[128][Width / 128 + 1];
+    return &scales[0][0];
+}
+
+template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false,
+          bool CacheFp8Scales = false>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
     if constexpr (Op == PeerOperation::StageFp8InputTiles) {
-        const int64_t capacity = p.dim[0], width = p.dim[1], tokens = p.dim[2];
+        const int64_t capacity = p.dim[0], width = InputWidth ? InputWidth : p.dim[1], tokens = p.dim[2];
         const int blocks = peer_pointer<int32_t>(p, 7)[0];
         auto* status = peer_pointer<uint32_t>(p, 9);
         if (blocks < 0 || blocks > capacity / 128) {
@@ -27,6 +35,8 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             return;
         }
         __shared__ uint64_t q_addresses[128], scale_addresses[128], bf_addresses[128];
+        float* scale_tile = nullptr;
+        if constexpr (CacheFp8Scales) scale_tile = fp8_input_scale_tile<InputWidth>();
         for (int tile = block_index; tile < blocks; tile += gridDim.x) {
             const int64_t base_row = int64_t(tile) * 128;
             if (threadIdx.x < 128) {
@@ -79,14 +89,28 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                         }
                     }
                 }
+                if constexpr (CacheFp8Scales) {
+                    // Fetch adjacent scales from one remote row together.
+                    // The shared tile then transposes them for MN stores.
+                    const uint64_t address = scale_addresses[r];
+                    for (int segment = lane; segment < width / 128; segment += 32)
+                        scale_tile[r * (InputWidth / 128 + 1) + segment] = address
+                            ? reinterpret_cast<const float*>(address)[segment] : (1e-4f / 448.f);
+                }
             }
+            if constexpr (CacheFp8Scales) __syncthreads();
             // MN scales are contiguous across rows. Map neighboring lanes
             // to rows so stores coalesce, rather than striding capacity*4.
             for (int item = threadIdx.x; item < 128 * (width / 128); item += blockDim.x) {
                 const int r = item % 128, segment = item / 128;
-                const uint64_t address = scale_addresses[r];
-                peer_pointer<float>(p, 5)[int64_t(segment) * capacity + base_row + r] = address
-                    ? reinterpret_cast<const float*>(address)[segment] : (1e-4f / 448.f);
+                float scale;
+                if constexpr (CacheFp8Scales)
+                    scale = scale_tile[r * (InputWidth / 128 + 1) + segment];
+                else {
+                    const uint64_t address = scale_addresses[r];
+                    scale = address ? reinterpret_cast<const float*>(address)[segment] : (1e-4f / 448.f);
+                }
+                peer_pointer<float>(p, 5)[int64_t(segment) * capacity + base_row + r] = scale;
             }
             // Every writer fences its payload before thread0 publishes the
             // tile. Consumers acquire all 128-row signals covered by M192.
