@@ -71,6 +71,7 @@ def rms(a, b):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--early-dy', action='store_true')
+    ap.add_argument('--check-zero-capacity', action='store_true')
     args = ap.parse_args()
     rank, size = int(os.environ['RANK']), int(os.environ['WORLD_SIZE'])
     device = torch.device('cuda', int(os.environ['LOCAL_RANK']))
@@ -153,6 +154,32 @@ def main():
         dist.all_reduce(gate, op=dist.ReduceOp.MIN)
         if not gate.item():raise AssertionError('FP8 DeepEP oracle or transport mismatch')
         previous = actual
+    if args.check_zero_capacity:
+        with torch.cuda.stream(stream):
+            zero_options = dict(common)
+            zero_options['max_tokens'] = 0
+            zero = DeepEPMoEPlan(**zero_options, ring_rows=128, comm_sms=38,
+                                elastic_hybrid=True, overlap_expert_dy=args.early_dy)
+            zx, zdy, zi, zs = x[:0], dy[:0], ids[:0], scores[:0]
+            zv = torch.zeros_like(valid)
+            def zero_step():
+                y = zero.forward(zx, zi, zs, w1, w2, zv)
+                return y, *zero.backward(zdy, zx, zi, zs, w1, w2, zv)
+            zero_step(); stream.synchronize()
+            zero_graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(zero_graph, stream=stream):
+                zero_outputs = zero_step()
+            w1.mul_(1.03); w2.mul_(.97)
+            zero_graph.replay()
+        stream.synchronize(); zero.check()
+        passed = all(value.numel() == 0 for value in (zero_outputs[0], zero_outputs[1], zero_outputs[4]))
+        passed = passed and not bool(torch.count_nonzero(zero_outputs[2])) and not bool(torch.count_nonzero(zero_outputs[3]))
+        passed = passed and not zero._pending_weight_events
+        print(json.dumps(dict(case='fp8_zero_capacity_graph_reference', rank=rank, ranks=size,
+              async_weights=zero.fp8_async_weight_quantization, graph=True, passed=passed)), flush=True)
+        if not passed:raise AssertionError('zero-capacity weight stream was not joined')
+        del zero_graph, zero_outputs
+        stream.synchronize(); zero.close(); del zero
     del graphs, buffers, result, actual, previous
     gc.collect(); stream.synchronize()
     for plan in plans:

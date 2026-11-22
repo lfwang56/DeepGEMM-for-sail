@@ -19,7 +19,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
     transport = "deepep"
 
     def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None,
-                 fp8_active_quantization=None, fp8_mn_major_scales=None, **kwargs):
+                 fp8_active_quantization=None, fp8_mn_major_scales=None,
+                 fp8_async_weight_quantization=None, **kwargs):
         def quant_flag(value, key):
             if value is None:
                 raw = os.environ.get(key, "0")
@@ -31,10 +32,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
             return value
         self.fp8_active_quantization = quant_flag(fp8_active_quantization, "DG_MOE_FP8_ACTIVE_QUANTIZATION")
         self.fp8_mn_major_scales = quant_flag(fp8_mn_major_scales, "DG_MOE_FP8_MN_MAJOR_SCALES")
+        self.fp8_async_weight_quantization = quant_flag(fp8_async_weight_quantization, "DG_MOE_FP8_ASYNC_WEIGHTS")
         if self.fp8_mn_major_scales and not self.fp8_active_quantization:
             raise ValueError("MN-major FP8 scales require active-row quantization")
-        if self.fp8_active_quantization and kwargs.get("compute", "bf16") != "fp8":
-            raise ValueError("active FP8 quantization requires FP8 expert compute")
+        if (self.fp8_active_quantization or self.fp8_async_weight_quantization) and kwargs.get("compute", "bf16") != "fp8":
+            raise ValueError("FP8 quantization options require FP8 expert compute")
         if kwargs.get("compute", "bf16") == "fp8" and kwargs.get("m_schedule", "nopad") != "nopad":
             raise ValueError("DeepEP FP8 GEMMs require the nopad expert schedule")
         if kwargs.get("group") is None:
@@ -46,11 +48,18 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.ring_rows = ring_rows
         self.communication_dtype = "bf16"
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
-        recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales)
+        recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales, self.fp8_async_weight_quantization)
         recipes = [None] * self.size
         dist.all_gather_object(recipes, recipe, group=self.group)
         if any(other != recipe for other in recipes):
             raise ValueError("DeepEP ranks disagree on FP8 quantization layout")
+        self._weight_quant_stream = (torch.cuda.Stream(device=self.device)
+                                     if self.fp8_async_weight_quantization else None)
+        self._forward_weight_events = ({name: torch.cuda.Event() for name in ("w1", "w2")}
+                                       if self.fp8_async_weight_quantization else {})
+        self._backward_weight_events = ({name: torch.cuda.Event() for name in ("w1", "w2", "w2_t", "w1_t")}
+                                        if self.fp8_async_weight_quantization else {})
+        self._pending_weight_events = {}
         self.quantized_scale_storage = {}
         if self.compute == "fp8":
             for width in (self.h, self.i, 2 * self.i):
@@ -119,6 +128,44 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.buffers[name] = value
         return value
 
+    def _prepare_weights(self, w1, w2, backward=False):
+        if not self.fp8_async_weight_quantization:
+            return super()._prepare_weights(w1, w2, backward=backward)
+        main = torch.cuda.current_stream(self.device)
+        self._weight_quant_stream.wait_stream(main)
+        events = self._backward_weight_events if backward else self._forward_weight_events
+        with torch.cuda.stream(self._weight_quant_stream):
+            # BF16 casts may be temporary tensors owned by the main stream.
+            w1.record_stream(self._weight_quant_stream)
+            w2.record_stream(self._weight_quant_stream)
+            self._quantize_weight("w1", w1)
+            events["w1"].record()
+            self._quantize_weight("w2", w2)
+            events["w2"].record()
+            if backward:
+                if self.fast_weight_transpose and w1.data_ptr() % 16 == 0 and w2.data_ptr() % 16 == 0:
+                    _launch(22, [w1, w2, self.w1_t, self.w2_t], [self.e, self.h, self.i])
+                else:
+                    self.w1_t.copy_(w1.transpose(1, 2))
+                    self.w2_t.copy_(w2.transpose(1, 2))
+                # dHidden consumes W2_t before DX consumes W1_t.
+                self._quantize_weight("w2_t", self.w2_t)
+                events["w2_t"].record()
+                self._quantize_weight("w1_t", self.w1_t)
+                events["w1_t"].record()
+        self._pending_weight_events = dict(events)
+
+    def _wait_for_weight(self, name):
+        event = self._pending_weight_events.pop(name, None)
+        if event is not None:
+            torch.cuda.current_stream(self.device).wait_event(event)
+
+    def _join_weight_quantization(self):
+        # Rejoin side-stream work even for an empty max-token capacity.
+        for event in self._pending_weight_events.values():
+            torch.cuda.current_stream(self.device).wait_event(event)
+        self._pending_weight_events.clear()
+
     def _prepare_local(self, w1, w2):
         if self.fp8_active_quantization:
             # Native warming zeros lengths but normally never reads offsets.
@@ -164,6 +211,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                             [self.rows, a.shape[1], int(self.fp8_mn_major_scales)])
                 else:
                     _launch(9, [a, *quantized_a], list(a.shape))
+            self._wait_for_weight(name)
             dg.m_grouped_fp8_gemm_nt_nopad(
                 quantized_a, self.quantized[name], output, self.group_ids,
                 m_rows=self.lengths, disable_ue8m0_cast=True, **options)
@@ -273,6 +321,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 output[start:start + count].copy_(local_y[:count])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
+            self._join_weight_quantization()
             return output
 
     @torch.no_grad()
@@ -328,6 +377,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 self._join_wgrad()
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
+            self._join_weight_quantization()
             return dx, dw1, dw2, dscores
 
     def _expert_backward_rows(self, rdy, rw, dw1, dw2):

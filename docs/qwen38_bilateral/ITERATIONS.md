@@ -9088,3 +9088,164 @@ Any speedup here is FP8 baseline optimization, not an FP8 fusion speedup.
     "passed": true
   }
 ]
+
+
+## Iteration64 — stage FP8 weights by first consumer on a side stream
+
+63 passed192 full reference records and clean audits. Same-host raw FP8
+519.701953ms, active-row131.635583ms, active+MN121.885461ms, BF16105.270813ms.
+This is a4.26x FP8 baseline repair, not a fused-vs-DeepEP ratio; FP8 remains
+15.8%slower than BF16. The earlier exact profile found26.907956ms weight
+quantization and2.581788ms transposes serialized before useful payload work.
+
+Opt-in FP8 auxiliary stream performs the same six weight quantizations and
+transpose, with per-phase/per-weight ready events. W1/W2 become ready before
+FC1/FC2; in backward transpose+W2_t quantization precedes W1_t because
+dHidden is its first consumer. Input quantization/routing can run before
+waiting for a weight at the GEMM boundary. Each weight is joined once, and
+all outstanding events rejoin even for zero max-token capacity. Temporary
+BF16 weight tensors record the producer stream. Defaultfalse unchanged;
+all-rank recipe agrees on the new flag. No prequantization moves outside
+timing, no weight cache reuse or math/precision/gradient reduction.
+
+Gate actual8 serial/early-DY independent STE/native comparisons, mutable
+weight/input/route graphs and zero-capacity captures before actual32 Qwen
+full FP32 graph/full C4096 skew and matched optimized-FP8 control vs
+auxiliary-weight complete-step timing. Measure resource contention from
+complete-step results; overlap is not assumed to be profitable.
+
+[
+  {
+    "phase": "qwen38-r2-fp8weight64-async-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 126.69461669921876,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-control-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 122.0006591796875,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-early-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-ep8-serial-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-c4096-skew-r1",
+    "clean": true,
+    "backend": "deepep",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-qwen-r1-attempt0",
+    "clean": false,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-qwen-r1-attempt0",
+    "clean": false,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-qwen-r1-attempt0",
+    "clean": false,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-qwen-r1-attempt1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-qwen-r1-attempt1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8weight64-reference-qwen-r1-attempt1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  }
+]
