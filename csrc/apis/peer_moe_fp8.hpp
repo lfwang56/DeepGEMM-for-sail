@@ -70,7 +70,8 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
                            const std::vector<int>& config,
                            const std::vector<torch::Tensor>& input_control, int reserved_input_ctas,
                            const std::vector<torch::Tensor>& return_control, int reserved_return_ctas, bool copy_only, int copy_threads,
-                           int return_store_bytes, const std::optional<torch::Tensor>& activation_gate_up) {
+                           int return_store_bytes, const std::optional<torch::Tensor>& activation_gate_up,
+                           bool co_resident_input) {
     const auto& a = lhs.first;
     const auto& b = rhs.first;
     const auto& sa = lhs.second;
@@ -102,6 +103,7 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     PeerDispatchPipeline input{}, output{};
     const bool output_mode = !return_control.empty();
     DG_HOST_ASSERT(!(input_mode && output_mode) && (!copy_only || output_mode));
+    DG_HOST_ASSERT(!co_resident_input || (input_mode && !output_mode && !copy_only && !activation_gate_up));
     DG_HOST_ASSERT(return_store_bytes==4 || return_store_bytes==16);
     DG_HOST_ASSERT(return_store_bytes==4 || (!input_mode && !output_mode));
     const bool activation_backward=activation_gate_up.has_value();
@@ -120,7 +122,8 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
             DG_HOST_ASSERT(tensor.is_cuda() && tensor.device() == a.device() && tensor.is_contiguous()
                            && tensor.scalar_type() == torch::kInt32);
         DG_HOST_ASSERT(input_control[0].numel() == m / 128 && input_control[1].numel() == 1);
-        DG_HOST_ASSERT(reserved_input_ctas > 0 && reserved_input_ctas < num_sms);
+        DG_HOST_ASSERT(co_resident_input ? reserved_input_ctas==num_sms :
+                       reserved_input_ctas>0 && reserved_input_ctas<num_sms);
         input.ready = reinterpret_cast<uint32_t*>(input_control[0].data_ptr<int32_t>());
         input.status = reinterpret_cast<uint32_t*>(input_control[1].data_ptr<int32_t>());
         input.signal_capacity = m / 128;
@@ -185,7 +188,7 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     peers.destination_rows_per_rank = destination_rows_per_rank;
     peers.num_ranks = destinations.numel();
     if(activation_backward)peers.activation_gate_up=activation_gate_up->data_ptr();
-    const std::string name = activation_backward ? "fp8_training_dhidden_activation" : return_store_bytes==16 ? "fp8_training_peer_return_wide16" : copy_only ? "fp8_training_peer_return_copy" : output_mode ? "fp8_training_peer_return_pipeline" : input_mode ? "fp8_training_peer_input" :
+    const std::string name = activation_backward ? "fp8_training_dhidden_activation" : return_store_bytes==16 ? "fp8_training_peer_return_wide16" : copy_only ? "fp8_training_peer_return_copy" : output_mode ? "fp8_training_peer_return_pipeline" : co_resident_input ? "fp8_training_peer_input_coresident" : input_mode ? "fp8_training_peer_input" :
         keep_local ? "fp8_training_peer_return_keep" : "fp8_training_peer_return_discard";
     auto args = PeerFp8ReturnRuntime::Args{
         .launch_info = {bm, bn, bk, wm, wn, int(groups), stages, "MGroupedNoPad", "Default", name, false},
@@ -204,10 +207,12 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(
         &occupancy, runtime->kernel, args.launch_args.block_dim.x, args.launch_args.smem_size));
     DG_HOST_ASSERT(occupancy > 0);
+    TORCH_CHECK(!co_resident_input || occupancy>=2,
+                "co-resident input GEMM must permit at least two resident CTAs per CU");
     // Waiting consumers may never fill the CUs reserved for their producer.
     // In particular, multiplying this grid by occupancy can deadlock input.
     if(copy_only)args.launch_args.grid_dim.x=reserved_return_ctas;
-    else if (input_mode) args.launch_args.grid_dim.x = num_sms - reserved_input_ctas;
+    else if (input_mode) args.launch_args.grid_dim.x = co_resident_input ? num_sms : num_sms-reserved_input_ctas;
     else if(output_mode)args.launch_args.grid_dim.x=num_sms-reserved_return_ctas;
     else args.launch_args.grid_dim.x *= occupancy;
     if (!compile_only) PeerFp8ReturnRuntime::launch(runtime, args);
@@ -226,7 +231,8 @@ static void register_peer_fp8_apis(pybind11::module_& m) {
           py::arg("reserved_return_ctas") = 0,
           py::arg("copy_only") = false, py::arg("copy_threads") = 512,
           py::arg("return_store_bytes") = 4,
-          py::arg("activation_gate_up") = std::nullopt);
+          py::arg("activation_gate_up") = std::nullopt,
+          py::arg("co_resident_input") = false);
 }
 
 } // namespace deep_gemm::training

@@ -4,7 +4,7 @@ import torch
 import deep_gemm as dg
 
 
-def fixture(width,capacity=512,tokens=83,measure=False):
+def fixture(width,capacity=512,tokens=83,measure=False,co_resident=False):
     world,k=4,10
     x=(torch.randn(world,tokens,width,device='cuda')*.2).bfloat16()
     table=torch.tensor([x[j].data_ptr() for j in range(world)],device='cuda',dtype=torch.int64)
@@ -18,9 +18,11 @@ def fixture(width,capacity=512,tokens=83,measure=False):
     blocks=torch.zeros(1,device='cuda',dtype=torch.int32);status=torch.zeros_like(blocks)
     dims=[capacity,width,tokens,k,world,128]
     def control():dg._C._moe_training_peer_launch(21,[table,perm,refbf,status,blocks,refq,refsf],dims)
-    def producer(ctas=8):
+    def producer(ctas=None):
+        ctas=(dg.get_num_sms() if co_resident else 8) if ctas is None else ctas
         ready.zero_()
-        dg._C._moe_training_peer_launch(25,[table,perm,bf,status,blocks,q,sf,ready],[*dims,ctas])
+        dg._C._moe_training_peer_launch(25,[table,perm,bf,status,blocks,q,sf,ready],
+            [*dims,ctas,int(co_resident)] if co_resident else [*dims,ctas])
     control();producer();torch.cuda.synchronize()
     cg,pg=torch.cuda.CUDAGraph(),torch.cuda.CUDAGraph()
     with torch.cuda.graph(cg):control()

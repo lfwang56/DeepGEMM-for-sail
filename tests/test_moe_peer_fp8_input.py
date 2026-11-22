@@ -9,7 +9,8 @@ import deep_gemm as dg
 from deep_gemm.training.native import _launch
 
 
-def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, threads=128, cache_scales=False):
+def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, threads=128, cache_scales=False,
+            bf16_source=False,co_resident=False,config=None):
     world=4
     source=(torch.randn(world*tokens,k,device='cuda')*.2).bfloat16()
     qs=torch.empty_like(source,dtype=torch.float8_e4m3fn)
@@ -37,19 +38,26 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
     aux=torch.cuda.Stream()
 
     def producer(copy_bf=True, compile_only=False):
+        if bf16_source:
+            assert copy_bf
+            dg._C._moe_training_peer_launch(25,[btables,permutation,bf,status,blocks,q,sf,ready],
+                [capacity,k,tokens,1,world,128,ctas,int(co_resident)],compile_only)
+            return
         dg._C._moe_training_peer_launch(19,[qtables,stables,btables,rows,q,sf,bf,blocks,ready,status],
             [capacity,k,tokens,world,ctas,int(copy_bf),threads,int(cache_scales)],compile_only)
 
     def consumer(output,compile_only=False):
         dg._C._moe_training_peer_fp8_gemm((q,sf.t()),(qw,sw),output,lengths,rows,btables,tokens,
-            keep_local=True,compile_only=compile_only,input_control=[ready,status],reserved_input_ctas=ctas)
+            keep_local=True,compile_only=compile_only,input_control=[ready,status],reserved_input_ctas=ctas,
+            config=() if config is None else config,co_resident_input=co_resident)
 
     def native():
+        options={} if config is None else dict(configs=(dg.get_num_sms(),128,*config,(0,0,0)))
         dg.m_grouped_fp8_gemm_nt_nopad((rq,rsf.t()),(qw,sw),expected,group_ids,
-                                      m_rows=lengths,disable_ue8m0_cast=True)
+                                      m_rows=lengths,disable_ue8m0_cast=True,**options)
 
     def step(output, overlap, copy_bf=True):
-        _launch(9,[source,qs,ss],[world*tokens,k])
+        if not bf16_source:_launch(9,[source,qs,ss],[world*tokens,k])
         ready.zero_()
         if overlap:
             main=torch.cuda.current_stream()
@@ -62,9 +70,13 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
             consumer(output)
 
     def baseline():
-        dg._C._moe_training_peer_launch(11,[btables,permutation,rbf,status,blocks],
-            [capacity,k,tokens,1,world,128])
-        _launch(26,[rbf,rq,rsf,count,status],[capacity,k,1])
+        if bf16_source:
+            dg._C._moe_training_peer_launch(21,[btables,permutation,rbf,status,blocks,rq,rsf],
+                                            [capacity,k,tokens,1,world,128])
+        else:
+            dg._C._moe_training_peer_launch(11,[btables,permutation,rbf,status,blocks],
+                [capacity,k,tokens,1,world,128])
+            _launch(26,[rbf,rq,rsf,count,status],[capacity,k,1])
         native()
 
     # Compile/initialize the zero-work path before forking a capture stream.
@@ -111,12 +123,13 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
             assert torch.all(out[active:]==-23)
         assert torch.equal(serial,parallel)
         print(json.dumps(dict(case='fp8_peer_input_component_reference',shape=[groups,n,k,capacity],counts=counts,
-              graph=True,source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,all_quantization_bytes=True,all_scales=True,
+              graph=True,source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,bf16_source=bf16_source,co_resident=co_resident,all_quantization_bytes=True,all_scales=True,
               bf16_dw_copy=True,inactive_canaries=True,serial_parallel_exact=True,errors=errors,passed=True)),flush=True)
     # Copy omission must preserve BF16 scratch, without changing quantization.
-    bf.fill_(-29);step(parallel,True,False);torch.cuda.synchronize()
-    assert torch.all(bf==-29) and status.item()==0
-    print(json.dumps(dict(case='fp8_peer_input_no_bf16_reference',shape=[groups,n,k,capacity],producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,passed=True)),flush=True)
+    if not bf16_source:
+        bf.fill_(-29);step(parallel,True,False);torch.cuda.synchronize()
+        assert torch.all(bf==-29) and status.item()==0
+        print(json.dumps(dict(case='fp8_peer_input_no_bf16_reference',shape=[groups,n,k,capacity],producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,passed=True)),flush=True)
     if benchmark:
         for mode,graph in zip(('staged_bf16_native','serial','parallel'),[baseline_graph,*graphs]):
             for _ in range(5):graph.replay()
@@ -127,9 +140,10 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
                 for _ in range(20):graph.replay()
                 end.record();end.synchronize();samples.append(begin.elapsed_time(end)/20)
             print(json.dumps(dict(case='fp8_peer_input_component_performance',mode=mode,shape=[groups,n,k,capacity],
-                  source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,consumer_ctas=dg.get_num_sms()-ctas,
-                  source_quantization_in_timing=mode!='staged_bf16_native',bf16_dw_copy=True,median_ms=statistics.median(samples),
-                  samples_ms=samples,scope='source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step')),
+                  source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,consumer_ctas=dg.get_num_sms() if co_resident else dg.get_num_sms()-ctas,
+                  source_quantization_in_timing=not bf16_source and mode!='staged_bf16_native',bf16_dw_copy=True,median_ms=statistics.median(samples),
+                  bf16_source=bf16_source,co_resident=co_resident,
+                  samples_ms=samples,scope='input preparation + FC1 GEMM; local fake source owners; not complete step')),
                   flush=True)
     del graphs
     torch.cuda.synchronize()

@@ -97,7 +97,8 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             blocks=dims[5];
             break;
         case PeerOperation::PackQuantizedInputTiles:
-            schema(8,7);
+            DG_HOST_ASSERT(tensors.size()==8 && (dims.size()==7 || dims.size()==8));
+            DG_HOST_ASSERT(dims.size()==7 || (dims[7]<=1 && (!dims[7] || dims[6]==get_num_sms())));
             DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192 &&
                            dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 &&
                            dims[4]<=64 && dims[5]==128 && dims[6]>0 && dims[6]<=8*get_num_sms());
@@ -330,7 +331,26 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     PeerRuntime::Args args{operation, {dim3(blocks), dim3(threads), 0}, params};
     const auto code = PeerRuntime::generate(args);
     const auto runtime = compiler->build(fmt::format("moe_training_peer_{}", operation), code);
+    if(operation==int(PeerOperation::PackQuantizedInputTiles) && dims.size()==8 && dims[7]) {
+        int occupancy=0;
+        DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(
+            &occupancy,runtime->kernel,threads,0));
+        TORCH_CHECK(occupancy>=2,"co-resident input producer must permit at least two resident CTAs per CU");
+    }
     if (!compile_only) PeerRuntime::launch(runtime, args);
+}
+
+static int peer_input_occupancy(const int device,const std::vector<int64_t>& dims) {
+    const c10::cuda::CUDAGuard guard(device);
+    DG_HOST_ASSERT((dims.size()==7 || dims.size()==8) && dims[1]>=128 && dims[1]<=8192 &&
+                   dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 && dims[4]<=64);
+    Params params{};
+    for(size_t i=0;i<dims.size();++i)params.dim[i]=dims[i];
+    PeerRuntime::Args args{int(PeerOperation::PackQuantizedInputTiles),{dim3(get_num_sms()),dim3(256),0},params};
+    const auto runtime=compiler->build("moe_training_peer_25",PeerRuntime::generate(args));
+    int occupancy=0;
+    DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy,runtime->kernel,256,0));
+    return occupancy;
 }
 
 class PeerGemmRuntime final : public LaunchRuntime<PeerGemmRuntime> {
@@ -771,6 +791,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
 static void register_peer_apis(pybind11::module_& m) {
     m.def("_moe_training_peer_launch", &launch_peer, py::arg("operation"), py::arg("tensors"),
           py::arg("dims"), py::arg("compile_only") = false);
+    m.def("_moe_training_peer_input_occupancy", &peer_input_occupancy,py::arg("device"),py::arg("dims"));
     m.def("_moe_training_peer_gemm", &peer_gemm,
           py::arg("a"), py::arg("weight"), py::arg("out"), py::arg("source_peers"), py::arg("destination_peers"),
           py::arg("input_rows"), py::arg("permutation"), py::arg("work_info"), py::arg("num_blocks"),

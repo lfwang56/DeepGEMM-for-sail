@@ -493,6 +493,7 @@ def main():
                     "fp8_fused_weight_prepare": getattr(plan, "fp8_fused_weight_prepare", None),
                     "fp8_weight_prep_ctas": getattr(plan, "fp8_weight_prep_ctas", None),
                     "fp8_fuse_dhidden_activation": getattr(plan, "fp8_fuse_dhidden_activation", None),
+                    "peer_fp8_input_co_resident": getattr(plan, "fp8_input_co_resident", None),
                     "fp8_active_quantization": getattr(plan, "fp8_active_quantization", None),
                     "fp8_mn_major_scales": getattr(plan, "fp8_mn_major_scales", None),
                     "communication_dtype": getattr(plan, "communication_dtype", "bf16"),
