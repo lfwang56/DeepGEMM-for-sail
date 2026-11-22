@@ -16849,3 +16849,568 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1601432, "start_ticks": "18156871"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration95 — compact per-expert K panels for FP8 weight gradients
+
+94 closed64fea8d65a. AllthreeCPU/nativeevery-output/FP32accumulation/
+mutation/canary/invalidGPUmetadatagatespassed cleanly. NativeBF16
+roundingbitwisematchconfirmed. PrequantizedDW1 BF16 9.6638 vsFP8
+14.7797ms;DW2 5.0340vs7.6680ms. Functionalprimitive wasnotfastenough
+fortraining; panelpreparationremainsoutofscope.
+
+Investigatethelargephysicalrowpitch: full-ringfeature-majorR65536
+versusactualexpertK2560. Adddefaultoffprivatecompact_panels argument
+toFP8DWAPI, compiledkey/macrospecialization, preservingoldglobalpitch.
+Within groupg, data starts atoffset[g]*feature_count, rowstride
+ceil(length[g]/128)*128. LeftSFretainsKblocks-by-Mlayout;rightSF
+becomescontiguousgroup-localN128-by-K128. GPUcounts/offsets determine
+allpitchesandscaleoffsets; nativeMainloopSFB layoutextent isrebuiltfor
+actualK. Totalallocatedcapacityunchanged, noreadingcountsontheCPU.
+ExistingFP32DWParamsABIunchanged; noforward/trainingplanintegration.
+
+UseidenticalindependentCPU/nativeBF16roundingbitproofs,tail/mutation/
+guardcasesandQwenDW1/DW2componenttimings forglobal/compact ononeidle
+host. Onlypanelstoragechanges; samedtypes/scales/arithmetic. Quantization
+preparation remainsoutsidetiminguntiltheproductionpanelproducerexists.
+
+[
+  {
+    "mode": "global",
+    "clean": true,
+    "passed": true,
+    "metrics": [
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": false,
+        "m": 128,
+        "n": 128,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012712556053884327,
+          0.00012613045691978186,
+          0.00012606037489604205
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": false,
+        "m": 256,
+        "n": 384,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012574753782246262,
+          0.00012585666263476014,
+          0.00012577958113979548
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": false,
+        "m": 384,
+        "n": 512,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012584318756125867,
+          0.00012590523692779243,
+          0.00012649635027628392
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": false,
+        "role": "dw1",
+        "m": 4096,
+        "n": 8192,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 9.616542053222656,
+        "fp8_ms": 14.740043640136719,
+        "speedup": 0.6524093339206327,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00011810872820205986,
+          0.00010943099186988547,
+          0.00015500647714361548
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": false,
+        "role": "dw2",
+        "m": 8192,
+        "n": 2048,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 4.885276031494141,
+        "fp8_ms": 7.649658203125,
+        "speedup": 0.6386267074649731,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00012653447629418224,
+          8.874817285686731e-05,
+          7.700713467784226e-05
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      }
+    ],
+    "records": [
+      {
+        "case": "idle_node_gate",
+        "host": "e01-cn-9yq4xwro401-a0002",
+        "selected_gpus": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "allowed": true,
+        "processes": []
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": false,
+        "m": 128,
+        "n": 128,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012712556053884327,
+          0.00012613045691978186,
+          0.00012606037489604205
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": false,
+        "m": 256,
+        "n": 384,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012574753782246262,
+          0.00012585666263476014,
+          0.00012577958113979548
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": false,
+        "m": 384,
+        "n": 512,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012584318756125867,
+          0.00012590523692779243,
+          0.00012649635027628392
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": false,
+        "role": "dw1",
+        "m": 4096,
+        "n": 8192,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 9.616542053222656,
+        "fp8_ms": 14.740043640136719,
+        "speedup": 0.6524093339206327,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00011810872820205986,
+          0.00010943099186988547,
+          0.00015500647714361548
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": false,
+        "role": "dw2",
+        "m": 8192,
+        "n": 2048,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 4.885276031494141,
+        "fp8_ms": 7.649658203125,
+        "speedup": 0.6386267074649731,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00012653447629418224,
+          8.874817285686731e-05,
+          7.700713467784226e-05
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      },
+      {
+        "case": "idle_node_postflight",
+        "host": "e01-cn-9yq4xwro401-a0002",
+        "allowed": true,
+        "processes": [],
+        "observed_foreign_during_command": [],
+        "verified_owned_processes": [
+          {
+            "pid": 1747684,
+            "start_ticks": "18213070"
+          }
+        ],
+        "monitoring_errors": [],
+        "monitor_interval_seconds": 2,
+        "command_returncode": 0
+      }
+    ]
+  },
+  {
+    "mode": "compact",
+    "clean": true,
+    "passed": true,
+    "metrics": [
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": true,
+        "m": 128,
+        "n": 128,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012712556053884327,
+          0.00012613045691978186,
+          0.00012606037489604205
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": true,
+        "m": 256,
+        "n": 384,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012574753782246262,
+          0.00012585666263476014,
+          0.00012577958113979548
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": true,
+        "m": 384,
+        "n": 512,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012584318756125867,
+          0.00012590523692779243,
+          0.00012649635027628392
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": true,
+        "role": "dw1",
+        "m": 4096,
+        "n": 8192,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 9.701582336425782,
+        "fp8_ms": 15.062431335449219,
+        "speedup": 0.6440913900528957,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00011810872820205986,
+          0.00010943099186988547,
+          0.00015500647714361548
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": true,
+        "role": "dw2",
+        "m": 8192,
+        "n": 2048,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 5.000368118286133,
+        "fp8_ms": 8.127120208740234,
+        "speedup": 0.6152693684668937,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00012653447629418224,
+          8.874817285686731e-05,
+          7.700713467784226e-05
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      }
+    ],
+    "records": [
+      {
+        "case": "idle_node_gate",
+        "host": "e01-cn-9yq4xwro401-a0002",
+        "selected_gpus": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "allowed": true,
+        "processes": []
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": true,
+        "m": 128,
+        "n": 128,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012712556053884327,
+          0.00012613045691978186,
+          0.00012606037489604205
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": true,
+        "m": 256,
+        "n": 384,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012574753782246262,
+          0.00012585666263476014,
+          0.00012577958113979548
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "fp8_k_grouped_dw_cpu_reference",
+        "compact_panels": true,
+        "m": 384,
+        "n": 512,
+        "groups": 3,
+        "capacity": 2048,
+        "mutable_counts": true,
+        "nonzero_offsets": true,
+        "tail_zero": true,
+        "zero_expert": true,
+        "fp32_accumulation": true,
+        "guarded_output": true,
+        "invalid_metadata_guard": true,
+        "every_element": true,
+        "relative_errors": [
+          0.00012584318756125867,
+          0.00012590523692779243,
+          0.00012649635027628392
+        ],
+        "per_element_sum_absolute_product_error_bound": 0.001,
+        "native_fp8_bf16_boundary_bitwise": true,
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": true,
+        "role": "dw1",
+        "m": 4096,
+        "n": 8192,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 9.701582336425782,
+        "fp8_ms": 15.062431335449219,
+        "speedup": 0.6440913900528957,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00011810872820205986,
+          0.00010943099186988547,
+          0.00015500647714361548
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      },
+      {
+        "case": "qwen_fp8_dw_compute_only",
+        "compact_panels": true,
+        "role": "dw2",
+        "m": 8192,
+        "n": 2048,
+        "groups": 16,
+        "k_per_group": 2560,
+        "capacity": 65536,
+        "bf16_ms": 5.000368118286133,
+        "fp8_ms": 8.127120208740234,
+        "speedup": 0.6152693684668937,
+        "fp32_accumulation": true,
+        "sampled_reference_errors": [
+          0.00012653447629418224,
+          8.874817285686731e-05,
+          7.700713467784226e-05
+        ],
+        "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+        "passed": true
+      },
+      {
+        "case": "idle_node_postflight",
+        "host": "e01-cn-9yq4xwro401-a0002",
+        "allowed": true,
+        "processes": [],
+        "observed_foreign_during_command": [],
+        "verified_owned_processes": [
+          {
+            "pid": 1767493,
+            "start_ticks": "18220948"
+          }
+        ],
+        "monitoring_errors": [],
+        "monitor_interval_seconds": 2,
+        "command_returncode": 0
+      }
+    ]
+  }
+]

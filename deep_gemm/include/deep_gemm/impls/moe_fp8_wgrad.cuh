@@ -50,6 +50,17 @@ public:
                 params.mainloop.ptr_scale_A + int64_t(start / 128) * dw.m, params.mainloop.layout_SFA,
                 params.mainloop.ptr_scale_B + start / 128, params.mainloop.layout_SFB
             };
+#if DG_FP8_DW_COMPACT
+            // Expert-local compact K eliminates the full-ring row stride.
+            update.ptr_A = reinterpret_cast<const ElementA*>(params.mainloop.ptr_A) + int64_t(start) * dw.m;
+            update.ptr_B = reinterpret_cast<const ElementB*>(params.mainloop.ptr_B) + int64_t(start) * dw.n;
+            get<0>(update.dA) = int64_t(k); get<2>(update.dA) = int64_t(dw.m) * k;
+            get<0>(update.dB) = int64_t(k); get<2>(update.dB) = int64_t(dw.n) * k;
+            using Granularity = cute::Shape<cute::_1,cute::_128,cute::_128>;
+            using ScaleConfig = decltype(cutlass::detail::ppu_trivial_blockwise_scale_config<Granularity,false,true>(Granularity{}));
+            update.ptr_scale_B = params.mainloop.ptr_scale_B + int64_t(start / 128) * (dw.n / 128);
+            update.layout_SFB = ScaleConfig::tile_atom_to_shape_SFB(make_shape(int(dw.m), int(dw.n), int(k), 1));
+#endif
             auto problem = typename Base::ProblemShape{int(dw.m), int(dw.n), int(k), 1};
             auto coordinate = make_coord(mc, nc, _, 0);
             CollectiveMainloop mainloop;

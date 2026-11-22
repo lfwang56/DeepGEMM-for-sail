@@ -11,9 +11,10 @@ public:
         LaunchArgs launch_args;
         FP8GemmRuntime::GemmKernelParams kernel_params;
         Fp8WgradParams wgrad;
+        bool compact_panels;
     };
     static auto compile_key(const Args& a) {
-        return FP8GemmRuntime::compile_key({a.launch_info, a.launch_args, a.kernel_params});
+        return std::make_tuple(FP8GemmRuntime::compile_key({a.launch_info, a.launch_args, a.kernel_params}), a.compact_panels);
     }
     static std::string generate_impl(const Args& a) {
         auto source = FP8GemmRuntime::generate_impl({a.launch_info, a.launch_args, a.kernel_params});
@@ -26,7 +27,7 @@ public:
         replace("using GemmKernel = DeepGemmUniversal<", "using GemmKernel = TrainingFp8Wgrad<");
         replace("typename GemmKernel::Params params", "typename GemmKernel::Params params, const deep_gemm::training::Fp8WgradParams wgrad");
         replace("op(params, smem);", "op(params, wgrad, smem);");
-        return source;
+        return fmt::format("#define DG_FP8_DW_COMPACT {}\n", int(a.compact_panels)) + source;
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args a) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, a.kernel_params, a.wgrad));
@@ -37,7 +38,7 @@ static int fp8_wgrad(const std::pair<torch::Tensor, torch::Tensor>& lhs,
                      const std::pair<torch::Tensor, torch::Tensor>& rhs,
                      const torch::Tensor& output, const torch::Tensor& lengths,
                      const torch::Tensor& offsets, const torch::Tensor& status,
-                     bool compile_only, const std::vector<int>& config) {
+                     bool compile_only, const std::vector<int>& config, bool compact_panels) {
     const auto& a = lhs.first; const auto& sa = lhs.second;
     const auto& b = rhs.first; const auto& sb = rhs.second;
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && b.dim() == 2 && output.dim() == 3);
@@ -89,7 +90,7 @@ static int fp8_wgrad(const std::pair<torch::Tensor, torch::Tensor>& lhs,
         .launch_args={get_grid_shape(sms),dim3((bm/wm)*(bn/wn)*32),std::get<0>(smem)},
         .kernel_params=FP8GemmRuntime::to_underlying_arguments_rtc(gemm,nullptr),
         .wgrad={lengths.data_ptr<int32_t>(),offsets.data_ptr<int32_t>(),output.data_ptr<float>(),
-                reinterpret_cast<uint32_t*>(status.data_ptr<int32_t>()),uint32_t(g),uint32_t(m),uint32_t(n),uint32_t(r)}};
+                reinterpret_cast<uint32_t*>(status.data_ptr<int32_t>()),uint32_t(g),uint32_t(m),uint32_t(n),uint32_t(r)},.compact_panels=compact_panels};
     auto runtime=compiler->build(name,Fp8WgradRuntime::generate(args));
     int occupancy=0;
     DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy,runtime->kernel,args.launch_args.block_dim.x,args.launch_args.smem_size));
@@ -99,6 +100,6 @@ static int fp8_wgrad(const std::pair<torch::Tensor, torch::Tensor>& lhs,
 }
 static void register_fp8_wgrad_apis(pybind11::module_& m) {
     m.def("_moe_training_fp8_wgrad",&fp8_wgrad,py::arg("a"),py::arg("b"),py::arg("output"),py::arg("lengths"),
-          py::arg("offsets"),py::arg("status"),py::arg("compile_only")=false,py::arg("config")=std::vector<int>{});
+          py::arg("offsets"),py::arg("status"),py::arg("compile_only")=false,py::arg("config")=std::vector<int>{},py::arg("compact_panels")=false);
 }
 }

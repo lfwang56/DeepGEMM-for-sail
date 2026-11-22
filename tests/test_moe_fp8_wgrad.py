@@ -5,6 +5,9 @@ numbers are compute-only; production panel construction is a separate gate.
 """
 import gc
 import json
+import os
+
+COMPACT=os.environ.get("DG_MOE_FP8_DW_COMPACT", "0")=="1"
 import torch
 import deep_gemm as dg
 
@@ -28,8 +31,14 @@ def panels(left,right,counts,offsets):
         bt=b.reshape(n//128,128,padded//128,128)
         sb=bt.abs().amax((1,3)).clamp_min(1e-4)/448
         bq=(bt/sb[:,None,:,None]).to(torch.float8_e4m3fn).reshape_as(b)
-        ql[:,start:start+padded].copy_(aq);sl[start//128:(start+padded)//128].copy_(sa.t())
-        qr[:,start:start+padded].copy_(bq);sr[:,start//128:(start+padded)//128].copy_(sb)
+        sl[start//128:(start+padded)//128].copy_(sa.t())
+        if COMPACT:
+            ql.reshape(-1)[start*m:(start+padded)*m].reshape(m,padded).copy_(aq)
+            qr.reshape(-1)[start*n:(start+padded)*n].reshape(n,padded).copy_(bq)
+            sr.reshape(-1)[start//128*(n//128):(start+padded)//128*(n//128)].reshape(n//128,padded//128).copy_(sb)
+        else:
+            ql[:,start:start+padded].copy_(aq);qr[:,start:start+padded].copy_(bq)
+            sr[:,start//128:(start+padded)//128].copy_(sb)
         if left.device.type=='cpu':
             ar=(aq.float().reshape(m,padded//128,128)*sa[...,None]).reshape_as(a)
             br=(bq.float().reshape(n//128,128,padded//128,128)*sb[:,None,:,None]).reshape_as(b)
@@ -51,7 +60,7 @@ def unit(m,n):
     lens=torch.tensor(counts,device='cuda',dtype=torch.int32);starts=torch.tensor(offsets,device='cuda',dtype=torch.int32)
     status=torch.zeros(1,device='cuda',dtype=torch.int32)
     raw=torch.full((g*m*n+32,),113.,device='cuda');out=raw[16:-16].reshape(g,m,n)
-    def launch():dg._C._moe_training_fp8_wgrad(a,b,out,lens,starts,status)
+    def launch():dg._C._moe_training_fp8_wgrad(a,b,out,lens,starts,status,compact_panels=COMPACT)
     out.zero_();launch();torch.cuda.synchronize()
     graph=torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):launch()
@@ -79,10 +88,10 @@ def unit(m,n):
             if not count:
                 assert not torch.count_nonzero(out[j]);continue
             start=offsets[j];k=(count+127)//128*128
-            qa=a[0][:,start:start+k].contiguous()
+            qa=(a[0].reshape(-1)[start*m:(start+k)*m].reshape(m,k) if COMPACT else a[0][:,start:start+k].contiguous())
             sa=a[1][start//128:(start+k)//128].contiguous().t()
-            qb=b[0][:,start:start+k].contiguous().unsqueeze(0)
-            sb=b[1][:,start//128:(start+k)//128].contiguous().unsqueeze(0)
+            qb=(b[0].reshape(-1)[start*n:(start+k)*n].reshape(n,k) if COMPACT else b[0][:,start:start+k].contiguous()).unsqueeze(0)
+            sb=(b[1].reshape(-1)[start//128*(n//128):(start+k)//128*(n//128)].reshape(n//128,k//128) if COMPACT else b[1][:,start//128:(start+k)//128].contiguous()).unsqueeze(0)
             native=torch.empty(m,n,device='cuda',dtype=torch.bfloat16)
             info=torch.zeros(m,device='cuda',dtype=torch.int32)
             length=torch.tensor([m],device='cuda',dtype=torch.int32)
@@ -94,7 +103,7 @@ def unit(m,n):
     before=out.clone();lens[1]=513;status.zero_();graph.replay();torch.cuda.synchronize()
     assert status.item()==2 and torch.equal(out[1],before[1])
     assert torch.all(raw[:16]==113) and torch.all(raw[-16:]==113)
-    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,per_element_sum_absolute_product_error_bound=.001,native_fp8_bf16_boundary_bitwise=True,passed=True)),flush=True)
+    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',compact_panels=COMPACT,m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,per_element_sum_absolute_product_error_bound=.001,native_fp8_bf16_boundary_bitwise=True,passed=True)),flush=True)
 
 
 def large(role):
@@ -106,14 +115,17 @@ def large(role):
     a,b,_=panels(left,right,counts,offsets)
     lengths=torch.tensor(counts,device='cuda',dtype=torch.int32);starts=torch.tensor(offsets,device='cuda',dtype=torch.int32)
     status=torch.zeros(1,device='cuda',dtype=torch.int32);out=torch.zeros(g,m,n,device='cuda');bf=torch.zeros_like(out)
-    def fp():dg._C._moe_training_fp8_wgrad(a,b,out,lengths,starts,status)
+    def fp():dg._C._moe_training_fp8_wgrad(a,b,out,lengths,starts,status,compact_panels=COMPACT)
     def bf16():dg.k_grouped_bf16_gemm_tn_device(left,right,bf,lengths,r)
     fp();torch.cuda.synchronize();assert not status.item()
     errors=[]
     for group in (0,7,15):
         start=group*k;features=torch.tensor([0,m//3,m-1],device='cuda');columns=torch.tensor([0,n//3,n-1],device='cuda')
-        av=a[0][features,start:start+k].float().reshape(3,k//128,128)*a[1][start//128:(start+k)//128,features].t()[...,None]
-        bv=b[0][columns,start:start+k].float().reshape(3,k//128,128)*b[1][columns//128,start//128:(start+k)//128][...,None]
+        ap=(a[0].reshape(-1)[start*m:(start+k)*m].reshape(m,k) if COMPACT else a[0][:,start:start+k])
+        bp=(b[0].reshape(-1)[start*n:(start+k)*n].reshape(n,k) if COMPACT else b[0][:,start:start+k])
+        bs=(b[1].reshape(-1)[start//128*(n//128):(start+k)//128*(n//128)].reshape(n//128,k//128) if COMPACT else b[1][:,start//128:(start+k)//128])
+        av=ap[features].float().reshape(3,k//128,128)*a[1][start//128:(start+k)//128,features].t()[...,None]
+        bv=bp[columns].float().reshape(3,k//128,128)*bs[columns//128][...,None]
         want=av.reshape(3,k)@bv.reshape(3,k).t();actual=out[group][features[:,None],columns[None,:]]
         error=rel(actual,want);errors.append(error);assert error<.003,error
     def measure(fn):
@@ -127,7 +139,7 @@ def large(role):
             end.record();end.synchronize();times.append(begin.elapsed_time(end)/5)
         return sorted(times)[len(times)//2]
     before,after=measure(bf16),measure(fp)
-    print(json.dumps(dict(case='qwen_fp8_dw_compute_only',role=role,m=m,n=n,groups=g,k_per_group=k,capacity=r,bf16_ms=before,fp8_ms=after,speedup=before/after,fp32_accumulation=True,sampled_reference_errors=errors,scope='Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result',passed=True)),flush=True)
+    print(json.dumps(dict(case='qwen_fp8_dw_compute_only',compact_panels=COMPACT,role=role,m=m,n=n,groups=g,k_per_group=k,capacity=r,bf16_ms=before,fp8_ms=after,speedup=before/after,fp32_accumulation=True,sampled_reference_errors=errors,scope='Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result',passed=True)),flush=True)
     del left,right,a,b,out,bf;gc.collect();torch.cuda.synchronize()
 
 
