@@ -35,6 +35,8 @@ def main():
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
+    parser.add_argument("--fuse-dhidden-scores", action="store_true")
+    parser.add_argument("--transpose-free-dgrad", action="store_true")
     parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--dispatch-assist-ctas", type=int, default=0)
     parser.add_argument("--dispatch-external", action="store_true")
@@ -95,6 +97,8 @@ def main():
                          dag_shared_pool=args.dag_fusion or args.dag_backward,
                          expert_local_grad=True, reuse_packed_dy=True, fuse_activation_backward=True,
                          fuse_fc1_activation=args.fuse_fc1_activation,
+                         fuse_dhidden_scores=args.fuse_dhidden_scores,
+                         transpose_free_dgrad=args.transpose_free_dgrad,
                          input_copy_ilp=args.input_copy_ilp,
                          dispatch_producer=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas),
                          inline_dispatch=args.input_inline, dispatch_assist_ctas=args.dispatch_assist_ctas,

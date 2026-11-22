@@ -8949,3 +8949,142 @@ Whole-host-clean local signal: True.
     "scope": "isolated quantizer; no EP/full-step speedup"
   }
 ]
+
+
+## Iteration63 — active FP8 quantization integration and EP32 verdict
+
+62 compiled clean with nativee412c5cabbd6f904af6d6f7d7bd5c951cfee9cbf88b92265f84ec6bb487bb070;
+whole-host63 passed114 all-buffer bitwise/canary/mutable graph/invalid-count
+references and24 isolated signals. Empty full-ring H8192 row quantization
+3.002ms becomes.00445ms; active40960 row-major2.294ms, MN2.635ms.
+These are isolated kernels, not routed-step gains.
+
+Keep62 arithmetic unchanged. Extend full-skew reference with an explicit
+compute flag and documented FP8.13/BF16.04 FP32 tolerances; permit FP8
+only in DeepEP. Include the two formerly uncommitted cross64 reference
+wiring changes now independently validated by frozen49 actual64 three
+reference phases: hybrid192records,Elastic192records,and fullC4096skew64,
+all eight-host audits clean. No production math changes in this iteration.
+
+First actual8 independent quantized STE/native pair and mutable weight/route
+graph checks for active-row and active+MN, with early-DY. Then actual32
+Qwen H8192/I2048/E512/K10 full FP32 route graphs and dropless full C4096
+all-to-expert0 reference, before same-host full routed FWD+rematerialized
+BWD+FP32 DW/DX/dScore: unchanged FP8 control, active-only, active+MN,
+and strong BF16 control. Quantization and transposes remain inside timing.
+Any speedup here is FP8 baseline optimization, not an FP8 fusion speedup.
+
+[
+  {
+    "phase": "qwen38-r2-fp8quant63-active-mn-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 121.88546142578124,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-active-row-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 131.63558349609374,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-bf16-control-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 105.27081298828125,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-control-r1",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 519.701953125,
+    "passed": null
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-mn-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-mn-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-mn-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-mn-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-row-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-row-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-row-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-ep8-row-r1",
+    "clean": true,
+    "backend": null,
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-reference-c4096-skew-r1",
+    "clean": true,
+    "backend": "deepep",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  },
+  {
+    "phase": "qwen38-r2-fp8quant63-reference-qwen-r1-attempt0",
+    "clean": true,
+    "backend": "elastic",
+    "ms": null,
+    "passed": true
+  }
+]

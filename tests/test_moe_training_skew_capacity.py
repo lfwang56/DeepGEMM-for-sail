@@ -15,6 +15,7 @@ import os
 import torch
 import torch.distributed as dist
 
+from deep_gemm.training.hierarchical import HierarchicalPeerMoEPlan, make_hierarchical_groups
 from deep_gemm.training import DeepEPMoEPlan, PeerMoEPlan
 from moe_distributed_utils import destroy_training_process_group
 from test_moe_training_large import relative_rms
@@ -23,12 +24,13 @@ from deep_gemm.training.layout import to_g8_weight, from_g8_weight
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--intermediate", type=int, default=2048)
     parser.add_argument("--local-experts", type=int, default=16)
     parser.add_argument("--chunk-tokens", type=int, default=768)
     parser.add_argument("--topk", type=int, default=10)
-    parser.add_argument("--backends", nargs="+", choices=("deepep", "peer"), default=["deepep", "peer"])
+    parser.add_argument("--backends", nargs="+", choices=("deepep", "peer", "hybrid"), default=["deepep", "peer"])
     parser.add_argument("--dispatch-pipeline", action="store_true")
     parser.add_argument("--return-pipeline", action="store_true")
     parser.add_argument("--pipeline-comm-ctas", type=int, default=8)
@@ -62,13 +64,18 @@ def main():
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
-    parser.add_argument("--gemm-config", type=int, nargs=5, default=(256,64,64,64,2))
+    parser.add_argument("--gemm-config", type=int, nargs=5)
     parser.add_argument("--process-group-backend", choices=("nccl", "gloo"), default="nccl")
     parser.add_argument("--graph", action="store_true")
+    parser.add_argument("--hybrid-domain-size", type=int)
     parser.add_argument("--producer-input-aiu", action="store_true")
     parser.add_argument("--producer-local-aiu", action="store_true")
     parser.add_argument("--fuse-activation-backward", action="store_true")
     args = parser.parse_args()
+    if args.compute == "fp8" and args.backends != ["deepep"]:
+        parser.error("FP8 full-skew validation requires the DeepEP transport")
+    if args.gemm_config is None and args.compute == "bf16":
+        args.gemm_config = (256,64,64,64,2)
     if "peer" in args.backends and args.process_group_backend != "nccl":
         parser.error("the peer check uses a direct-domain NCCL metadata group")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
@@ -81,6 +88,7 @@ def main():
         timeout=timedelta(seconds=600))
     reference_group = (dist.new_group(backend="gloo", timeout=timedelta(seconds=600))
                        if args.process_group_backend == "nccl" else dist.group.WORLD)
+    hybrid_groups = make_hierarchical_groups(args.hybrid_domain_size, reference_group) if "hybrid" in args.backends else None
     h, i, e, k, c = args.hidden, args.intermediate, args.local_experts, args.topk, args.chunk_tokens
     total = size * c
     generator = torch.Generator().manual_seed(920173)
@@ -117,13 +125,13 @@ def main():
     torch.cuda.empty_cache()
     if args.gate_up_layout == "g8":
         w1 = to_g8_weight(w1)
-    configs = {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
+    configs = None if args.gemm_config is None else {role:tuple(args.gemm_config) for role in ("fc1", "fc2", "dhidden", "dx")}
     for backend in args.backends:
         options = dict(gemm_configs=configs, block_m=args.block_m, gate_up_layout=args.gate_up_layout,
                        wgrad_overlap=args.wgrad_overlap, overlap_expert_dy=args.overlap_expert_dy)
         if args.ring_rows is not None:
             options["ring_rows"] = args.ring_rows
-        if backend == "peer":
+        if backend in ("peer", "hybrid"):
             use_producer = not (args.input_inline or args.dispatch_assist_ctas or args.dispatch_pipeline or args.inline_dispatch or args.ffn_fusion or args.dag_fusion)
             options.update(dispatch_producer=use_producer, dispatch_producer_tiles=1,
                            reuse_packed_dy=True,
@@ -150,9 +158,9 @@ def main():
             options["comm_sms"] = 38
             if args.process_group_backend == "nccl":
                 os.environ["DEEPEP_NUM_MAX_ICN_PEERS"] = str(size)
-        cls = PeerMoEPlan if backend == "peer" else DeepEPMoEPlan
-        plan = cls(h, i, e, k, c, chunk_tokens=c, device=device, group=dist.group.WORLD,
-                   check_errors=False, **options)
+        cls = HierarchicalPeerMoEPlan if backend == "hybrid" else PeerMoEPlan if backend == "peer" else DeepEPMoEPlan
+        plan = cls(h, i, e, k, c, chunk_tokens=c, device=device, **({"groups":hybrid_groups} if backend == "hybrid" else {"group":dist.group.WORLD}),
+                   check_errors=False, compute=args.compute, **options)
         stream = torch.cuda.Stream(device)
         stream.wait_stream(torch.cuda.current_stream())
 
@@ -181,14 +189,16 @@ def main():
                           dw2=relative_rms(dw2[0], weight_targets[1]))
         else:
             errors.update(dw1=0., dw2=0.)
-        active_rows = int(plan.current_rows if args.ring_rows is None else plan.global_offsets[-1])
+        active_plan = plan.inner if backend == "hybrid" else plan
+        active_rows = int(active_plan.current_rows if args.ring_rows is None else active_plan.global_offsets[-1])
         zero_score_derivative_preserved = rank != 0 or float(ds[0, 0]) != 0
         expected_rows = ((size * c * k + plan.alignment - 1) // plan.alignment * plan.alignment
                          if rank == 0 else 0)
+        limit = .13 if args.compute == "fp8" else .04
         passed = (unused_zero and zero_score_derivative_preserved and active_rows == expected_rows
-                  and all(math.isfinite(error) and error < .04 for error in errors.values()))
+                  and all(math.isfinite(error) and error < limit for error in errors.values()))
         print(json.dumps(dict(case="skew_capacity_reference", rank=rank, ranks=size,
-            backend=backend, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
+            backend=backend, compute=args.compute, tolerance=limit, hidden=h, intermediate=i, local_experts=e, total_experts=e * size,
             topk=k, tokens_per_rank=c, chunk_tokens=c, graph=args.graph,
             dispatch_pipeline=getattr(plan, "dispatch_pipeline", False) if backend == "peer" else None,
             return_pipeline=args.return_pipeline if backend == "peer" else None,
@@ -235,6 +245,10 @@ def main():
         del plan
         gc.collect()
         torch.cuda.empty_cache()
+    if hybrid_groups is not None:
+        del active_plan
+        gc.collect()
+        hybrid_groups.close()
     dist.barrier(group=reference_group)
     if reference_group is not dist.group.WORLD:
         dist.destroy_process_group(reference_group)
