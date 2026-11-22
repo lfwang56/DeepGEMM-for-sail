@@ -5641,3 +5641,54 @@ Clean reference: True.
     "passed": true
   }
 ]
+
+
+## Iteration56 — in-CTA FC1 helpers prefetch the next M tile
+
+55 validated consumer-only and whole-team named barriers on this SDK.
+Add an optional native fc1_helper_threads32/64 entry with unique kernel
+name.32/64 helper threads gather next M tile's peer X into the existing
+packed-X ring while256/512 Tensor Cell threads compute all N columns of
+the previous M tile, including G8 SwiGLU. Handoff uses team barrier1;
+consumers use builtin barrier0 with their own count and helper metadata
+uses barrier2. Every helper retains its global release fence. No spin
+wait depends on another CTA or kernel's admission. Shared/Params ABI is
+unchanged; default0 remains the old block synchronization path.
+
+Raw tests compare ALL packed-X/gate-up/hidden buffers bitwise with the
+existing producer-first-N plus local-remaining-N implementation. Test both
+BM128/256,32/64 helpers, keep/discard, changed source/weights/routes,
+partial experts, worst skew, all-empty and graph replay. Small cases also
+check an independent FP32 matrix/activation oracle without relaxing any
+existing gate. Actual production register/local resources still require
+inspection; the low-register55 test did not establish GEMM occupancy.
+
+Local canonical Qwen signal usesE16,H8192,I2048,40960 active rows/65536
+capacity,5warm20x5 event samples. Four source owners are emulated by local
+arrays: this is a local FC1 screening signal, NOT an EP/network/full-layer
+win. An actual32-rank full-reference/skew/full-step verdict is required.
+
+Whole-host-clean local signal: False.
+
+[]
+
+Failure tail:
+{"case": "idle_node_gate", "host": "e01-cn-2n550vu1t02-a0001", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+[PeerTraining_BF16:]
+kernel:bf16_peer_rtrue_wfalse_n256_k256_bn256_bk64_wm64_wn64_s3_nslice0_1_producer_aiu_g8_swiglu_keep_copy_ilp8, vreg:232, local_size_bytes:0
+groups:3, n:256, k:256, read_peer:1, write_peer:0, capacity_rows:1024
+tile:[128,256,64], warp:[64,64], stages:3, threads:256, dynamic_smem_bytes:147456, blocks_per_cu:1, grid:39
+[PeerTraining_BF16:]
+kernel:bf16_peer_rtrue_wfalse_n256_k256_bn256_bk64_wm64_wn64_s3_input_helpers32_g8_swiglu_keep_copy_ilp8, vreg:216, local_size_bytes:0
+groups:3, n:256, k:256, read_peer:1, write_peer:0, capacity_rows:1024
+tile:[128,256,64], warp:[64,64], stages:3, threads:288, dynamic_smem_bytes:147456, blocks_per_cu:1, grid:39
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_input_helper_gemm.py", line 71, in <module>
+    with torch.cuda.graph(graph,stream=torch.cuda.current_stream()):both()
+  File "/usr/local/lib/python3.12/site-packages/torch/cuda/graphs.py", line 257, in __enter__
+    self.cuda_graph.capture_begin(
+  File "/usr/local/lib/python3.12/site-packages/torch/cuda/graphs.py", line 115, in capture_begin
+    super().capture_begin(pool=pool, capture_error_mode=capture_error_mode)
+RuntimeError: CUDA graphs must be captured on a non-default stream. (However, after capture, it's ok to replay them on the default stream.)
+{"case": "idle_node_postflight", "host": "e01-cn-2n550vu1t02-a0001", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1952984, "start_ticks": "63924260"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}

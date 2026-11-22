@@ -28,6 +28,12 @@ namespace deep_gemm {
 
 namespace training {
 
+template <uint32_t Threads = 0>
+__device__ __forceinline__ void peer_compute_sync() {
+    if constexpr (Threads != 0) __ppu_barrier_sync(0, Threads);
+    else __syncthreads();
+}
+
 template <uint32_t BM, uint32_t BN, uint32_t N, uint32_t Threads>
 __device__ __forceinline__ void return_pipeline_consumer(
         const PeerGemmParams& params, PeerDispatchPipeline control) {
@@ -657,7 +663,7 @@ template <class _SrcT, GemmType kGemmType,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
           bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0,
           bool ReplayGradients = false, bool ReplayWarpReduction = false, bool DHiddenScores = false,
-          bool WeightKN = false>
+          bool WeightKN = false, uint32_t SyncThreads = 0>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -665,6 +671,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const uint32_t selected_n_tile = ~0u,
                            const training::PeerReplayGradients gradients = {},
                            const training::PeerDHiddenScores dhidden_scores = {}) {
+    static_assert(SyncThreads == 0 || SyncThreads == BLOCK_SIZE);
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
     static_assert(!ExternalInput || (DispatchPipeline && !InlineDispatch && !PeerRead && !PeerWrite));
@@ -856,7 +863,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
               __shared__ int inline_claimed;
               if (thread_idx == 0)
                   inline_claimed = atomicCAS(pipeline.ready + deep_scheduler.cumsum_m_block_idx, 0u, 2u) == 0u;
-              __syncthreads();
+              training::peer_compute_sync<SyncThreads>();
               if (inline_claimed) {
               __shared__ uint64_t inline_source_addresses[BLOCK_M];
               for (uint32_t row = thread_idx; row < BLOCK_M; row += BLOCK_SIZE) {
@@ -870,14 +877,14 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                   }
                   inline_source_addresses[row] = address;
               }
-              __syncthreads();
+              training::peer_compute_sync<SyncThreads>();
               training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
                   inline_source_addresses, params, deep_scheduler.curr_block_m_offset);
               if (thread_idx == 0) {
                   tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx, uint32_t(-1));
                   tix::red_add_rel(pipeline.ready + pipeline.signal_capacity, 1u);
               }
-              __syncthreads();
+              training::peer_compute_sync<SyncThreads>();
               } else {
                   __shared__ int inline_failed;
                   if (thread_idx == 0) {
@@ -897,7 +904,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                       }
                       inline_failed = (tix::ld_acq(pipeline.status) & 8u) != 0;
                   }
-                  __syncthreads();
+                  training::peer_compute_sync<SyncThreads>();
                   if (inline_failed) return;
               }
           }
@@ -905,7 +912,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
       const uint64_t* source_addresses = nullptr;
       if constexpr (PeerRead) {
           __shared__ uint64_t cached_source_addresses[BLOCK_M];
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
           bool first_in_group = true;
           if constexpr (DispatchCacheN != 0) first_in_group = deep_scheduler.first_in_group;
           if (first_in_group) {
@@ -920,7 +927,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
               }
               cached_source_addresses[row] = address;
             }
-            __syncthreads();
+            training::peer_compute_sync<SyncThreads>();
             if constexpr (DispatchCacheN != 0)
                 training::cache_peer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(cached_source_addresses,
                     params, deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
@@ -928,7 +935,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                 training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
                     cached_source_addresses, params, deep_scheduler.curr_block_m_offset);
           }
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
           source_addresses = cached_source_addresses;
       }
       const uint64_t* output_addresses = nullptr;
@@ -936,7 +943,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
           __shared__ uint64_t cached_output_addresses[BLOCK_M];
           // The preceding tile's epilogue can still read this cache in a
           // slower warp. Join every warp before reusing its destination rows.
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
           for (uint32_t row = thread_idx; row < deep_scheduler.valid_m_in_block; row += BLOCK_SIZE) {
               const auto* route_ptr = params.permutation + deep_scheduler.curr_block_m_offset + row;
               const int route = Coherent ? training::load_pipeline_metadata(route_ptr) : __ldg(route_ptr);
@@ -951,7 +958,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
               }
               cached_output_addresses[row] = address;
           }
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
           output_addresses = cached_output_addresses;
       }
       // gmem_b in block
@@ -1026,7 +1033,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
       if (K_BLOCK_MAX > 1) {
         // Wait until our first prefetched tile is loaded in
         cp_async_wait<kNumStages-1>();
-        __syncthreads();
+        training::peer_compute_sync<SyncThreads>();
 
         // Prefetch the first rmem from the first k-tile
         copy(smem_tiled_copy_A, tCsA_p(_,_,Int<0>{}), tCrA_copy_view(_,_,Int<0>{}));
@@ -1038,7 +1045,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
         if (k_block == K_BLOCK_MAX - 1) {
           // Commit the smem for smem_pipe_read
           cp_async_wait<kNumStages-2>();
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
           if (k_tile_count > 0) {
             copy_input_stage(k_tile_iter, smem_pipe_write);
             copy_aiu(gmem_tiled_copy_B, tBgB(_,_,_,k_tile_iter), tBsB(_,_,_,smem_pipe_write), warp_idx);
@@ -1139,13 +1146,13 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
 #endif
       if constexpr (DispatchPipeline && PeerWrite) {
           __threadfence();
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
           if (threadIdx.x == 0) {
               constexpr uint32_t ntiles = (SHAPE_N + BLOCK_N - 1) / BLOCK_N;
               tix::red_add_rel(pipeline.ready + deep_scheduler.cumsum_m_block_idx * ntiles + n_block_idx, 1u);
               tix::red_add_rel(pipeline.ready + pipeline.signal_capacity, 1u);
           }
-          __syncthreads();
+          training::peer_compute_sync<SyncThreads>();
       }
     }
     if constexpr (DispatchPipeline) {
@@ -1161,3 +1168,5 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
 } // namespace deep_gemm
 
 #pragma clang diagnostic pop
+
+#include <deep_gemm/impls/peer_moe_input_helpers.cuh>

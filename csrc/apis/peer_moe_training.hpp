@@ -260,6 +260,7 @@ public:
         bool dhidden_scores = false;
         PeerDHiddenScores scores{};
         bool weight_kn = false;
+        int fc1_helper_threads = 0;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -282,6 +283,7 @@ public:
         if (args.replay_gradients) name += "_replay_grad";
         if (args.dhidden_scores) name += "_dhidden_scores";
         if (args.weight_kn) name += "_weight_kn";
+        if (args.fc1_helper_threads) name += fmt::format("_input_helpers{}", args.fc1_helper_threads);
         if (args.replay_warp_reduce) name += "_warp_reduce";
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
@@ -294,6 +296,20 @@ public:
         return name;
     }
     static std::string generate_impl(const Args& args) {
+        if (args.fc1_helper_threads) {
+            return fmt::format(R"(
+#include <deep_gemm/impls/peer_moe_gemm.cuh>
+extern "C" __launch_bounds__({}, 1)
+__global__ void {}(const deep_gemm::training::PeerGemmParams params) {{
+    deep_gemm::training_bf16_input_helpers_impl<
+        {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    >(params);
+}}
+)", args.threads + args.fc1_helper_threads, name(args),
+            args.n, args.k, args.groups, args.block_m, args.block_n, args.block_k,
+            args.warp_m, args.warp_n, args.threads, args.stages,
+            args.fc1_helper_threads, args.keep_gate_up ? "true" : "false", args.input_copy_ilp);
+        }
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_gemm.cuh>
 extern "C" __launch_bounds__({}, 1)
@@ -359,10 +375,17 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true,
                       int input_copy_ilp = 1, bool external_input = false, int compute_cus = 0,
                       const std::vector<torch::Tensor>& replay_gradient_tensors = {},
-                      const std::vector<torch::Tensor>& dhidden_score_tensors = {}, bool weight_kn = false) {
+                      const std::vector<torch::Tensor>& dhidden_score_tensors = {}, bool weight_kn = false,
+                      int fc1_helper_threads = 0) {
+    DG_HOST_ASSERT(fc1_helper_threads == 0 || fc1_helper_threads == 32 || fc1_helper_threads == 64);
+    DG_HOST_ASSERT(!fc1_helper_threads || (read_peer && !write_peer && pack_input
+        && fc1_activation && interleaved_gate_up && !pipeline_ready.has_value()
+        && !dispatch_cache_n && !staged_return && !local_input_aiu && !producer_input_aiu
+        && !first_n_tile && !num_n_tiles && !weight_kn && !external_input
+        && replay_gradient_tensors.empty() && dhidden_score_tensors.empty()));
     DG_HOST_ASSERT(!external_input || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !read_peer && !write_peer));
     DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
-    DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu
+    DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu || fc1_helper_threads
                    || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !write_peer));
     DG_HOST_ASSERT(block_m == 128 || block_m == 256);
     DG_HOST_ASSERT(return_vector_bytes == 4 || return_vector_bytes == 8);
@@ -458,7 +481,10 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(!local_input_aiu || (!read_peer && !write_peer && first_n_tile > 0));
     DG_HOST_ASSERT(!producer_input_aiu || (read_peer && !write_peer && pack_input
                    && first_n_tile == 0 && num_n_tiles == 1 && dispatch_cache_n == 0));
+    DG_HOST_ASSERT(!fc1_helper_threads || (bn == 256 && bk == 64 && wm == 64 && wn == 64 && stages == 3));
     const int threads = (block_m / wm) * (bn / wn) * 32;
+    const int launch_threads = threads + fc1_helper_threads;
+    DG_HOST_ASSERT(launch_threads <= 1024);
     DG_HOST_ASSERT(threads >= 32 && threads <= 1024);
     const int smem = gemm_smem_total_size(2, stages, block_m, bn, bk);
     DG_HOST_ASSERT(smem <= 256 * 1024);
@@ -470,7 +496,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                               first_n_tile, num_n_tiles,
                               local_input_aiu,
                               producer_input_aiu,
-                              {get_grid_shape(get_num_sms()), dim3(threads), smem}, params};
+                              {get_grid_shape(get_num_sms()), dim3(launch_threads), smem}, params};
     DG_HOST_ASSERT(!cache_return_addresses || (write_peer && !staged_return && !pipeline_ready.has_value()));
     args.cache_return_addresses = cache_return_addresses;
     args.block_m = block_m;
@@ -486,6 +512,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                    && replay_gradient_tensors.empty() && !local_input_aiu && !producer_input_aiu
                    && !first_n_tile && !num_n_tiles && !staged_return));
     args.weight_kn = weight_kn;
+    args.fc1_helper_threads = fc1_helper_threads;
+    if (fc1_helper_threads) args.params.gemm.shape_m = m;
     if (!dhidden_score_tensors.empty()) {
         const auto& g = dhidden_score_tensors;
         DG_HOST_ASSERT(g.size() == 3 && replay_gradient_tensors.empty()
@@ -573,7 +601,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     const auto code = PeerGemmRuntime::generate(args);
     const auto runtime = compiler->build(PeerGemmRuntime::name(args), code);
     int occupancy = 0;
-    DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, threads, smem));
+    DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy, runtime->kernel, launch_threads, smem));
     DG_HOST_ASSERT(occupancy > 0);
     if (args.pipeline.ready) {
         // A CTA is not a CU: the actual kernel can have multiple resident
@@ -619,7 +647,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                     int(groups), int(n), int(k), read_peer, write_peer, int(m));
         std::printf("tile:[%d,%d,%d], warp:[%d,%d], stages:%d, threads:%d, "
                     "dynamic_smem_bytes:%d, blocks_per_cu:%d, grid:%u\n",
-                    block_m, bn, bk, wm, wn, stages, threads, smem, occupancy, args.launch_args.grid_dim.x);
+                    block_m, bn, bk, wm, wn, stages, launch_threads, smem, occupancy, args.launch_args.grid_dim.x);
     }
     if (!compile_only) PeerGemmRuntime::launch(runtime, args);
     return int(args.launch_args.grid_dim.x);
@@ -648,7 +676,7 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("external_input") = false, py::arg("compute_cus") = 0,
           py::arg("replay_gradient_tensors") = std::vector<torch::Tensor>{},
           py::arg("dhidden_score_tensors") = std::vector<torch::Tensor>{},
-          py::arg("weight_kn") = false);
+          py::arg("weight_kn") = false, py::arg("fc1_helper_threads") = 0);
 }
 
 }  // namespace deep_gemm::training
