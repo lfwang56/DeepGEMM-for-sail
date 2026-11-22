@@ -11,6 +11,8 @@ from test_moe_fp8_deepep_distributed import local_oracle, rms
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--tokens', type=int, default=17)
+    ap.add_argument('--chunk-tokens', type=int, default=32)
     ap.add_argument('--no-fuse-return', action='store_true')
     ap.add_argument('--check-zero-capacity', action='store_true')
     args = ap.parse_args()
@@ -21,7 +23,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     dist.init_process_group('nccl', device_id=device, timeout=timedelta(seconds=600))
     cpu_group = dist.new_group(backend='gloo', timeout=timedelta(seconds=600))
-    h, i, e, k, t, c = 256, 128, 2, 3, 17, 32
+    h, i, e, k, t, c = 256, 128, 2, 3, args.tokens, args.chunk_tokens
     if size * e < k:
         raise ValueError('test requires at least2 ranks')
     rng = torch.Generator().manual_seed(607821)
@@ -76,6 +78,10 @@ def main():
             for graph in graphs:graph.replay()
         stream.synchronize()
         for plan in plans:plan.check()
+        if plans[1].reuse_forward_context:
+            reused = plans[1].forward_context_reused_windows.clone()
+            dist.all_reduce(reused)
+            assert (reused.item() == 0) if pattern == "empty" else (reused.item() > 0)
         expected = list(local_oracle(ax, aid, base_scores, ady, aw1, aw2, rank))
         for j in (0, 1, 4):
             dist.all_reduce(expected[j], group=cpu_group)
@@ -91,6 +97,8 @@ def main():
               ranks=size, pattern=pattern, compute='fp8_e4m3', communication=plans[1].communication_dtype,
               input_mode=plans[1].fp8_input_mode, input_ctas=plans[1].fp8_input_ctas,
               input_serialized=plans[1].fp8_input_serialize, input_threads=plans[1].fp8_input_threads, input_cached_scales=plans[1].fp8_input_cache_scales,
+              reuse_forward_context=plans[1].reuse_forward_context,
+              reused_windows=int(plans[1].forward_context_reused_windows.item()) if plans[1].reuse_forward_context else 0,
               activation_scales='row_128', weight_scales='128x128_fp32',
               wgrad='bf16_inputs_fp32_accumulation', fused_return=not args.no_fuse_return,
               oracle_errors=errors, native_pair_errors=pair, every_element=True, passed=passed)), flush=True)

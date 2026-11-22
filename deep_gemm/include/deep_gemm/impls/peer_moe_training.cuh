@@ -26,7 +26,24 @@ template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, b
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::StageFp8InputTiles) {
+    if constexpr (Op == PeerOperation::PrepareContextReplay) {
+        const int e = p.dim[0], total = peer_pointer<int32_t>(p, 3)[e];
+        const bool invalid = total < 0;
+        const bool cached = !invalid && total > 0 && (int64_t(total - 1) / p.dim[1]) * p.dim[1] == p.dim[2];
+        if (index <= e) peer_pointer<int32_t>(p, 4)[index] = invalid || cached ? 0 : peer_pointer<int32_t>(p, 0)[index];
+        if (index < e) peer_pointer<int32_t>(p, 5)[index] = invalid || cached ? 0 : peer_pointer<int32_t>(p, 1)[index];
+        if (index == 0) {
+            const int blocks = peer_pointer<int32_t>(p, 2)[0];
+            peer_pointer<int32_t>(p, 6)[0] = invalid || cached ? 0 : blocks;
+            peer_pointer<int32_t>(p, 7)[0] = cached ? blocks : 0;
+            if (invalid) atomicOr(peer_pointer<int32_t>(p, 8), 2);
+            if (cached) {
+                atomicAdd(peer_pointer<int32_t>(p, 9), 1);
+                atomicAdd(reinterpret_cast<unsigned long long*>(p.ptr[10]),
+                          static_cast<unsigned long long>(peer_pointer<int32_t>(p, 0)[e]));
+            }
+        }
+    } else if constexpr (Op == PeerOperation::StageFp8InputTiles) {
         const int64_t capacity = p.dim[0], width = InputWidth ? InputWidth : p.dim[1], tokens = p.dim[2];
         const int blocks = peer_pointer<int32_t>(p, 7)[0];
         auto* status = peer_pointer<uint32_t>(p, 9);

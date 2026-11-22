@@ -42,7 +42,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  input_helper_threads=None, input_helper_block_m=None, input_helper_block_n=None,
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
                  fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None,
-                 fp8_input_cache_scales=None, **kwargs):
+                 fp8_input_cache_scales=None, reuse_forward_context=None, **kwargs):
         # Optional CTA helper recipe; environment values allow the same large
         # reference and capacity harnesses to exercise the exact candidate.
         def helper_value(value, key, default):
@@ -197,6 +197,13 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
         self.fp8_input_cache_scales = fp8_flag(fp8_input_cache_scales, "DG_MOE_FP8_INPUT_CACHE_SCALES")
+        self.reuse_forward_context = fp8_flag(reuse_forward_context, "DG_MOE_REUSE_FORWARD_CONTEXT")
+        if self.reuse_forward_context and (ring_rows is None or not expert_local_grad
+                or ffn_fusion or dag_fusion or dag_backward or fuse_replay_gradients
+                or (not self.fp8_peer_compute and not fuse_dhidden_scores)):
+            raise ValueError("forward context reuse requires routed expert-local FP8 or BF16 dHidden-score training")
+        self._forward_context_available = self._using_forward_context = False
+        self._forward_context_fingerprint = None
         if self.fp8_input_cache_scales and not self.fp8_input_pipeline:
             raise ValueError("FP8 input scale caching requires its input pipeline")
         self.fp8_input_ctas = helper_value(fp8_input_ctas, "DG_MOE_FP8_INPUT_CTAS", 8)
@@ -359,7 +366,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales)
+                      self.fp8_input_cache_scales, self.reuse_forward_context)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -520,6 +527,32 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fp8_input_pipeline:
             self.fp8_input_ready = torch.zeros(self.rows // 128, device=self.device, dtype=torch.int32)
             self.buffers["fp8_input_ready"] = self.fp8_input_ready
+        self.forward_context_slots = []
+        if self.reuse_forward_context:
+            # Each source chunk retains its last nonempty ring window. Earlier
+            # windows can still be replayed without unbounded skew allocations.
+            names = ['gate_up', 'hidden', 'global_offsets', 'global_lengths', 'global_permutation']
+            names += ['packed_output'] if self.fp8_peer_compute else ['packed_x']
+            if self.fp8_peer_compute and not self.fp8_input_pipeline:
+                names.append('packed_x')
+            original = {name: getattr(self, name) for name in names}
+            if self.fp8_peer_compute:
+                original.update(quantized_hidden=self.quantized[self.i][0],
+                                quantized_hidden_scales=self.quantized_scale_storage[self.i])
+            for slot in range(max(1, math.ceil(self.max_tokens / self.chunk_tokens))):
+                tensors = original if slot == 0 else {name: torch.empty_like(value) for name, value in original.items()}
+                if slot:
+                    self.buffers.update({f'forward_context_{slot}_{name}': value for name, value in tensors.items()})
+                self.forward_context_slots.append(tensors)
+            for name, shape, dtype in (('replay_offsets', (self.e + 1,), torch.int32),
+                                      ('replay_lengths', (self.e,), torch.int32),
+                                      ('replay_blocks', (1,), torch.int32),
+                                      ('cache_only_blocks', (1,), torch.int32),
+                                      ('forward_context_reused_windows', (1,), torch.int32),
+                                      ('forward_context_reused_rows', (1,), torch.int64)):
+                value = torch.zeros(shape, device=self.device, dtype=dtype)
+                setattr(self, name, value)
+                self.buffers[name] = value
         self._prepared = False
         torch.cuda.synchronize(self.device)
         if self.group is not None:
@@ -533,6 +566,28 @@ class PeerMoEPlan(NativeMoEPlan):
             self.w1_t, self.w2_t = w1, w2
             return
         return super()._prepare_weights(w1, w2, backward=backward)
+
+    @staticmethod
+    def _context_fingerprint(*tensors):
+        return tuple((value.data_ptr(), value._version, tuple(value.shape)) for value in tensors)
+
+    def _activate_forward_context(self, start):
+        if not self.reuse_forward_context:
+            return
+        for name, value in self.forward_context_slots[start // self.chunk_tokens].items():
+            if name == 'quantized_hidden':
+                self.quantized[self.i] = (value, self.quantized[self.i][1])
+            elif name == 'quantized_hidden_scales':
+                self.quantized_scale_storage[self.i] = value
+                self.quantized[self.i] = (self.quantized[self.i][0], value.t())
+            else:
+                setattr(self, name, value)
+
+    def _prepare_context_replay(self, start, compile_only=False):
+        _peer(20, [self.offsets, self.lengths, self.num_blocks, self.global_offsets,
+                   self.replay_offsets, self.replay_lengths, self.replay_blocks, self.cache_only_blocks,
+                   self.status, self.forward_context_reused_windows, self.forward_context_reused_rows],
+              [self.e, self.rows, start], compile_only)
 
     def _quantize_weight(self, name, weight):
         data, scales = self.quantized[name]
@@ -577,7 +632,8 @@ class PeerMoEPlan(NativeMoEPlan):
                 return dg._C._moe_training_peer_fp8_gemm(
                     quantized_a, self.quantized[name], output, self.lengths, self.permutation,
                     self.pointer_tables[destination], self.chunk_tokens * self.k,
-                    keep_local=False, compile_only=compile_only, config=() if config is None else config)
+                    keep_local=self.reuse_forward_context and role == 'fc2' and not self._fp8_backward,
+                    compile_only=compile_only, config=() if config is None else config)
             options = {} if config is None else {"configs": (dg.get_num_sms(), self.block_m, *config, (0, 0, 0))}
             # Zero lengths make this a safe local warmup during preparation.
             dg.m_grouped_fp8_gemm_nt_nopad(quantized_a, self.quantized[name], output, self.group_ids,
@@ -768,6 +824,8 @@ class PeerMoEPlan(NativeMoEPlan):
             self._prefetch_raw_dy(compile_only=True)
         if self.ring_rows is not None:
             set_route_window(self, 0, compile_only=True)
+        if self.reuse_forward_context:
+            self._prepare_context_replay(0, compile_only=True)
         self._barrier(0, compile_only=True)
         _peer(0, [self.pointer_tables["local_ids"], self.counts, self.route_experts, self.route_rows, self.status],
               [self.routes, self.e, self.rank, self.size, self.chunk_tokens * self.k], True)
@@ -792,6 +850,12 @@ class PeerMoEPlan(NativeMoEPlan):
             self._fc1(w1, compile_only=True, keep_gate_up=False)
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                         write=self.fuse_return, compile_only=True)
+        if self.reuse_forward_context and self.fp8_peer_compute:
+            previous_backward = self._fp8_backward
+            self._fp8_backward = False
+            self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
+                            write=self.fuse_return, compile_only=True)
+            self._fp8_backward = previous_backward
         if self.fuse_replay_gradients:
             self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                             compile_only=True, replay_gradients=True)
@@ -814,6 +878,7 @@ class PeerMoEPlan(NativeMoEPlan):
         torch.cuda.synchronize(self.device)
 
     def _route_chunk(self, x, ids, valid_tokens, start, zero_values=True):
+        self._activate_forward_context(start)
         _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
                 [x.shape[0], self.chunk_tokens, self.h, self.k, start])
         if self.fp8_input_pipeline:
@@ -854,7 +919,28 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m])
 
     def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True,
-                              prefetch_dy=False):
+                              prefetch_dy=False, _context_masked=False):
+        if self._using_forward_context and not return_output and not _context_masked:
+            self._prepare_context_replay(self._context_window_start)
+            original = self.offsets, self.lengths, self.num_blocks, self.current_rows
+            self.offsets, self.lengths, self.num_blocks = self.replay_offsets, self.replay_lengths, self.replay_blocks
+            self.current_rows = self.replay_offsets[self.e:self.e + 1]
+            try:
+                self._chunk_forward_single(w1, w2, pack_input, return_output, synchronize_output,
+                                           prefetch_dy, _context_masked=True)
+            finally:
+                self.offsets, self.lengths, self.num_blocks, self.current_rows = original
+            if self.fp8_input_pipeline:
+                # The cached forward did not stage BF16 X. Only its reused
+                # window needs this additional copy; other counts are zero.
+                self._fp8_bf_input_stream.wait_stream(self._fp8_input_stream)
+                with torch.cuda.stream(self._fp8_bf_input_stream):
+                    for tensor in (self.permutation, self.cache_only_blocks, self.packed_x,
+                                   self.pointer_tables['local_x'], self.status):
+                        tensor.record_stream(self._fp8_bf_input_stream)
+                    self._stage_input(force_bf16=True, blocks_override=self.cache_only_blocks)
+                self._fp8_bf_input_pending = True
+            return
         if self.dag_fusion:
             self._dag(w1, w2, return_output=return_output)
             if return_output and synchronize_output:
@@ -866,7 +952,8 @@ class PeerMoEPlan(NativeMoEPlan):
             return
         if not self.fuse_dispatch:
             self._stage_input()
-        self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output, prefetch_dy=prefetch_dy)
+        self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output or self.reuse_forward_context,
+                  prefetch_dy=prefetch_dy)
         if not self.fuse_fc1_activation:
             self._activation()
         if self.fuse_dhidden_scores and not return_output:
@@ -935,14 +1022,15 @@ class PeerMoEPlan(NativeMoEPlan):
             torch.cuda.current_stream(self.device).wait_stream(self._fp8_bf_input_stream)
             self._fp8_bf_input_pending = False
 
-    def _stage_input(self, compile_only=False, force_bf16=False):
+    def _stage_input(self, compile_only=False, force_bf16=False, blocks_override=None):
         if self.fp8_input_pipeline and not force_bf16:
             if compile_only:
                 self._fp8_stage_quantized_input(compile_only=True)
                 self._stage_input(compile_only=True, force_bf16=True)
             return
         _peer(11 if self.vectorized_copy else 7,
-              [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
+              [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status,
+               self.num_blocks if blocks_override is None else blocks_override],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
 
     def _activation(self, backward=False, compile_only=False):
@@ -1027,8 +1115,10 @@ class PeerMoEPlan(NativeMoEPlan):
         self.raw_scores[:count].copy_(scores[start:start + count])
 
     def _backward_windows(self, dy, scores, w1, w2, dw1, dw2, dx, dscores, start):
-        for window in range(0, self.full_row_capacity, self.rows):
+        windows = range(0, self.full_row_capacity, self.rows)
+        for window in reversed(windows) if self._using_forward_context else windows:
             self._set_window(window)
+            self._context_window_start = window
             self._chunk_forward_single(w1, w2, pack_input=True, return_output=False,
                                        prefetch_dy=self.overlap_expert_dy)
             if self.dag_backward:
@@ -1069,7 +1159,14 @@ class PeerMoEPlan(NativeMoEPlan):
             self._dag_slot = 0
             self._validate(x, ids, scores, w1, w2, valid_tokens)
             self.prepare(w1, w2)
-            return super().forward(x, ids, scores, w1, w2, valid_tokens)
+            if self.reuse_forward_context:
+                self.forward_context_reused_windows.zero_()
+                self.forward_context_reused_rows.zero_()
+            output = super().forward(x, ids, scores, w1, w2, valid_tokens)
+            if self.reuse_forward_context:
+                self._forward_context_fingerprint = self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens)
+                self._forward_context_available = True
+            return output
 
     @torch.no_grad()
     def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None):
@@ -1078,6 +1175,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
+            self._using_forward_context = (self.reuse_forward_context and self._forward_context_available
+                and self._forward_context_fingerprint == self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens))
             if self.dag_fusion or self.dag_backward:
                 self._dag_slot = self.dag_forward_slots
             self.prepare(w1, w2)
@@ -1090,7 +1189,16 @@ class PeerMoEPlan(NativeMoEPlan):
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 if self.expert_local_grad:
                     self._publish_gradient_chunk(dy, scores, start)
-                self._route_chunk(x, ids, valid_tokens, start, zero_values=not self.expert_local_grad)
+                if self._using_forward_context:
+                    self._activate_forward_context(start)
+                    _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
+                            [x.shape[0], self.chunk_tokens, self.h, self.k, start])
+                    if self.fp8_input_pipeline:
+                        _launch(9, [self.local_x, self.local_qx, self.local_qx_scales], [self.chunk_tokens, self.h])
+                    self.local_dx.zero_()
+                    self._barrier(start * 4)
+                else:
+                    self._route_chunk(x, ids, valid_tokens, start, zero_values=not self.expert_local_grad)
                 if self.ring_rows is not None:
                     self._backward_windows(dy, scores, w1, w2, dw1, dw2, dx, dscores, start)
                     continue
@@ -1134,4 +1242,5 @@ class PeerMoEPlan(NativeMoEPlan):
                     dscores[start:start + count].copy_(self.local_dscores[:count])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
+            self._forward_context_available = self._using_forward_context = False
             return dx, dw1, dw2, dscores

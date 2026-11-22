@@ -498,17 +498,26 @@ class _NativeMoE(torch.autograd.Function):
         _validate_accumulators(accumulators, w1, w2)
         if any(weight.dtype not in (torch.bfloat16, torch.float32) for weight in (w1, w2)):
             raise TypeError("expert weights must be BF16 or FP32 master parameters")
-        output = plan.forward(x, ids, scores, w1.to(torch.bfloat16), w2.to(torch.bfloat16), valid_tokens)
-        ctx.save_for_backward(x, ids, scores, w1, w2, valid_tokens)
+        forward_w1, forward_w2 = w1.to(torch.bfloat16), w2.to(torch.bfloat16)
+        output = plan.forward(x, ids, scores, forward_w1, forward_w2, valid_tokens)
+        ctx.reuse_forward_context = getattr(plan, 'reuse_forward_context', False)
+        if ctx.reuse_forward_context:
+            # The forward context corresponds to these exact BF16 parameters;
+            # retain them alongside FP32 masters through the matching backward.
+            ctx.save_for_backward(x, ids, scores, w1, w2, valid_tokens, forward_w1, forward_w2)
+        else:
+            ctx.save_for_backward(x, ids, scores, w1, w2, valid_tokens)
         ctx.plan, ctx.accumulators = plan, accumulators
         return output
 
     @staticmethod
     @torch.autograd.function.once_differentiable
     def backward(ctx, dy):
-        x, ids, scores, w1, w2, valid_tokens = ctx.saved_tensors
+        x, ids, scores, w1, w2, valid_tokens = ctx.saved_tensors[:6]
+        backward_w1, backward_w2 = (ctx.saved_tensors[6:] if ctx.reuse_forward_context
+                                   else (w1.to(torch.bfloat16), w2.to(torch.bfloat16)))
         dx, dw1, dw2, dscores = ctx.plan.backward(
-            dy.contiguous(), x, ids, scores, w1.to(torch.bfloat16), w2.to(torch.bfloat16), valid_tokens, ctx.accumulators,
+            dy.contiguous(), x, ids, scores, backward_w1, backward_w2, valid_tokens, ctx.accumulators,
         )
         if ctx.accumulators is not None:
             dw1 = dw2 = None

@@ -47,7 +47,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::StageFp8InputTiles));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PrepareContextReplay));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -64,6 +64,15 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     int64_t work = 0, blocks = -1;
     int threads = 256;
     switch (static_cast<PeerOperation>(operation)) {
+        case PeerOperation::PrepareContextReplay:
+            schema(11, 3);
+            DG_HOST_ASSERT(dims[0] > 0 && dims[0] < 128 && dims[1] > 0 && dims[2] % dims[1] == 0);
+            expect(0, dims[0] + 1, i32); expect(1, dims[0], i32); expect(2, 1, i32);
+            expect(3, dims[0] + 1, i32); expect(4, dims[0] + 1, i32);
+            expect(5, dims[0], i32); expect(6, 1, i32); expect(7, 1, i32);
+            expect(8, 1, i32); expect(9, 1, i32); expect(10, 1, i64);
+            blocks = 1;
+            break;
         case PeerOperation::StageFp8InputTiles:
             // Three source pointer tables (FP8, row scales, original BF16),
             // global source rows, local FP8/MN scales/BF16, count, ready, status.
