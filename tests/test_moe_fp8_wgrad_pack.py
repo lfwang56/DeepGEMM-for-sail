@@ -8,6 +8,8 @@ import json
 import os
 
 COMPACT=True
+PACK_MODE=int(os.getenv('DG_TEST_DW_PACK_MODE','0'))
+PACK_CTAS=int(os.getenv('DG_TEST_DW_PACK_CTAS','4'))
 import torch
 import deep_gemm as dg
 
@@ -46,7 +48,7 @@ def gpu_panels(left,right,lengths,offsets,status):
     a=(raw_a[16:-16].view(torch.float8_e4m3fn).reshape(m,r),torch.empty(g,m,device=left.device))
     b=(raw_b[16:-16].view(torch.float8_e4m3fn).reshape(n,r),torch.empty(g,n,device=left.device))
     def pack():
-        dg._C._moe_training_launch(33,[left,right,*a,*b,lengths,offsets,status],[g,r,m,n])
+        dg._C._moe_training_launch(33,[left,right,*a,*b,lengths,offsets,status],[g,r,m,n,PACK_MODE,PACK_CTAS])
     pack.guards=(raw_a,raw_b)
     pack()
     return a,b,pack

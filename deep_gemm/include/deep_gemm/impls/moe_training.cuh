@@ -31,7 +31,7 @@ __device__ __forceinline__ float warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-template <Operation Op, bool MnMajorScales = false>
+template <Operation Op, bool MnMajorScales = false, bool QuantizeDwBeforeTranspose = false>
 __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int thread = threadIdx.x;
@@ -83,7 +83,7 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         // swizzled TSM into the native FP8 non-transposed MMA panels.
         __shared__ uint32_t maxima[8][128];
         __shared__ float scales[128];
-        __shared__ uint32_t tile[128][64];
+        __shared__ uint32_t tile[128][QuantizeDwBeforeTranspose ? 32 : 64];
         const int gcount=p.dim[0],capacity=p.dim[1],m=p.dim[2],n=p.dim[3];
         const int per_group=(m+n)/128;
         for(int work=block_index;work<gcount*per_group;work+=gridDim.x) {
@@ -138,25 +138,47 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                         const int64_t at=(int64_t(start)+base+token)*width+feature_base+feature;
                         values=*reinterpret_cast<const uint2*>(source+at);
                     }
-                    tile[token][(feature/2)^(token>>2)]=values.x;
-                    tile[token][(feature/2+1)^(token>>2)]=values.y;
+                    if constexpr (QuantizeDwBeforeTranspose) {
+                        const float4 sf4=*reinterpret_cast<const float4*>(scales+feature);
+                        const unsigned lo=epilogue::quant::fp8_pair(
+                            __uint_as_float(values.x<<16)/sf4.x,
+                            __uint_as_float(values.x&0xffff0000u)/sf4.y);
+                        const unsigned hi=epilogue::quant::fp8_pair(
+                            __uint_as_float(values.y<<16)/sf4.z,
+                            __uint_as_float(values.y&0xffff0000u)/sf4.w);
+                        tile[token][(feature/4)^(token>>2)]=lo|(hi<<16);
+                    } else {
+                        tile[token][(feature/2)^(token>>2)]=values.x;
+                        tile[token][(feature/2+1)^(token>>2)]=values.y;
+                    }
                 }
                 __syncthreads();
                 #pragma unroll
                 for(int j=0;j<16;++j) {
                     const int feature=warp*16+j;
-                    float values[4];
-                    #pragma unroll
-                    for(int byte=0;byte<4;++byte) {
-                        const int token=lane*4+byte;
-                        const unsigned word=tile[token][(feature/2)^(token>>2)];
-                        const unsigned raw=(word>>(16*(feature&1)))&65535u;
-                        values[byte]=__uint_as_float(raw<<16)/scales[feature];
+                    unsigned packed=0;
+                    if constexpr (QuantizeDwBeforeTranspose) {
+                        #pragma unroll
+                        for(int byte=0;byte<4;++byte) {
+                            const int token=lane*4+byte;
+                            const unsigned word=tile[token][(feature/4)^(token>>2)];
+                            packed|=((word>>(8*(feature&3)))&255u)<<(byte*8);
+                        }
+                    } else {
+                        float values[4];
+                        #pragma unroll
+                        for(int byte=0;byte<4;++byte) {
+                            const int token=lane*4+byte;
+                            const unsigned word=tile[token][(feature/2)^(token>>2)];
+                            const unsigned raw=(word>>(16*(feature&1)))&65535u;
+                            values[byte]=__uint_as_float(raw<<16)/scales[feature];
+                        }
+                        const unsigned lo=epilogue::quant::fp8_pair(values[0],values[1]);
+                        const unsigned hi=epilogue::quant::fp8_pair(values[2],values[3]);
+                        packed=lo|(hi<<16);
                     }
-                    const unsigned lo=epilogue::quant::fp8_pair(values[0],values[1]);
-                    const unsigned hi=epilogue::quant::fp8_pair(values[2],values[3]);
                     const int64_t at=int64_t(start)*width+int64_t(feature_base+feature)*padded+base+lane*4;
-                    *reinterpret_cast<unsigned*>(destination+at)=lo|(hi<<16);
+                    *reinterpret_cast<unsigned*>(destination+at)=packed;
                 }
                 __syncthreads();
             }
