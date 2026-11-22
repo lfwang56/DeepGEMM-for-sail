@@ -267,6 +267,11 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             blocks = dims[0] * dims[2];
             break;
     }
+    if(operation==int(PeerOperation::PackActiveQuantized) || operation==int(PeerOperation::ExpertLocalGradientsQuantized)) {
+        const int ctas=get_env<int>("DG_MOE_FP8_FUSED_QUANT_CTAS_PER_CU",0);
+        DG_HOST_ASSERT(ctas==0 || ctas==1 || ctas==2 || ctas==4 || ctas==8 || ctas==16);
+        if(ctas)blocks=int64_t(get_num_sms())*ctas;
+    }
     if (blocks < 0) blocks = (work + 255) / 256;
     if (!blocks) return;
     DG_HOST_ASSERT(blocks <= INT32_MAX);

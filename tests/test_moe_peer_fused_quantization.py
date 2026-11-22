@@ -3,7 +3,7 @@
 Source pointer tables refer to local buffers in this component test. Performance
 is a local surrogate; real cross-host benefit requires the EP32 complete step.
 """
-import gc,json,torch
+import gc,json,torch,os
 import deep_gemm as dg
 
 def fixture(width,capacity=512,tokens=83,measure=False):
@@ -74,8 +74,19 @@ def fixture(width,capacity=512,tokens=83,measure=False):
                 end.record();end.synchronize();samples.append(begin.elapsed_time(end)/5)
             return sorted(samples)[3]
         for backward in (False,True):
-            before,after=timing(graphs[2 if backward else 0]),timing(graphs[3 if backward else 1])
-            print(json.dumps(dict(case='fused_peer_quantization_performance',width=width,capacity=capacity,active=40960,backward=backward,before_ms=before,after_ms=after,speedup=before/after,source_owners_local=True,scope='Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result',passed=True)),flush=True)
+            reference=graphs[2 if backward else 0]
+            before=timing(reference)
+            for ctas in (1,2,4,8,16):
+                os.environ['DG_MOE_FP8_FUSED_QUANT_CTAS_PER_CU']=str(ctas)
+                fn=fused_bwd if backward else fused_fwd
+                fn();torch.cuda.synchronize();candidate=torch.cuda.CUDAGraph()
+                with torch.cuda.graph(candidate):fn()
+                reference.replay();candidate.replay();torch.cuda.synchronize()
+                assert torch.equal(bf,refbf) and torch.equal(q.view(torch.uint8),refq.view(torch.uint8)) and torch.equal(sf.view(torch.uint8),refsf.view(torch.uint8)) and (not backward or torch.equal(ds,refds)) and status.item()==0
+                after=timing(candidate)
+                print(json.dumps(dict(case='fused_peer_quantization_performance',width=width,capacity=capacity,active=40960,backward=backward,ctas_per_cu=ctas,before_ms=before,after_ms=after,speedup=before/after,source_owners_local=True,scope='Local surrogate staging plus unchanged FP8 row quantization; not a cross-host or whole-step result',passed=True)),flush=True)
+                del candidate
+            os.environ['DG_MOE_FP8_FUSED_QUANT_CTAS_PER_CU']='0'
     del graphs,x,dy,y,bf,q,sf,refbf,refq,refsf;gc.collect();torch.cuda.synchronize()
 
 def main():
