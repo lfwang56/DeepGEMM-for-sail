@@ -170,6 +170,7 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
                                     fuse_fc1_activation=options.fuse_fc1_activation,
                                     fuse_dhidden_scores=options.fuse_dhidden_scores,
+                                    transpose_free_dgrad=options.transpose_free_dgrad,
                                     dag_fusion=options.dag_fusion, dag_backward=options.dag_backward,
                                     dag_direct_return=options.dag_direct_return,
                                     dag_shared_pool=options.dag_fusion or options.dag_backward,
@@ -233,6 +234,7 @@ def main():
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
     parser.add_argument("--fuse-dhidden-scores", action="store_true")
+    parser.add_argument("--transpose-free-dgrad", action="store_true")
     parser.add_argument("--dag-fusion", action="store_true")
     parser.add_argument("--dag-backward", action="store_true")
     parser.add_argument("--dag-direct-return", action="store_true")
@@ -256,7 +258,7 @@ def main():
         parser.error("input copy ILP requires --backend peer")
     if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend not in ("peer", "hybrid"):
         parser.error("DAG options require --backend peer")
-    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.fuse_dhidden_scores or options.expert_local_grad or options.ring_rows is not None) and options.backend not in ("peer", "hybrid"):
+    if (options.dispatch_cache_n or options.dispatch_cache_aiu or options.staged_return or options.reuse_packed_dy or options.gemm_config or options.peer_fc1_config or options.dispatch_cache_ctas != 2 or options.dispatch_producer or options.producer_input_aiu or options.producer_local_aiu or options.fuse_activation_backward or options.fuse_fc1_activation or options.fuse_dhidden_scores or options.transpose_free_dgrad or options.expert_local_grad or options.ring_rows is not None) and options.backend not in ("peer", "hybrid"):
         parser.error("peer kernel options require --backend peer")
     rank, size = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     if size < 2 or options.experts % size or options.global_batch % size:
@@ -287,6 +289,7 @@ def main():
                             fuse_activation_backward=options.fuse_activation_backward,
                             fuse_fc1_activation=options.fuse_fc1_activation,
                                     fuse_dhidden_scores=options.fuse_dhidden_scores,
+                                    transpose_free_dgrad=options.transpose_free_dgrad,
                             dag_fusion=options.dag_fusion, dag_backward=options.dag_backward,
                             dag_direct_return=options.dag_direct_return,
                             dag_shared_pool=options.dag_fusion or options.dag_backward,

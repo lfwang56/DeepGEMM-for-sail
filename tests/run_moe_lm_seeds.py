@@ -23,6 +23,7 @@ parser.add_argument("--block-m", type=int, choices=(128, 256), default=128)
 parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
 parser.add_argument("--fuse-fc1-activation", action="store_true")
 parser.add_argument("--fuse-dhidden-scores", action="store_true")
+parser.add_argument("--transpose-free-dgrad", action="store_true")
 parser.add_argument("--dag-fusion", action="store_true")
 parser.add_argument("--dag-backward", action="store_true")
 parser.add_argument("--dag-direct-return", action="store_true")
@@ -128,6 +129,8 @@ for index, seed in enumerate((4827, 4891, 6113)):
         command.append("--fuse-fc1-activation")
     if args.fuse_dhidden_scores:
         command.append("--fuse-dhidden-scores")
+    if args.transpose_free_dgrad:
+        command.append("--transpose-free-dgrad")
     if seed in fixed_route_seeds:
         command.append("--reference-fixed-routes")
     output = (directory / f"seed{seed}.log").open("w")
