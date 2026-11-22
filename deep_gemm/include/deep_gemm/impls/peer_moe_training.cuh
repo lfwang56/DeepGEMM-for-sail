@@ -50,7 +50,7 @@ template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, b
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantizedTiles) {
+    if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantizedTiles || Op == PeerOperation::ExpertLocalGradientsQuantizedTilesCached) {
         const int64_t rows=int64_t(peer_pointer<int32_t>(p,6)[0])*128;
         if(rows<0 || rows>p.dim[0]) {
             if(index==0)atomicOr(peer_pointer<int32_t>(p,7),2);
@@ -59,12 +59,29 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
         const int64_t width=InputWidth?InputWidth:p.dim[1],segments=width/128;
         const int64_t tokens=InputBlockM?InputBlockM:p.dim[2],topk=InputTopk?InputTopk:p.dim[3];
         const int64_t stride=tokens*topk;
+        constexpr bool cache_scores=Op==PeerOperation::ExpertLocalGradientsQuantizedTilesCached;
+        __shared__ int cached_routes[16];
+        __shared__ float cached_scores[16];
         const int within=threadIdx.x&15;
         const unsigned mask=0xffffu<<((threadIdx.x&31)>=16?16:0);
-        for(int64_t group=block_index*16+threadIdx.x/16;group<rows*segments;
-                group+=int64_t(gridDim.x)*16) {
-            const int64_t row=group/segments,segment=group%segments;
-            const int route=peer_pointer<int32_t>(p,3)[row];
+        // Rows are128-aligned, hence the group extent is divisible by16.
+        // Every CTA thread enters each iteration and both optional barriers.
+        for(int64_t base=block_index*16;base<rows*segments;base+=int64_t(gridDim.x)*16) {
+            const int64_t first_row=base/segments;
+            if constexpr(cache_scores) {
+                const int num_rows=(base+15)/segments-first_row+1;
+                if(threadIdx.x<num_rows) {
+                    const int row=first_row+threadIdx.x;
+                    const int route=peer_pointer<int32_t>(p,3)[row];
+                    const bool valid=route>=0 && int64_t(route)<p.dim[4]*stride;
+                    cached_routes[threadIdx.x]=route;
+                    cached_scores[threadIdx.x]=valid?
+                        reinterpret_cast<const float*>(peer_pointer<uint64_t>(p,1)[int64_t(route)/stride])[int64_t(route)%stride]:0.f;
+                }
+                __syncthreads();
+            }
+            const int64_t group=base+threadIdx.x/16,row=group/segments,segment=group%segments;
+            const int route=cache_scores?cached_routes[row-first_row]:peer_pointer<int32_t>(p,3)[row];
             const bool valid=route>=0 && int64_t(route)<p.dim[4]*stride;
             if(route>=0 && !valid && within==0)atomicOr(peer_pointer<int32_t>(p,7),2);
             const int owner=valid?int64_t(route)/stride:0;
@@ -76,7 +93,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                 const auto* source=reinterpret_cast<const __ppu_bfloat16*>(peer_pointer<uint64_t>(p,0)[owner]);
                 raw_dy=*reinterpret_cast<const uint4*>(source+(local/topk)*width+segment*128+within*8);
                 raw_y=*reinterpret_cast<const uint4*>(peer_pointer<__ppu_bfloat16>(p,4)+at);
-                score=reinterpret_cast<const float*>(peer_pointer<uint64_t>(p,1)[owner])[local];
+                score=cache_scores?cached_scores[row-first_row]:reinterpret_cast<const float*>(peer_pointer<uint64_t>(p,1)[owner])[local];
             }
             const auto* d=reinterpret_cast<const __ppu_bfloat16*>(&raw_dy);
             const auto* y=reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
@@ -97,6 +114,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                 peer_pointer<float>(p,9)[segment*p.dim[0]+row]=scale;
                 peer_pointer<float>(p,10)[row*segments+segment]=dot;
             }
+            if constexpr(cache_scores)__syncthreads();
         }
     } else if constexpr (Op == PeerOperation::PackActiveQuantized) {
         const int64_t rows=int64_t(peer_pointer<int32_t>(p,4)[0])*128;

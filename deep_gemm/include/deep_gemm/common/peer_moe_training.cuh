@@ -30,6 +30,7 @@ enum class PeerOperation : int {
     PackActiveQuantized,
     ExpertLocalGradientsQuantized,
     ExpertLocalGradientsQuantizedTiles,
+    ExpertLocalGradientsQuantizedTilesCached,
 };
 
 struct PeerGemmParams {

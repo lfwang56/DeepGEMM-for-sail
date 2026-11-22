@@ -202,7 +202,11 @@ class PeerMoEPlan(NativeMoEPlan):
         if stage_quant not in ('0','1','2','3'):
             raise ValueError('DG_MOE_FP8_FUSED_STAGE_QUANT must be0,1,2or3')
         self.fp8_fused_stage_quant = int(stage_quant)
-        self.fp8_tiled_gradient_quant=fp8_flag(None,'DG_MOE_FP8_TILED_GRAD_QUANT')
+        tiled_mode=os.environ.get('DG_MOE_FP8_TILED_GRAD_QUANT','0')
+        if tiled_mode not in ('0','1','2'):
+            raise ValueError('DG_MOE_FP8_TILED_GRAD_QUANT must be0,1or2')
+        self.fp8_tiled_gradient_quant=tiled_mode!='0'
+        self.fp8_tiled_gradient_cache=tiled_mode=='2'
         if self.fp8_tiled_gradient_quant and not (self.fp8_fused_stage_quant&2):
             raise ValueError('tiled gradient quantization requires fused DY quantization')
         if self.fp8_fused_stage_quant and (not self.fp8_peer_compute or self.fp8_input_pipeline
@@ -381,7 +385,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -1126,7 +1130,7 @@ class PeerMoEPlan(NativeMoEPlan):
             tensors.extend((self.quantized[self.h][0],self.quantized_scale_storage[self.h]))
             if self.fp8_tiled_gradient_quant:
                 tensors.append(self.fp8_dscore_partials)
-                _peer(23,tensors,[self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+                _peer(24 if self.fp8_tiled_gradient_cache else 23,tensors,[self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
                 _peer(17,[self.fp8_dscore_partials,self.permutation,self.num_blocks,
                           self.pointer_tables['local_dscores'],self.status],
                       [self.rows,self.h//128,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)

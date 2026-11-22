@@ -28,9 +28,11 @@ public:
         const int warp_rows = get_env<int>("DG_INPUT_ASSIST_WARP_ROWS", 1);
         DG_HOST_ASSERT(warp_rows == 0 || warp_rows == 1);
         const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
+        const bool tiled_quant=args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) ||
+                               args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached);
         const bool fused_quant = args.operation == int(PeerOperation::PackActiveQuantized) ||
                                  args.operation == int(PeerOperation::ExpertLocalGradientsQuantized) ||
-                                 args.operation == int(PeerOperation::ExpertLocalGradientsQuantizedTiles);
+                                 tiled_quant;
         const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_training.cuh>
@@ -39,9 +41,9 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
     deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}{}>(params);
 }}
 )", args.launch_args.block_dim.x, args.operation, args.operation,
-       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) ? args.params.dim[2] : 0,
+       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : tiled_quant ? args.params.dim[2] : 0,
        args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
-       args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
+       tiled_quant ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -50,7 +52,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ExpertLocalGradientsQuantizedTiles));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -67,6 +69,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     int64_t work = 0, blocks = -1;
     int threads = 256;
     switch (static_cast<PeerOperation>(operation)) {
+        case PeerOperation::ExpertLocalGradientsQuantizedTilesCached:
         case PeerOperation::ExpertLocalGradientsQuantizedTiles:
             schema(11,6);
             DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>0 && dims[1]%128==0 &&
@@ -289,7 +292,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
         DG_HOST_ASSERT(ctas==0 || ctas==1 || ctas==2 || ctas==4 || ctas==8 || ctas==16);
         if(ctas)blocks=int64_t(get_num_sms())*ctas;
     }
-    if(operation==int(PeerOperation::PackActiveQuantized) || operation==int(PeerOperation::ExpertLocalGradientsQuantized) || operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles)) {
+    if(operation==int(PeerOperation::PackActiveQuantized) || operation==int(PeerOperation::ExpertLocalGradientsQuantized) || operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) || operation==int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached)) {
         const int ctas=get_env<int>("DG_MOE_FP8_FUSED_QUANT_CTAS_PER_CU",0);
         DG_HOST_ASSERT(ctas==0 || ctas==1 || ctas==2 || ctas==4 || ctas==8 || ctas==16);
         if(ctas)blocks=int64_t(get_num_sms())*ctas;
