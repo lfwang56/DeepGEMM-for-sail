@@ -53,7 +53,7 @@ __global__ void {}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::QuantizeRowsVectorDeviceRows));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeQuantizedWeightsSwizzled));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -84,6 +84,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             blocks=std::min<int64_t>(g*((m+n)/128),int64_t(get_num_sms())*4);
             break;
         }
+        case Operation::TransposeQuantizedWeightsSwizzled:
         case Operation::TransposeQuantizedWeights: {
             schema(8, 3);
             const auto e = dims[0], h = dims[1], i = dims[2];
@@ -356,7 +357,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::QuantizeRowsVectorDeviceRows));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeQuantizedWeightsSwizzled));
         const int variants = Runtime::active_quantization(operation) ? 2 : 1;
         for (int layout = 0; layout < variants; ++layout) {
             Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};

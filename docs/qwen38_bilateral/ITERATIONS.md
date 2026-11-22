@@ -25215,3 +25215,225 @@ rue, "bf16_guards": true, "q_guards": true, "sf_guards": true, "dscore_bits": tr
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3147081, "start_ticks": "18740602"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration104 — shared-memory layout of bit-preserving FP8 weight transpose
+
+103 closede5cf4816b3; all36 fused input/gradient staging gates passed.
+DY kernel inherited2CTAs/CU was underprovisioned: local baseline3.5133,
+fused2CTA4.9777,4CTA2.7628,8CTA2.8518,16CTA2.2877ms. Fused input
+4CTA2.4997,8CTA1.7124,16CTA1.6922 vs separate3.85ms. No actual
+cross-host claim yet; frozen103fourEP8modes+multichunk allclean.
+102multichunkfailed before construction because its case inherited
+input_pipeline1; corrected in103case to staged0, no algorithm bug.
+103 EP32real-shape/multiwindow/performance and3seedpublicLM in flight
+on immutable103. 100all15EP8/EP32phasesclean. T4096Peer69.4897->
+67.8332,DeepEP80.3270->79.4430;T16384Peer259.9799->253.3941,
+DeepEP303.4016->299.9502ms.
+
+Transpose32 cost1.95ms in complete step. Existing128x33 u32 TSM
+layout has addresses clustered under byte transposition warp ownership
+(layout-based hypothesis; isolated immutable103 Acu control in flight).
+Try128x32 u32 XOR index word^(row&3)^(row>>4), preserving byte and
+SF bit operations. Newprivate op35, optional
+DG_MOE_FP8_WEIGHT_TRANSPOSE_SWIZZLE1 with existing QT flag required.
+All ranks agree. Gate all256FP8byte values, arbitrary32-bit SF incl
+NaNpayloads/signedzero, canaries, dynamic graphs, all3quantizers,
+then measure same forward quantization+transpose32vs35 and separately
+pure transpose. No different numerical recipe or gradient precision.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_weight_transpose_bits",
+      "experts": 1,
+      "hidden": 256,
+      "intermediate": 128,
+      "graph": true,
+      "mutable_replays": 3,
+      "every_byte": true,
+      "special_scale_bits": true,
+      "canaries": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_bits",
+      "experts": 2,
+      "hidden": 512,
+      "intermediate": 256,
+      "graph": true,
+      "mutable_replays": 3,
+      "every_byte": true,
+      "special_scale_bits": true,
+      "canaries": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_bits",
+      "experts": 3,
+      "hidden": 768,
+      "intermediate": 384,
+      "graph": true,
+      "mutable_replays": 3,
+      "every_byte": true,
+      "special_scale_bits": true,
+      "canaries": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_quantizer_equivalence",
+      "quantizer": 10,
+      "changed_weights": 3,
+      "every_byte": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_quantizer_equivalence",
+      "quantizer": 29,
+      "changed_weights": 3,
+      "every_byte": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_quantizer_equivalence",
+      "quantizer": 30,
+      "changed_weights": 3,
+      "every_byte": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_full_weight_preparation",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "control_ms": 4.436972045898438,
+      "quantized_transpose_and_forward_context_ms": 4.045542144775391,
+      "transpose32_ms": 2.0731679916381838,
+      "transpose35_ms": 1.6786699295043945,
+      "speedup": 1.096755857958014,
+      "scope": "FWD+matching BWD weight preparation only, all current-step quantization included; no GEMM or EP timing claim",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_weight_transpose_bits",
+      "experts": 1,
+      "hidden": 256,
+      "intermediate": 128,
+      "graph": true,
+      "mutable_replays": 3,
+      "every_byte": true,
+      "special_scale_bits": true,
+      "canaries": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_bits",
+      "experts": 2,
+      "hidden": 512,
+      "intermediate": 256,
+      "graph": true,
+      "mutable_replays": 3,
+      "every_byte": true,
+      "special_scale_bits": true,
+      "canaries": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_bits",
+      "experts": 3,
+      "hidden": 768,
+      "intermediate": 384,
+      "graph": true,
+      "mutable_replays": 3,
+      "every_byte": true,
+      "special_scale_bits": true,
+      "canaries": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_quantizer_equivalence",
+      "quantizer": 10,
+      "changed_weights": 3,
+      "every_byte": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_quantizer_equivalence",
+      "quantizer": 29,
+      "changed_weights": 3,
+      "every_byte": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_weight_transpose_quantizer_equivalence",
+      "quantizer": 30,
+      "changed_weights": 3,
+      "every_byte": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_full_weight_preparation",
+      "experts": 16,
+      "hidden": 8192,
+      "intermediate": 2048,
+      "control_ms": 4.436972045898438,
+      "quantized_transpose_and_forward_context_ms": 4.045542144775391,
+      "transpose32_ms": 2.0731679916381838,
+      "transpose35_ms": 1.6786699295043945,
+      "speedup": 1.096755857958014,
+      "scope": "FWD+matching BWD weight preparation only, all current-step quantization included; no GEMM or EP timing claim",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3303241,
+          "start_ticks": "18803360"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "fp8_weight_transpose_bits", "experts": 1, "hidden": 256, "intermediate": 128, "graph": true, "mutable_replays": 3, "every_byte": true, "special_scale_bits": true, "canaries": true, "passed": true}
+{"case": "fp8_weight_transpose_bits", "experts": 2, "hidden": 512, "intermediate": 256, "graph": true, "mutable_replays": 3, "every_byte": true, "special_scale_bits": true, "canaries": true, "passed": true}
+{"case": "fp8_weight_transpose_bits", "experts": 3, "hidden": 768, "intermediate": 384, "graph": true, "mutable_replays": 3, "every_byte": true, "special_scale_bits": true, "canaries": true, "passed": true}
+{"case": "fp8_weight_transpose_quantizer_equivalence", "quantizer": 10, "changed_weights": 3, "every_byte": true, "passed": true}
+{"case": "fp8_weight_transpose_quantizer_equivalence", "quantizer": 29, "changed_weights": 3, "every_byte": true, "passed": true}
+{"case": "fp8_weight_transpose_quantizer_equivalence", "quantizer": 30, "changed_weights": 3, "every_byte": true, "passed": true}
+{"case": "fp8_full_weight_preparation", "experts": 16, "hidden": 8192, "intermediate": 2048, "control_ms": 4.436972045898438, "quantized_transpose_and_forward_context_ms": 4.045542144775391, "transpose32_ms": 2.0731679916381838, "transpose35_ms": 1.6786699295043945, "speedup": 1.096755857958014, "scope": "FWD+matching BWD weight preparation only, all current-step quantization included; no GEMM or EP timing claim", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3303241, "start_ticks": "18803360"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

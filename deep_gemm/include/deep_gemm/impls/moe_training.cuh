@@ -163,10 +163,15 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         }
         return;
     }
-    if constexpr (Op == Operation::TransposeQuantizedWeights) {
+    if constexpr (Op == Operation::TransposeQuantizedWeights || Op == Operation::TransposeQuantizedWeightsSwizzled) {
         // The 128x128 quantization grid is closed under transpose. Transfer
         // E4M3 bytes and FP32 scale bits without re-quantizing BF16 weights.
-        __shared__ uint32_t tile[128][33];
+        constexpr bool swizzled=Op==Operation::TransposeQuantizedWeightsSwizzled;
+        __shared__ uint32_t tile[128*(swizzled?32:33)];
+        auto slot=[](int row,int word) {
+            if constexpr(swizzled)return row*32+(word^(row&3)^(row>>4));
+            else return row*33+word;
+        };
         const int64_t first_tiles = p.dim[0] * (2 * p.dim[2] / 128) * (p.dim[1] / 128);
         const int64_t total_tiles = first_tiles + p.dim[0] * (p.dim[1] / 128) * (p.dim[2] / 128);
         for (int64_t t = block_index; t < total_tiles; t += gridDim.x) {
@@ -186,10 +191,10 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                 const int64_t offset = ((group * rows + tile_row * 128 + row) * columns
                                        + tile_column * 128 + column) / 16;
                 const uint4 raw = source[offset];
-                tile[row][column / 4] = raw.x;
-                tile[row][column / 4 + 1] = raw.y;
-                tile[row][column / 4 + 2] = raw.z;
-                tile[row][column / 4 + 3] = raw.w;
+                tile[slot(row,column/4)] = raw.x;
+                tile[slot(row,column/4+1)] = raw.y;
+                tile[slot(row,column/4+2)] = raw.z;
+                tile[slot(row,column/4+3)] = raw.w;
             }
             if (thread == 0) {
                 const auto raw = pointer<uint32_t>(p, first ? 1 : 3)[local];
@@ -205,7 +210,7 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                 for (int word = 0; word < 4; ++word) {
                     #pragma unroll
                     for (int byte = 0; byte < 4; ++byte)
-                        words[word] |= ((tile[column + word * 4 + byte][row / 4]
+                        words[word] |= ((tile[slot(column+word*4+byte,row/4)]
                                           >> (8 * (row & 3))) & 255u) << (8 * byte);
                 }
                 const int64_t offset = ((group * columns + tile_column * 128 + row) * rows
