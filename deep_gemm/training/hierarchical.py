@@ -145,7 +145,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
                                  chunk_tokens=factor * chunk_tokens, group=groups.domain,
                                  device=self.device, check_errors=False, **peer_options)
         if reuse_pair_context and not self.inner.reuse_forward_context:
-            self.inner.close()
+            if hasattr(self.inner,'close'):self.inner.close()
             raise ValueError('pair context reuse requires domain-local forward context reuse')
         self.status = self.inner.status
         self.buffers = {'inner_' + key: value for key, value in self.inner.buffers.items()}
@@ -348,6 +348,6 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         """Release plan peer mappings; shared group lifetime remains caller-owned."""
         if self.remote_inner is not None:
             self._source_pair_stream.synchronize()
-            self.remote_inner.close()
+            if hasattr(self.remote_inner,'close'):self.remote_inner.close()
         if hasattr(self.inner, "close"):
             self.inner.close()
