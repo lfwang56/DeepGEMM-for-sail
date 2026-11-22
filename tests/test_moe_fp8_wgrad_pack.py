@@ -27,10 +27,10 @@ def panels(left,right,counts,offsets):
         start=offsets[g];padded=(c+127)//128*128
         a=torch.zeros(m,padded,device=left.device);a[:,:c]=left[start:start+c].float().t()
         b=torch.zeros(n,padded,device=left.device);b[:,:c]=right[start:start+c].float().t()
-        sa=a.abs().amax(-1).clamp_min(1e-4)/448
-        sb=b.abs().amax(-1).clamp_min(1e-4)/448
-        aq=(a/sa[:,None]).to(torch.float8_e4m3fn)
-        bq=(b/sb[:,None]).to(torch.float8_e4m3fn)
+        sa=torch.where(torch.isnan(a),0.,a.abs()).amax(-1).clamp_min(1e-4)/448
+        sb=torch.where(torch.isnan(b),0.,b.abs()).amax(-1).clamp_min(1e-4)/448
+        aq=(a*(1.0/sa)[:,None] if PACK_MODE>=2 else a/sa[:,None]).to(torch.float8_e4m3fn)
+        bq=(b*(1.0/sb)[:,None] if PACK_MODE>=2 else b/sb[:,None]).to(torch.float8_e4m3fn)
         sl[g].copy_(sa);sr[g].copy_(sb)
         ql.reshape(-1)[start*m:(start+padded)*m].reshape(m,padded).copy_(aq)
         qr.reshape(-1)[start*n:(start+padded)*n].reshape(n,padded).copy_(bq)
@@ -124,7 +124,7 @@ def unit(m,n):
     before=out.clone();lens[1]=513;status.zero_();graph.replay();torch.cuda.synchronize()
     assert status.item()==2 and torch.equal(out[1],before[1])
     assert torch.all(raw[:16]==113) and torch.all(raw[-16:]==113)
-    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',row_scales=True,compact_panels=COMPACT,m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,per_element_sum_absolute_product_error_bound=.001,native_fp8_bf16_boundary_bitwise=True,passed=True)),flush=True)
+    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',row_scales=True,compact_panels=COMPACT,pack_mode=PACK_MODE,reciprocal_recipe=PACK_MODE>=2,m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,per_element_sum_absolute_product_error_bound=.001,native_fp8_bf16_boundary_bitwise=True,passed=True)),flush=True)
 
 
 def large(role):
@@ -161,10 +161,37 @@ def large(role):
         return sorted(times)[len(times)//2]
     def complete():pack();fp()
     before,compute,preparation,after=measure(bf16),measure(fp),measure(pack),measure(complete)
-    print(json.dumps(dict(case='qwen_fp8_dw_with_preparation',row_scales=True,compact_panels=COMPACT,role=role,m=m,n=n,groups=g,k_per_group=k,capacity=r,bf16_ms=before,fp8_ms=after,speedup=before/after,fp32_accumulation=True,sampled_reference_errors=errors,quantization="one scale per expert feature across token K",compute_only_ms=compute,panel_preparation_ms=preparation,scope='DW including GPU panel quantization and transpose; not a whole-step result',passed=True)),flush=True)
+    print(json.dumps(dict(case='qwen_fp8_dw_with_preparation',row_scales=True,compact_panels=COMPACT,role=role,m=m,n=n,groups=g,k_per_group=k,capacity=r,bf16_ms=before,fp8_ms=after,speedup=before/after,fp32_accumulation=True,sampled_reference_errors=errors,quantization="one scale per expert feature across token K",pack_mode=PACK_MODE,normalization="FP32 reciprocal then multiply" if PACK_MODE>=2 else "FP32 divide",compute_only_ms=compute,panel_preparation_ms=preparation,scope='DW including GPU panel quantization and transpose; not a whole-step result',passed=True)),flush=True)
     del left,right,a,b,out,bf;gc.collect();torch.cuda.synchronize()
 
 
+def special_panels():
+    r,m,n=256,128,128
+    left=torch.zeros(r,m,dtype=torch.bfloat16);right=torch.zeros(r,n,dtype=torch.bfloat16)
+    bits=torch.tensor([0,32768,1,32769,127,32639,32640,65408,32705,65473],dtype=torch.uint16)
+    values=bits.view(torch.bfloat16)
+    for feature,value in enumerate(values):
+        left[feature,feature]=value;right[feature,(feature+3)%n]=value
+    left[:129,-1]=1e-8;right[:129,-1]=-1e-8
+    counts=[129];offsets=[0,256]
+    ac,bc,_=panels(left,right,counts,offsets)
+    lens=torch.tensor(counts,device='cuda',dtype=torch.int32);starts=torch.tensor(offsets,device='cuda',dtype=torch.int32)
+    status=torch.zeros(1,device='cuda',dtype=torch.int32)
+    a,b,pack=gpu_panels(left.cuda(),right.cuda(),lens,starts,status)
+    torch.cuda.synchronize();assert status.item()==0
+    for actual,expected in ((a,ac),(b,bc)):
+        aa=actual[0].view(torch.uint8).cpu();bb=expected[0].view(torch.uint8)
+        nan=(aa&127)==127;want_nan=(bb&127)==127
+        assert torch.equal(nan,want_nan)
+        assert torch.equal(aa[~nan],bb[~nan]),'finite/zero FP8 code mismatch'
+        assert torch.equal(actual[1].cpu(),expected[1]),'scale bits mismatch'
+    for raw in pack.guards:assert torch.all(raw[:16]==56) and torch.all(raw[-16:]==56)
+    print(json.dumps(dict(case='fp8_dw_pack_special_values',pack_mode=PACK_MODE,zero_and_negative_zero=True,
+        bf16_subnormals=True,inf_and_nan=True,finite_fp8_codes_exact=True,nan_sign_not_required=True,
+        scale_bits_exact=True,guards=True,passed=True)),flush=True)
+
+
 torch.cuda.set_device(0);torch.set_num_threads(2)
+special_panels()
 for shape in ((128,128),(256,384),(384,512)):unit(*shape)
 for role in ('dw1','dw2'):large(role)

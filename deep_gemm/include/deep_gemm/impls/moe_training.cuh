@@ -31,7 +31,7 @@ __device__ __forceinline__ float warp_max(float value) {
     return __shfl_sync(0xffffffffu, value, 0);
 }
 
-template <Operation Op, bool MnMajorScales = false, bool QuantizeDwBeforeTranspose = false>
+template <Operation Op, bool MnMajorScales = false, bool QuantizeDwBeforeTranspose = false, bool ReciprocalDwScale = false>
 __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int thread = threadIdx.x;
@@ -201,7 +201,7 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                     #pragma unroll
                     for(int w=0;w<8;++w) maximum=max(maximum,maxima[w][lane*4+j]);
                     values[j]=fmaxf(__uint_as_float(maximum<<16),1e-4f)/448.f;
-                    scales[lane*4+j]=values[j];
+                    scales[lane*4+j]=ReciprocalDwScale ? 1.f/values[j] : values[j];
                 }
                 *reinterpret_cast<float4*>(sf+int64_t(g)*width+feature_base+lane*4)=
                     make_float4(values[0],values[1],values[2],values[3]);
@@ -218,12 +218,16 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                     }
                     if constexpr (QuantizeDwBeforeTranspose) {
                         const float4 sf4=*reinterpret_cast<const float4*>(scales+feature);
+                        const auto normalize=[](float value,float factor) {
+                            if constexpr(ReciprocalDwScale)return value*factor;
+                            else return value/factor;
+                        };
                         const unsigned lo=epilogue::quant::fp8_pair(
-                            __uint_as_float(values.x<<16)/sf4.x,
-                            __uint_as_float(values.x&0xffff0000u)/sf4.y);
+                            normalize(__uint_as_float(values.x<<16),sf4.x),
+                            normalize(__uint_as_float(values.x&0xffff0000u),sf4.y));
                         const unsigned hi=epilogue::quant::fp8_pair(
-                            __uint_as_float(values.y<<16)/sf4.z,
-                            __uint_as_float(values.y&0xffff0000u)/sf4.w);
+                            normalize(__uint_as_float(values.y<<16),sf4.z),
+                            normalize(__uint_as_float(values.y&0xffff0000u),sf4.w));
                         tile[token][(feature/4)^(token>>2)]=lo|(hi<<16);
                     } else {
                         tile[token][(feature/2)^(token>>2)]=values.x;
@@ -249,7 +253,8 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
                             const int token=lane*4+byte;
                             const unsigned word=tile[token][(feature/2)^(token>>2)];
                             const unsigned raw=(word>>(16*(feature&1)))&65535u;
-                            values[byte]=__uint_as_float(raw<<16)/scales[feature];
+                            if constexpr(ReciprocalDwScale)values[byte]=__uint_as_float(raw<<16)*scales[feature];
+                            else values[byte]=__uint_as_float(raw<<16)/scales[feature];
                         }
                         const unsigned lo=epilogue::quant::fp8_pair(values[0],values[1]);
                         const unsigned hi=epilogue::quant::fp8_pair(values[2],values[3]);

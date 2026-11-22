@@ -29,7 +29,8 @@ public:
     static std::string kernel_name(const Args& args) {
         const auto name = fmt::format("moe_training_{}", args.operation);
         if (args.operation == int(Operation::PackFp8WeightGradients) && args.params.dim[4])
-            return name + "_quantize_before_transpose";
+            return name + (args.params.dim[4]==1 || args.params.dim[4]==2 ? "_quantize_before_transpose" : "") +
+                (args.params.dim[4]>=2 ? "_reciprocal" : "");
         if (!active_quantization(args.operation)) return name;
         return name + (args.params.dim[2] ? "_mn_scales" : "_row_scales");
     }
@@ -42,7 +43,9 @@ __global__ void {}(const deep_gemm::training::Params params) {{
     deep_gemm::training::run<static_cast<deep_gemm::training::Operation>({}){}>(params);
 }}
 )", kernel_name(args), args.operation,
-       args.operation == int(Operation::PackFp8WeightGradients) && args.params.dim[4] ? ", false, true" :
+       args.operation == int(Operation::PackFp8WeightGradients) && args.params.dim[4] ?
+           fmt::format(", false, {}, {}",args.params.dim[4]==1 || args.params.dim[4]==2 ? "true" : "false",
+                       args.params.dim[4]>=2 ? "true" : "false") :
        !active_quantization(args.operation) ? "" : args.params.dim[2] ? ", true" : ", false");
     }
 
@@ -94,7 +97,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             DG_HOST_ASSERT(tensors.size()==9 && (dims.size()==4 || dims.size()==6));
             const auto mode=dims.size()==6?dims[4]:0;
             const auto ctas=dims.size()==6?dims[5]:4;
-            DG_HOST_ASSERT(mode<=1 && ctas>0 && ctas<=16);
+            DG_HOST_ASSERT(mode<=3 && ctas>0 && ctas<=16);
             const auto g=dims[0],r=dims[1],m=dims[2],n=dims[3];
             DG_HOST_ASSERT(g>0 && g<128 && r>0 && r%128==0 && m>0 && n>0 && m%128==0 && n%128==0);
             DG_HOST_ASSERT(r*m<=INT32_MAX && r*n<=INT32_MAX);
