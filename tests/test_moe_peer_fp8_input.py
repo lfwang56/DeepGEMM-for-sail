@@ -9,7 +9,7 @@ import deep_gemm as dg
 from deep_gemm.training.native import _launch
 
 
-def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
+def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2):
     world=4
     source=(torch.randn(world*tokens,k,device='cuda')*.2).bfloat16()
     qs=torch.empty_like(source,dtype=torch.float8_e4m3fn)
@@ -22,6 +22,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
     sw=torch.empty(groups,n//128,k//128,device='cuda')
     _launch(30,[weight,qw,sw],list(weight.shape))
     rows=torch.full((capacity,),world*tokens,device='cuda',dtype=torch.int32)
+    permutation=torch.full_like(rows,-1)
     lengths=torch.zeros(groups,device='cuda',dtype=torch.int32)
     group_ids=torch.zeros(capacity,device='cuda',dtype=torch.int32)
     blocks=torch.zeros(1,device='cuda',dtype=torch.int32)
@@ -34,7 +35,6 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
     expected=torch.empty(capacity,n,device='cuda',dtype=torch.bfloat16)
     serial=torch.empty_like(expected);parallel=torch.empty_like(expected)
     aux=torch.cuda.Stream()
-    ctas=2
 
     def producer(copy_bf=True, compile_only=False):
         dg._C._moe_training_peer_launch(19,[qtables,stables,btables,rows,q,sf,bf,blocks,ready,status],
@@ -61,14 +61,23 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
             producer(copy_bf)
             consumer(output)
 
+    def baseline():
+        dg._C._moe_training_peer_launch(11,[btables,permutation,rbf,status,blocks],
+            [capacity,k,tokens,1,world,128])
+        _launch(26,[rbf,rq,rsf,count,status],[capacity,k,1])
+        native()
+
     # Compile/initialize the zero-work path before forking a capture stream.
     producer(compile_only=True);consumer(serial,compile_only=True)
-    step(serial,False);step(parallel,True);native()
+    step(serial,False);step(parallel,True);baseline()
     graphs=[]
     for output,overlap in ((serial,False),(parallel,True)):
         graph=torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):step(output,overlap)
         graphs.append(graph)
+
+    baseline_graph=torch.cuda.CUDAGraph()
+    with torch.cuda.graph(baseline_graph):baseline()
 
     for case_index,counts in enumerate(cases):
         assert len(counts)==groups and all(v%128==0 for v in counts)
@@ -78,7 +87,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
         indices=torch.arange(capacity,device='cuda',dtype=torch.int64)
         indices=(indices*(17+2*case_index)+case_index*11)%(world*tokens)
         indices[indices%7==0]=world*tokens
-        rows.copy_(indices.int())
+        rows.copy_(indices.int());permutation.copy_(rows);permutation.masked_fill_(rows==world*tokens,-1)
         source.mul_(.97).add_(.001)
         status.zero_();q.view(torch.uint8).fill_(117);sf.fill_(-17);bf.fill_(-19)
         serial.fill_(-23);parallel.fill_(-23)
@@ -109,7 +118,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
     assert torch.all(bf==-29) and status.item()==0
     print(json.dumps(dict(case='fp8_peer_input_no_bf16_reference',shape=[groups,n,k,capacity],passed=True)),flush=True)
     if benchmark:
-        for mode,graph in zip(('serial','parallel'),graphs):
+        for mode,graph in zip(('staged_bf16_native','serial','parallel'),[baseline_graph,*graphs]):
             for _ in range(5):graph.replay()
             torch.cuda.synchronize();samples=[]
             for _ in range(5):
@@ -119,7 +128,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False):
                 end.record();end.synchronize();samples.append(begin.elapsed_time(end)/20)
             print(json.dumps(dict(case='fp8_peer_input_component_performance',mode=mode,shape=[groups,n,k,capacity],
                   source_owners_local=True,producer_ctas=ctas,consumer_ctas=dg.get_num_sms()-ctas,
-                  source_quantization_in_timing=True,bf16_dw_copy=True,median_ms=statistics.median(samples),
+                  source_quantization_in_timing=mode!='staged_bf16_native',bf16_dw_copy=True,median_ms=statistics.median(samples),
                   samples_ms=samples,scope='source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step')),
                   flush=True)
     del graphs
@@ -131,7 +140,8 @@ def main():
     stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
         fixture(4,512,512,2048,256,[[128,256,384,512],[0,128,512,128],[0,0,0,0],[512]*4])
-        fixture(16,4096,8192,65536,4096,[[0]*16,[2560]*16],benchmark=True)
+        for ctas in (2,4,8):
+            fixture(16,4096,8192,65536,4096,[[0]*16,[2560]*16],benchmark=True,ctas=ctas)
     stream.synchronize()
 
 

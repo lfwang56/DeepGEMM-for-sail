@@ -38,19 +38,53 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             bf_addresses[threadIdx.x] = valid && p.dim[5] ? peer_pointer<uint64_t>(p, 2)[owner] + int64_t(row) * width * 2 : 0;
             __syncthreads();
             const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
-            // Each warp reuses the route's source addresses across a full row.
+            // Pipeline independent 16-byte loads before stores. Serial
+            // load/store pairs leave too little memory-level parallelism
+            // when only a few producer CTAs share the device with GEMM.
+            #pragma clang loop unroll(disable)
             for (int r = warp; r < 128; r += 4) {
                 const auto* src_q = reinterpret_cast<const uint4*>(q_addresses[r]);
                 const auto* src_bf = reinterpret_cast<const uint4*>(bf_addresses[r]);
-                for (int column = lane; column < width / 16; column += 32)
-                    peer_pointer<uint4>(p, 4)[(base_row + r) * (width / 16) + column] = src_q ? src_q[column] : uint4{};
-                for (int segment = lane; segment < width / 128; segment += 32)
-                    peer_pointer<float>(p, 5)[int64_t(segment) * capacity + base_row + r] = scale_addresses[r]
-                        ? reinterpret_cast<const float*>(scale_addresses[r])[segment] : (1e-4f / 448.f);
-                if (p.dim[5]) {
-                    for (int column = lane; column < width / 8; column += 32)
-                        peer_pointer<uint4>(p, 6)[(base_row + r) * (width / 8) + column] = src_bf ? src_bf[column] : uint4{};
+                #pragma clang loop unroll(disable)
+                for (int base = lane; base < width / 16; base += 32 * 8) {
+                    uint4 values[8];
+                    #pragma unroll
+                    for (int j = 0; j < 8; ++j) {
+                        const int column = base + j * 32;
+                        values[j] = src_q && column < width / 16 ? src_q[column] : uint4{};
+                    }
+                    #pragma unroll
+                    for (int j = 0; j < 8; ++j) {
+                        const int column = base + j * 32;
+                        if (column < width / 16)
+                            peer_pointer<uint4>(p, 4)[(base_row + r) * (width / 16) + column] = values[j];
+                    }
                 }
+                if (p.dim[5]) {
+                    #pragma clang loop unroll(disable)
+                    for (int base = lane; base < width / 8; base += 32 * 8) {
+                        uint4 values[8];
+                        #pragma unroll
+                        for (int j = 0; j < 8; ++j) {
+                            const int column = base + j * 32;
+                            values[j] = src_bf && column < width / 8 ? src_bf[column] : uint4{};
+                        }
+                        #pragma unroll
+                        for (int j = 0; j < 8; ++j) {
+                            const int column = base + j * 32;
+                            if (column < width / 8)
+                                peer_pointer<uint4>(p, 6)[(base_row + r) * (width / 8) + column] = values[j];
+                        }
+                    }
+                }
+            }
+            // MN scales are contiguous across rows. Map neighboring lanes
+            // to rows so stores coalesce, rather than striding capacity*4.
+            for (int item = threadIdx.x; item < 128 * (width / 128); item += blockDim.x) {
+                const int r = item % 128, segment = item / 128;
+                const uint64_t address = scale_addresses[r];
+                peer_pointer<float>(p, 5)[int64_t(segment) * capacity + base_row + r] = address
+                    ? reinterpret_cast<const float*>(address)[segment] : (1e-4f / 448.f);
             }
             // Every writer fences its payload before thread0 publishes the
             // tile. Consumers acquire all 128-row signals covered by M192.
