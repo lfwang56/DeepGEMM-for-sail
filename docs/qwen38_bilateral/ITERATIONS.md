@@ -3851,3 +3851,31 @@ Timings, with failed/partial phases retained in provenance:
 ]
 
 First actual32 balanced/masked/skewed/reversed references passed. The following C4096-skew phase was interrupted by a whole-host gate75 on217; cancel only exact-tag owned partial ranks and switch to213/215/216/218. Preserve the rejected phase and rerun both references there before timings.
+
+
+## Iteration50 — WGrad B shared-memory group offset, blocked before timing
+
+Clean isolated stage3 WGrad1 counters (39x512,216registers,196608SMEM,
+ZW-M890P/SDK2.2) show TSM load-group conflict ratio0.70 versus0.12 in the
+local FC1 kernel. Hypothesis: shift B's shared-memory base by1024/2048/3072
+bytes and enlarge the launch allocation by the same amount. PPU15's documented
+linear mapping has four groups interleaved at1024bytes; active hashing may
+differ, so only counters and timing can establish a benefit. Default0 retains
+old generated code and positive offsets have unique kernel names. Preserve
+KGroupedGemmArgs GPU ABI and all complete-K beta=1 arithmetic. Reject invalid
+offsets and allocations beyond256KiB. No CU affinity or cross-CU TSM claim.
+
+Native09d4fb2a built clean221, but the new identical-input bitwise preflight
+failed HGCC JIT compilation on the unpadded control before any timing. No
+performance or numerical win is accepted. Retain the failed source and log,
+then repair the compile-time template error in the next attempt. The unchanged
+best49 remains frozen, tested at77.261963ms versus105.750171ms Elastic.
+
+Compiler diagnostics:
+
+```text
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/training-validation/jit-cache/tmp/767736-3dd691f6-0c26473c-2eb9a4f7/kernel.cu:22:17: error: expected unqualified-id
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/training-validation/jit-cache/tmp/767736-3dd691f6-0c26473c-2eb9a4f7/kernel.cu:22:17: error: expected ')'
+hgcc error: Exited with error code 1
+RuntimeError: Assertion error (/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/../../jit/compiler.hpp:360): false and "HGCC compilation failed"
+```

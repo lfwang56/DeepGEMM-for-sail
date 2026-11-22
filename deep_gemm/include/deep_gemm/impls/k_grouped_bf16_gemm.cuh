@@ -22,7 +22,7 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
-          uint32_t WarpMap = 0, bool AiuBeforeTsm = true>
+          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0>
 __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args,
         uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u) {
     static_assert(is_k_grouped_contiguous(kGemmType), "K-grouped GEMM type required");
@@ -32,6 +32,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     static_assert(BLOCK_K > 0 && 128 % BLOCK_K == 0,
                   "BLOCK_K must divide the 128-element K-group alignment");
     static_assert(WarpMap <= 3, "Unknown MMA warp ownership map");
+    static_assert(BPadBytes % 1024 == 0 && BPadBytes <= 16384);
 
     constexpr uint32_t STRIDE_CM = SHAPE_N;
     constexpr uint32_t STRIDE_CG = SHAPE_M * SHAPE_N;
@@ -56,7 +57,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);
     extern __shared__ __align__(128) uint8_t smem_buffer[];
     SrcT* smem_a = reinterpret_cast<SrcT*>(smem_buffer);
-    SrcT* smem_b = reinterpret_cast<SrcT*>(smem_buffer + kSmemASize);
+    SrcT* smem_b = reinterpret_cast<SrcT*>(smem_buffer + kSmemASize + BPadBytes);
 
     const uint32_t thread_idx = threadIdx.x;
     int warp_idx = cutlass::canonical_warp_idx_sync();

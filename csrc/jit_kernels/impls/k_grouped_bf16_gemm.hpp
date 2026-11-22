@@ -32,6 +32,7 @@ public:
         std::string kernel_name;
         bool cta_probe = false;
         bool output_tile_range = false;
+        int b_padding_bytes = 0;
     };
 
     struct Args {
@@ -70,7 +71,7 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
         cutlass::bfloat16_t, float, GemmType::KGroupedContiguous,
         SHAPE_M, SHAPE_N, NUM_GROUPS,
         BLOCK_M, BLOCK_N, BLOCK_K, WARP_M, WARP_N, BLOCK_SIZE, NUM_STAGES, true,
-        WARP_MAP, AIU_BEFORE_TSMLD
+        WARP_MAP, AIU_BEFORE_TSMLD{}
     >(args{});
     {}
 }}
@@ -88,6 +89,7 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
             args.launch_info.num_stages,
             args.launch_info.warp_map,
             args.launch_info.aiu_before_tsm,
+            args.launch_info.b_padding_bytes ? fmt::format(", {}", args.launch_info.b_padding_bytes) : "",
             args.launch_info.kernel_name,
             args.launch_info.cta_probe ? ", unsigned long long* cta_probe"
                 : args.launch_info.output_tile_range ? ", const uint2 tile_range" : "",
@@ -117,6 +119,8 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const bool device_lengths = false,
     const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
+    const int b_padding_bytes = get_env<int>("DG_BF16_WGRAD_B_PAD_BYTES", 0);
+    DG_HOST_ASSERT(b_padding_bytes >= 0 && b_padding_bytes <= 16384 && b_padding_bytes % 1024 == 0);
     const int tile_chunk = device_lengths ? get_env<int>("DG_BF16_WGRAD_TILE_CHUNK", 0) : 0;
     DG_HOST_ASSERT(tile_chunk >= 0 && tile_chunk <= 1 << 20);
     // A single probe buffer cannot represent several launches. Reject before
@@ -136,13 +140,15 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     if (warp_map == 3) DG_HOST_ASSERT((warp_rows & (warp_rows - 1)) == 0);
     const int block_size = 32 * (block_m / warp_m) * (block_n / warp_n);
     const int smem_size = static_cast<int>(gemm_smem_total_size(
-        2, num_stages, block_m, block_n, block_k));
-    const std::string kernel_name = tile_chunk ? "bf16_k_grouped_gemm_tile_range"
+        2, num_stages, block_m, block_n, block_k)) + b_padding_bytes;
+    DG_HOST_ASSERT(smem_size <= 256 * 1024);
+    std::string kernel_name = tile_chunk ? "bf16_k_grouped_gemm_tile_range"
         : cta_probe.has_value() ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
+    if (b_padding_bytes) kernel_name += fmt::format("_bpad{}", b_padding_bytes);
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,
-                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0},
+                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0, b_padding_bytes},
         .launch_args = {get_grid_shape(num_sms), dim3(block_size), smem_size},
         .kernel_params = {
             .a_ptr = a.data_ptr(),
