@@ -150,7 +150,7 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     std::string kernel_name = tile_chunk ? "bf16_k_grouped_gemm_tile_range"
         : cta_probe.has_value() ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
     if (b_padding_bytes) kernel_name += fmt::format("_bpad{}", b_padding_bytes);
-    if (tsm_load_order) kernel_name += fmt::format("_tsmorder{}", tsm_load_order);
+    if (tsm_load_order) kernel_name += fmt::format("_tsmorder_v2_{}", tsm_load_order);
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,

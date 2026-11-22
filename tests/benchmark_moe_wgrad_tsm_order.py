@@ -31,7 +31,7 @@ for role,m,n in (('dw1',4096,8192),('dw2',8192,2048)):
    for _ in range(20):graph.replay()
    end.record();end.synchronize();samples.append(begin.elapsed_time(end)/20)
   torch.testing.assert_close(out,reference,rtol=0,atol=0)
-  print(json.dumps(dict(case='local_wgrad_tsm_order_signal',role=role,groups=e,m=m,n=n,
+  print(json.dumps(dict(case='local_wgrad_tsm_order_nofence_signal',role=role,groups=e,m=m,n=n,
    capacity=capacity,active_rows=40960,pad_bytes=pad,tsm_load_order=order,bitwise_equal=True,
    median_event_ms=statistics.median(samples),samples=samples,warmup=5,iterations=20,repeats=5,
    extension_sha256=hashlib.sha256(Path(dg._C.__file__).read_bytes()).hexdigest(),

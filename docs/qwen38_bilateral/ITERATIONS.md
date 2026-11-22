@@ -4418,3 +4418,331 @@ Whole-host-clean local signal: True.
     "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
   }
 ]
+
+
+## Iteration53 — remove memory-clobber inline asm from staggered TSM loads
+
+Stall reassessment after50/51/52: reviewed28 tile geometry,31 warp mapping,
+42 resource-sharing controls, current51/52 local signal and accepted Acu
+counters; reread PPU ISA verified facts and primary ACTLIZE/MoK sources.
+No physical floor established. Neither padding nor source-level load
+reordering has established a complete-layer win.
+
+52 incorrectly described an empty memory-clobber asm as compiler-only.
+SDK2.2 verified-facts documents a decoder-specific counterexample emitting
+a hardware fence. Preserve52's results but do not attribute all regression
+to operand order alone. CPU disassembly of the exact52 cache is collected
+separately.53 removes only these two newly introduced asm statements.
+Original pipeline barriers/fences remain unchanged; positive variants use
+new _tsmorder_v2 kernel names to prevent stale-header cache reuse.
+Default0 source request order and generated shader string are unchanged.
+
+The unchanged reference gates require identical packed inputs, full-K
+beta=1, both full Qwen templates, mutable input/K lengths and graphs.
+The same local pad/order factorial,20x5 event samples and FP32 zero scope
+are retained. No standalone result is a complete-layer speedup.
+
+Whole-host-clean local signal: True.
+
+[
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 10.510628509521485,
+    "samples": [
+      10.613648223876954,
+      10.462553405761719,
+      10.50616683959961,
+      10.510628509521485,
+      10.625038146972656
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 11.119340515136718,
+    "samples": [
+      11.0816650390625,
+      11.139041900634766,
+      11.074727630615234,
+      11.119340515136718,
+      11.143112182617188
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 11.191362762451172,
+    "samples": [
+      11.0983154296875,
+      11.191362762451172,
+      11.256623840332031,
+      11.176551055908202,
+      11.214768218994141
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 10.548089599609375,
+    "samples": [
+      10.548089599609375,
+      10.58721466064453,
+      10.510488128662109,
+      10.467182159423828,
+      10.548863983154297
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 11.136955261230469,
+    "samples": [
+      11.136955261230469,
+      11.143759155273438,
+      11.12403564453125,
+      11.090891265869141,
+      11.186321258544922
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 11.215116119384765,
+    "samples": [
+      11.111787414550781,
+      11.215116119384765,
+      11.19534912109375,
+      11.224751281738282,
+      11.242208862304688
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 5.465765380859375,
+    "samples": [
+      5.48167839050293,
+      5.515176391601562,
+      5.427734375,
+      5.447474670410156,
+      5.465765380859375
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 5.717491531372071,
+    "samples": [
+      5.675785064697266,
+      5.704736328125,
+      5.722481536865234,
+      5.74766731262207,
+      5.717491531372071
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 5.7720893859863285,
+    "samples": [
+      5.793983078002929,
+      5.7531780242919925,
+      5.7720893859863285,
+      5.73590202331543,
+      5.779933166503906
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 5.540801620483398,
+    "samples": [
+      5.528287506103515,
+      5.591686630249024,
+      5.550641632080078,
+      5.505049133300782,
+      5.540801620483398
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 1,
+    "bitwise_equal": true,
+    "median_event_ms": 5.772444152832032,
+    "samples": [
+      5.791408538818359,
+      5.759337997436523,
+      5.788284683227539,
+      5.772444152832032,
+      5.769624328613281
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_tsm_order_nofence_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "tsm_load_order": 2,
+    "bitwise_equal": true,
+    "median_event_ms": 5.813864517211914,
+    "samples": [
+      5.829595947265625,
+      5.8563495635986325,
+      5.811613845825195,
+      5.807963943481445,
+      5.813864517211914
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "6e39083eabd01c1b180ea4e4343e31ec713e15d20b4de0821615a69894a9de13",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  }
+]

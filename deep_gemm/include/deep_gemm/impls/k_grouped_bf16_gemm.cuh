@@ -209,11 +209,9 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                 const bool reverse = (warp_idx & (TsmLoadOrder == 1 ? 1 : 2)) != 0;
                 if (reverse) {
                     copy(smem_tiled_copy_B, tCsB_p(_,_,fragment), tCrB_copy_view(_,_,fragment));
-                    asm volatile("" ::: "memory");
                     copy(smem_tiled_copy_A, tCsA_p(_,_,fragment), tCrA_copy_view(_,_,fragment));
                 } else {
                     copy(smem_tiled_copy_A, tCsA_p(_,_,fragment), tCrA_copy_view(_,_,fragment));
-                    asm volatile("" ::: "memory");
                     copy(smem_tiled_copy_B, tCsB_p(_,_,fragment), tCrB_copy_view(_,_,fragment));
                 }
             } else {
