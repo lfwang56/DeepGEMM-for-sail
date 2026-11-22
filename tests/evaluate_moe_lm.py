@@ -37,7 +37,7 @@ def evaluate_checkpoint(path, data_path):
                 backend_options[key] = saved["plan_options"][key]
     if backend == "peer" and "backend_options" not in saved:
         training_options = saved.get("plan_options", {})
-        for key in ("dispatch_cache_n", "dispatch_cache_ctas", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return",
+        for key in ("fuse_dispatch", "fuse_return", "dispatch_cache_n", "dispatch_cache_ctas", "dispatch_cache_aiu", "reuse_packed_dy", "staged_return",
                     "dispatch_producer", "dispatch_producer_tiles", "producer_local_aiu", "producer_input_aiu",
                     "fuse_activation_backward", "fuse_fc1_activation", "fuse_dhidden_scores", "transpose_free_dgrad", "expert_local_grad", "ring_rows",
                     "dag_fusion", "dag_backward", "dag_direct_return", "dag_shared_pool", "input_copy_ilp"):

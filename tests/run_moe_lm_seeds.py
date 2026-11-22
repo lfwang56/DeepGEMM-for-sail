@@ -120,6 +120,8 @@ if args.backend == "elastic":
         recipe += ["--fp8-active-quantization", "--fp8-mn-major-scales"]
         if args.fp8_async_weights:
             recipe.append("--fp8-async-weights")
+if args.backend == "peer" and args.compute == "fp8":
+    recipe = ["--ring-rows", "65536", "--expert-local-grad", "--reuse-packed-dy"]
 fixed_route_seeds = {int(value) for value in args.fixed_route_seeds.split(",") if value}
 if args.dag_fusion:
     recipe = [flag for flag in recipe if flag not in ("--dispatch-producer", "--producer-input-aiu", "--producer-local-aiu")]

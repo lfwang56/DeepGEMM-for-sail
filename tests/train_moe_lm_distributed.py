@@ -164,10 +164,12 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
     path.parent.mkdir(parents=True, exist_ok=True)
     common = dict(configuration=asdict(config), manifest=manifest, compute=options.compute,
                   backend="native" if options.backend == "collective" else options.backend,
-                  evaluation_backend="peer" if options.backend == "hybrid" else "native" if options.backend in ("collective", "elastic") else options.backend,
+                  evaluation_backend="peer" if options.backend == "hybrid" else "native" if options.backend in ("collective", "elastic") or (options.backend == "peer" and options.compute == "fp8") else options.backend,
                   hybrid_domain_size=options.hybrid_domain_size if options.backend == "hybrid" else None,
                   step=options.steps, seed=options.seed, planned_steps=options.steps,
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
+                                    fuse_dispatch=not (options.backend == "peer" and options.compute == "fp8"),
+                                    fuse_return=not options.no_fuse_return,
                                     deepep_comm_sms=options.deepep_comm_sms,
                                     fp8_active_quantization=options.fp8_active_quantization,
                                     fp8_mn_major_scales=options.fp8_mn_major_scales,
@@ -218,6 +220,7 @@ def main():
     parser.add_argument("--backend", choices=("collective", "peer", "persistent", "hybrid", "elastic"), default="collective")
     parser.add_argument("--hybrid-domain-size", type=int, default=1)
     parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
+    parser.add_argument("--no-fuse-return", action="store_true")
     parser.add_argument("--deepep-comm-sms", type=int, default=38)
     parser.add_argument("--fp8-active-quantization", action="store_true")
     parser.add_argument("--fp8-mn-major-scales", action="store_true")
@@ -262,6 +265,8 @@ def main():
     parser.add_argument("--reuse-packed-dy", action="store_true")
     parser.add_argument("--gemm-config", type=int, nargs=5)
     options = parser.parse_args()
+    if options.no_fuse_return and options.backend not in ("peer", "hybrid"):
+        parser.error("--no-fuse-return requires a peer backend")
     if options.input_copy_ilp != 1 and options.backend not in ("peer", "hybrid"):
         parser.error("input copy ILP requires --backend peer")
     if (options.dag_fusion or options.dag_backward or options.dag_direct_return) and options.backend not in ("peer", "hybrid"):
@@ -317,6 +322,10 @@ def main():
             plan_options["gemm_configs"] = {role: options.gemm_config for role in ("fc1", "fc2", "dhidden", "dx")}
         if options.peer_fc1_config:
             plan_options.setdefault("gemm_configs", {})["fc1"] = options.peer_fc1_config
+        plan_options["fuse_return"] = not options.no_fuse_return
+        if options.backend == "peer" and options.compute == "fp8":
+            plan_options.update(fuse_dispatch=False, expert_local_grad=True, reuse_packed_dy=True,
+                                fp8_weight_quantization=2)
     if options.backend == "elastic":
         os.environ["DEEPEP_NUM_MAX_ICN_PEERS"] = str(size)
         plan_options.update(comm_sms=options.deepep_comm_sms, elastic_hybrid=True,
