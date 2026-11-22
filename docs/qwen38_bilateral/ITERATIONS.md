@@ -94861,3 +94861,38 @@ and actual overlap/resource inflation remain necessary before selection.
   "excluded": [],
   "raw_sha256": "5f950de7e67c249fa1074b7eadaea14985b5187ffed9b058f13b12895479a1ab"
 }
+
+## Iteration133 — reserve launch capacity only for the final deferred DW
+
+Physical128profiles show little tail-overlap gain. At16K the summed PCCL
+interval grows55.97to63.68ms while DW stays58.33vs57.57ms. The four-CTA
+reduce-scatter uses544threads/CTA and128registers/thread (69632registers),
+while each DW CTA uses512threads and216registers (110592registers).
+Their sum exceeds the audited131072register/CU capacity. This precludes
+co-residency; the profile does not by itself prove a specific CU assignment.
+
+Add an explicit optional per-launch compute_cus argument to the device-length
+BF16wgrad API, preserving the existing global default. The deferred final DW1
+alone can useDG_MOE_TAIL_DW_COMPUTE_CUS (35for a four-CTA communication grid),
+while all ordinary DW kernels keep their original full grid. This is a CTA
+grid cap,not physical CU pinning. Include the recipe in rank agreement and
+benchmark metadata. Do not mutate process-wide environment variables around
+kernel launches. No datatype,accumulation,geometry or result-scope change.
+
+New per-launch budget tests cover0/1/16/31/35/38/39,invalid ranges,mutable
+lengths and inputs,nonzero beta,graphs,independent CPU outputs,and both actual
+Qwen wgrad templates with complete bitwise equality to a full-grid launch.
+Seven EP8phases require216budget records,80deferred-API contracts,288focused
+hierarchical cases and48independent references. Physical serialized/overlap
+controls and profiling must decide whether the reserved capacity helps.
+
+{
+  "passed": true,
+  "focused": 288,
+  "independent_reference_records": 48,
+  "deferred_contract": 80,
+  "compute_budget": 216,
+  "accepted": 7,
+  "excluded": [],
+  "raw_sha256": "abf084799ab57aa9d9c109e46567bdfbf785df97de99f2850bacff969b88f087"
+}

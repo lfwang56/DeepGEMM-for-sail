@@ -120,7 +120,8 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const int& m, const int& n, const int& sum_k,
     const std::vector<int>& ks_cpu, const torch::Tensor& grouped_layout,
     const bool device_lengths = false,
-    const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
+    const std::optional<torch::Tensor>& cta_probe = std::nullopt,
+    const int compute_cus_override = 0) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
     const int tsm_load_order = get_env<int>("DG_BF16_WGRAD_TSM_LOAD_ORDER", 0);
     DG_HOST_ASSERT(tsm_load_order >= 0 && tsm_load_order <= 2);
@@ -178,7 +179,8 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
 #endif
     DG_HOST_ASSERT(blocks_per_cu > 0 and "K-grouped tile exceeds the device's launch resources");
     args.launch_args.grid_dim.x *= blocks_per_cu;
-    const int compute_cus = get_env<int>("DG_BF16_WGRAD_COMPUTE_CUS", 0);
+    DG_HOST_ASSERT(compute_cus_override >= 0 && compute_cus_override <= get_num_sms());
+    const int compute_cus = compute_cus_override ? compute_cus_override : get_env<int>("DG_BF16_WGRAD_COMPUTE_CUS", 0);
     DG_HOST_ASSERT(compute_cus >= 0 && compute_cus <= get_num_sms());
     if (compute_cus)
         args.launch_args.grid_dim.x = std::min(args.launch_args.grid_dim.x,

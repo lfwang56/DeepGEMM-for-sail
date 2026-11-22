@@ -42,7 +42,7 @@ class PeerMoEPlan(NativeMoEPlan):
                  input_helper_threads=None, input_helper_block_m=None, input_helper_block_n=None,
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
                  fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None,
-                 fp8_input_cache_scales=None, reuse_forward_context=None, **kwargs):
+                 fp8_input_cache_scales=None, reuse_forward_context=None, deferred_dw_compute_cus=None, **kwargs):
         self._shared_fp8_weights_ready=False
         self._pending_last_dw1=None
         self._defer_last_dw1_enabled=False
@@ -53,6 +53,11 @@ class PeerMoEPlan(NativeMoEPlan):
             if type(value) is not int:
                 raise TypeError(key + " must be an integer")
             return value
+        self.deferred_dw_compute_cus=helper_value(deferred_dw_compute_cus,'DG_MOE_TAIL_DW_COMPUTE_CUS',0)
+        target_device=kwargs.get('device',None)
+        max_cus=torch.cuda.get_device_properties(target_device).multi_processor_count
+        if not 0<=self.deferred_dw_compute_cus<=max_cus:
+            raise ValueError('tail DW compute budget is outside the device CU range')
         input_helper_threads = helper_value(input_helper_threads, "DG_MOE_INPUT_HELPER_THREADS", 0)
         if input_helper_threads not in (0, 32, 64):
             raise ValueError("input helper threads must be0,32or64")
@@ -431,7 +436,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation, self.fp8_input_co_resident,self.fp8_input_elastic_workers,self.fp8_input_slices)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.deferred_dw_compute_cus, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation, self.fp8_input_co_resident,self.fp8_input_elastic_workers,self.fp8_input_slices)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -1372,7 +1377,10 @@ class PeerMoEPlan(NativeMoEPlan):
             a,b,output,lengths=pending
             if self.lengths.data_ptr()!=lengths.data_ptr():
                 raise RuntimeError('deferred DW1 metadata changed before completion')
-            self._wgrad(a,b,output,asynchronous=False)
+            if self.deferred_dw_compute_cus:
+                dg.k_grouped_bf16_gemm_tn_device(a,b,output,lengths,self.rows,compute_cus=self.deferred_dw_compute_cus)
+            else:
+                self._wgrad(a,b,output,asynchronous=False)
             self._pending_last_dw1=None
             self._defer_last_dw1_enabled=False
             return True

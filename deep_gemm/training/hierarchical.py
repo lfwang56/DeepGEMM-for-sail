@@ -145,7 +145,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self._pair_forward_mask=None
         self._pair_forward_tensors=None
         description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                       groups.domain_size, compute, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized,share_fp8_weights,chunk_reduce,chunk_reduce_serialized)
+                       groups.domain_size, compute, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized,share_fp8_weights,chunk_reduce,chunk_reduce_serialized,os.environ.get('DG_MOE_TAIL_DW_COMPUTE_CUS','0'))
         descriptions = [None] * self.size
         dist.all_gather_object(descriptions, description, group=self.group)
         if any(item != description for item in descriptions):

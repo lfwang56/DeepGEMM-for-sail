@@ -427,6 +427,7 @@ def main():
                     "hybrid_chunk_reduce_calls_last_forward": getattr(plan, "hybrid_chunk_reduce_calls_last_forward", None),
                     "hybrid_chunk_reduce_calls_last_backward": getattr(plan, "hybrid_chunk_reduce_calls_last_backward", None),
                     "hybrid_share_fp8_weights": getattr(plan, "hybrid_share_fp8_weights", None),
+                    "tail_dw_compute_cus": getattr(plan, "deferred_dw_compute_cus", None),
                     "hybrid_tail_dw_overlap": getattr(plan, "hybrid_tail_dw_overlap", None),
                     "hybrid_tail_dw_serialized": getattr(plan, "hybrid_tail_dw_serialized", None),
                     "hybrid_deferred_dw1_scheduled_last_backward": getattr(plan, "hybrid_deferred_dw1_scheduled_last_backward", None),

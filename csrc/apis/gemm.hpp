@@ -963,7 +963,8 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
                                         const torch::Tensor& d,
                                         const torch::Tensor& grouped_layout,
                                         const int max_group_k,
-                                        const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
+                                        const std::optional<torch::Tensor>& cta_probe = std::nullopt,
+                                        const int compute_cus = 0) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && a.is_contiguous());
     DG_HOST_ASSERT(b.is_cuda() && b.dim() == 2 && b.is_contiguous());
     DG_HOST_ASSERT(d.is_cuda() && d.dim() == 3 && d.is_contiguous());
@@ -982,6 +983,7 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
     DG_HOST_ASSERT(max_group_k > 0 && max_group_k % 128 == 0 && max_group_k <= capacity);
     const c10::cuda::CUDAGuard guard(a.device());
     DG_HOST_ASSERT(get_ppu_arch() == AC_PPU0015);
+    DG_HOST_ASSERT(compute_cus >= 0 && compute_cus <= get_num_sms());
     const auto overlaps = [](const torch::Tensor& lhs, const torch::Tensor& rhs) {
         const auto left = reinterpret_cast<uintptr_t>(lhs.data_ptr());
         const auto right = reinterpret_cast<uintptr_t>(rhs.data_ptr());
@@ -996,7 +998,7 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
                        && !overlaps(*cta_probe, d) && !overlaps(*cta_probe, grouped_layout));
     }
     k_grouped_bf16_gemm_tn_contiguous_impl(
-        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true, cta_probe);
+        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true, cta_probe, compute_cus);
 }
 
 void m_grouped_bf16_gemm_nt_contiguous(const torch::Tensor& lhs, const torch::Tensor& rhs,
@@ -2019,7 +2021,7 @@ static void acblaslt_gemm_tt(const torch::Tensor& a, const torch::Tensor& b,
 static void register_apis(pybind11::module_& m) {
     m.def("k_grouped_bf16_gemm_tn_device", &k_grouped_bf16_gemm_tn_device,
           py::arg("a"), py::arg("b"), py::arg("d"), py::arg("grouped_layout"), py::arg("max_group_k"),
-          py::arg("cta_probe") = std::nullopt);
+          py::arg("cta_probe") = std::nullopt, py::arg("compute_cus") = 0);
     // BF16 GEMMs
     m.def("gemm_fp32_fp32_fp32_nt", &gemm_fp32_fp32_fp32_nt,
           py::arg("a"), py::arg("b"), py::arg("d"));
