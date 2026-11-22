@@ -1,32 +1,34 @@
-# Qwen3.8 routed-layer BF16 training on PPU
+# Qwen3.8 routed MoE training on PPU
 
-Target: `wlf_sgl_2.2`, Torch2.11.0, SAIL SDK2.2.0, ZW-M890P/ppu0015.
-The build manifest identifies the exact source commit, extension/wheel SHA256,
-compiler and pinned vendor revisions. Install the matching wheel into an isolated
-`pip --target` directory; do not combine a new Python package with an older extension.
-The source archive contains vendor sources and standard PKG-INFO for Gitless builds.
+Target: `wlf_sgl_2.2`, Torch 2.11.0, SAIL SDK 2.2.0, ZW-M890P / ppu0015.
+Use the delivery manifest's exact source revision, wheel and vendor hashes.
+Install the wheel into an isolated target directory; put that directory first in
+`PYTHONPATH`. The standalone source archive includes the pinned Actlize and fmt
+sources and `PKG-INFO` so that rebuilding does not require Git history.
 
-## Topology and scope
+## Scope and topology
 
-Each host has 8 PPUs; each designated block of 8 hosts is one physical supernode.
-Domain EP32 uses four hosts from ONE supernode. Domain EP64 needs all eight.
-Cross-domain EP64 uses four hosts in each of TWO supernodes and is a separate
-experiment. Check the whole host before/during/after execution; exclude timings
-if another job appears. Never stop other users' processes. Recovered idle hosts
-can be reused.
+Each host has eight PPUs. Each listed block of eight hosts is one physical
+supernode. Domain EP32 uses four hosts in ONE supernode; domain EP64 requires all
+eight. Cross-domain EP64 uses four hosts in each of TWO supernodes. Record actual
+host identities; a benchmark's topology label alone does not establish topology.
+Gate every device on every host before, during and after each job. Exclude a phase
+if a foreign job appears. Never stop another user's processes. A recovered idle
+host may be reused, with a replacement preferred after an interruption.
 
-H8192/I2048/totalE512/top10 are the pinned Qwen3.8 routed-expert dimensions.
-EP32 has16local experts, EP64 has8. Performance includes FWD, complete backward
-rematerialization, DX/DW1/DW2/dScore and FP32 DW zero/accumulation. Attention,
-router, shared expert and optimizer are excluded. This is not full2.4T training.
-Unprofiled maximum-rank GPU-event medians use20iterations ×5repeats after5warmups.
-Profiler rank0 kernel intervals are diagnostic and have a different scope.
+The pinned routed-expert dimensions are H=8192, I=2048, E=512, top-k=10. EP32 has
+16 local experts; EP64 has eight. These are the user-requested Qwen3.8 expert
+layer dimensions. Measurements do not run the full 2.4T model. The timed scope is
+one routed layer's forward and complete backward, including FP32 DW1/DW2 zeroing
+and accumulation, DX, dScore and current-weight preparation. Attention, shared
+experts, router projection/top-k and optimizer updates are excluded.
 
-## Recommended configuration
+Select recipes using unprofiled maximum-rank GPU-event medians: five warmups,
+20 iterations and five repeats. Profiled rank-zero spans are diagnostic.
+Keep identical live-forward-context policies on DeepEP and peer comparisons.
+Historical 105.75 ms DeepEP data predates that common optimization.
 
-Use G8 gate/up weight layout, BM256, producer input/local AIU, input ILP8,
-fused FC1/SwiGLU and dHidden/activation backward, packed DY reuse and expert-local
-gradients. Use stage3 for all four M-group GEMMs AND an explicit stage3 WGrad LUT:
+## Build and common runtime
 
 ```bash
 PPU_MOE_SOURCE_ROOT="$PWD"
@@ -34,72 +36,119 @@ export PYTHONPATH="$PPU_MOE_SOURCE_ROOT:$PPU_MOE_SOURCE_ROOT/tests"
 export SAIL_DEEPGEMM_LUT_PATH="$PPU_MOE_SOURCE_ROOT/docs/qwen38_bilateral/wgrad_luts40/stage3"
 export DG_JIT_CACHE_DIR="$PPU_MOE_SOURCE_ROOT/build/reproduce/jit-cache"
 export OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=1
+export DG_MOE_REUSE_FORWARD_CONTEXT=1
+export DG_BF16_WGRAD_COMPUTE_CUS=0 DG_BF16_WGRAD_TILE_CHUNK=0
 ```
 
-When using the isolated wheel, put its target directory first in PYTHONPATH.
-M-group `--gemm-config ... 3` does not select the WGrad pipeline; the LUT does.
-The directory's preliminary name `wgrad_luts40` is retained in the measured41–44
-recipes. Keep auxiliary WG/DY streams, input assistants, DAG/FFN task pools,
-replay-gradient fusion and its warp reduction OFF in the recommended recipe.
-They passed numerical checks but have not beaten the selected complete-layer
-latency. Optional grid budgets default0; they cap persistent CTA counts using
-measured occupancy, not physical CU affinity or resource isolation.
+An explicit M-group GEMM stage count does not select the weight-gradient pipeline;
+the runtime LUT does. Both recommended precision paths retain BF16 operands and
+FP32 accumulation for DW. Experimental FP8 DW primitives are not integrated into
+these plans: their measured panel preparation erased the compute-only gains.
+The unsupported experimental FP8 transposed-load API was removed.
 
-```python
-import torch
-from deep_gemm.training import PeerMoEPlan, native_moe, to_g8_weight
+## BF16 recipe
 
-plan = PeerMoEPlan(
-    8192, 2048, 16, 10, 4096,
-    group=ep_group, device=device, chunk_tokens=4096,
-    ring_rows=65536, block_m=256, gate_up_layout="g8",
-    dispatch_producer=True, producer_input_aiu=True, producer_local_aiu=True,
-    input_copy_ilp=8, fuse_fc1_activation=True,
-    expert_local_grad=True, reuse_packed_dy=True,
-    fuse_activation_backward=True,
-    gemm_configs={r: (256,64,64,64,3) for r in ("fc1","fc2","dhidden","dx")},
-)
-# Convert once before constructing the optimizer, not on every forward.
-w1 = torch.nn.Parameter(to_g8_weight(canonical_w1))
-w2 = torch.nn.Parameter(canonical_w2)
-y = native_moe(x, ids, scores, w1, w2, plan=plan, valid_tokens=valid)
-y.backward(dy)
-plan.check()  # Outside graph capture.
+Use G8 gate/up layout, BM256, input producer/local AIU, ILP8, fused FC1/SwiGLU,
+fused dHidden/activation/dScore, KN weight reads and live forward context. DW and
+dGrad use full resources serially. Splitting their CU budgets or launching them
+concurrently increased contention in the measured Qwen shape.
+
+```bash
+export DG_MOE_PEER_STAGE_CTAS_PER_CU=8
+export DG_MOE_FP8_INPUT_PIPELINE=0 DG_MOE_FP8_BF16_INPUT_PIPELINE=0
+export DG_MOE_FP8_INPUT_SERIALIZE=0 DG_MOE_FP8_INPUT_SERIAL_FULL_GRID=0
+export DG_MOE_FP8_TRANSPOSE_QUANTIZED_WEIGHTS=0
+export DG_MOE_FP8_WEIGHT_TRANSPOSE_SWIZZLE=0
+export DG_MOE_FP8_VECTOR_ROW_QUANT=0 DG_MOE_FP8_FUSED_STAGE_QUANT=0
+export DG_MOE_FP8_TILED_GRAD_QUANT=0
+
+python tests/benchmark_native_moe.py --backend peer --compute bf16 \
+  --hidden 8192 --intermediate 2048 --local-experts 16 --topk 10 \
+  --tokens 4096 --chunk-tokens 4096 --ring-rows 65536 --block-m 256 \
+  --gate-up-layout g8 --gemm-config 256 64 64 64 3 \
+  --dispatch-producer --producer-input-aiu --producer-local-aiu \
+  --input-copy-ilp 8 --fuse-fc1-activation --fuse-activation-backward \
+  --fuse-dhidden-scores --transpose-free-dgrad \
+  --expert-local-grad --reuse-packed-dy --wgrad-overlap none --scope step
 ```
 
-X/DY are contiguous BF16, scores FP32, IDs int32/int64 with masked slots -1.
-`valid` is an int32 device scalar. BF16 or FP32 master parameters receive FP32
-expert accumulation. `from_g8_weight` restores canonical checkpoint layout.
-`native_moe(..., weight_grad_accumulators=(dw1,dw2))` writes caller-owned FP32
-accumulators and leaves parameter `.grad` unset; the caller clears/reduces them
-at its intended boundary. No optimizer or Megatron/DP gradient hook is installed
-automatically. Higher derivatives are unsupported. Warm the complete FWD/BWD
-before graph capture. Replay can change X/DY/scores/IDs/valid at fixed capacities.
-Check device status outside capture. Per-window joins protect buffer reuse.
+Run the command through the distributed launcher below; a direct invocation is
+only a one-rank check. For T16384 retain C4096. The clean EP32 measurements from
+iteration105 are 86.65→63.96 ms at T4096 and 334.32→252.00 ms at T16384. Each
+baseline/peer pair uses the same four hosts. The interrupted earlier T16384
+phase is excluded from these numbers.
 
-## Actual domain-EP32 launch
+## FP8 recipe and optional pipelines
 
-Run one launcher on each of four otherwise idle hosts in the same supernode.
-Use the same master/port/log directory and distinct node ranks0..3:
+Use split gate/up layout and M128 routing windows. The recommended base recipe
+fuses BF16 input packing with unchanged 128-element E4M3 row quantization, fuses
+weighted DY staging with its quantization, uses direct BF16 peer output writes,
+and reuses quantized weights for backward transposes. Swizzled weight transpose
+is bit preserving. Weight quantization remains inside the timed layer.
+
+```bash
+export DG_MOE_PEER_STAGE_CTAS_PER_CU=0
+export DG_MOE_FP8_WEIGHT_QUANTIZER=2 DG_MOE_FP8_ASYNC_WEIGHTS=0
+export DG_MOE_FP8_TRANSPOSE_QUANTIZED_WEIGHTS=1
+export DG_MOE_FP8_WEIGHT_TRANSPOSE_SWIZZLE=1
+export DG_MOE_FP8_VECTOR_ROW_QUANT=1
+export DG_MOE_FP8_FUSED_STAGE_QUANT=3
+export DG_MOE_FP8_FUSED_QUANT_CTAS_PER_CU=16
+export DG_MOE_FP8_TILED_GRAD_QUANT=2
+export DG_MOE_FP8_INPUT_PIPELINE=0 DG_MOE_FP8_BF16_INPUT_PIPELINE=0
+export DG_MOE_FP8_INPUT_SERIALIZE=0 DG_MOE_FP8_INPUT_SERIAL_FULL_GRID=0
+
+python tests/benchmark_native_moe.py --backend peer --compute fp8 \
+  --hidden 8192 --intermediate 2048 --local-experts 16 --topk 10 \
+  --tokens 4096 --chunk-tokens 4096 --ring-rows 65536 --block-m 128 \
+  --gate-up-layout split --no-fuse-dispatch --expert-local-grad \
+  --reuse-packed-dy --wgrad-overlap none --scope step
+```
+
+Iteration107's accepted EP32 recipe is 79.20→62.45 ms at T4096 and
+299.50→232.96 ms at T16384, using cached tiled DY gradients and16CTAs/CU.
+The earlier iteration104 base uses tiled mode0/grid4. Local component timings
+alone do not promote a recipe.
+
+`DG_MOE_FP8_TILED_GRAD_QUANT=1` splits dScore into 128-feature partial reductions;
+`2` additionally caches route scores within each CTA iteration. Both require
+fused DY quantization (stage-quant bit 2). BF16 DY, FP8 bytes and scale bits match
+the base recipe. The changed FP32 dScore summation order has independent FP64
+and small-model quality checks. Mode2 is bitwise equal to mode1 for dScore in
+component tests. Select the CTA grid with an actual EP32 complete-step sweep.
+
+`DG_MOE_FP8_BF16_INPUT_PIPELINE=1` is an optional producer/consumer path. A producer
+pulls original BF16 rows, retains BF16 X for DW, quantizes them and publishes each
+M128 tile. FC1 acquires covered tiles on another stream. It requires fused input
+quantization (stage-quant bit1), bounded ring rows and H<=8192. Set
+`DG_MOE_FP8_INPUT_CTAS` to reserve a producer CTA budget; this does not pin physical
+CUs. `DG_MOE_FP8_INPUT_SERIALIZE=1` supplies a serialized control and
+`DG_MOE_FP8_INPUT_SERIAL_FULL_GRID=1` restores full FC1 grid after that join.
+A numerically valid pipeline can still lose performance because of bandwidth,
+shared-memory or register contention. Keep it off unless the audited complete
+step improves. Serialized full-grid mode may use up to8producerCTAs/CU; the
+concurrent budget must remain below the CU count. The older `DG_MOE_FP8_INPUT_PIPELINE=1` pulls source FP8 and stages
+BF16 separately for DW; the two input pipelines are mutually exclusive.
+
+The base FP8 input path stages before FC1. Its return GEMM fuses peer writes.
+Do not label that base path a fully fused dispatch-and-GEMM megakernel.
+
+## Distributed launcher and DeepEP baseline
+
+On each of four idle hosts in one supernode, use node ranks0..3 and the same
+master, port and log directory:
 
 ```bash
 PPU_MOE_NODE_RANK=0
-PPU_MOE_MASTER=172.17.0.219
+PPU_MOE_MASTER=172.17.0.215
 python tests/launch_moe_local_ranks.py \
   --node-rank "$PPU_MOE_NODE_RANK" --nodes 4 --local-ranks 8 \
   --master-addr "$PPU_MOE_MASTER" --master-port 29874 \
-  --log-directory "$PPU_MOE_SOURCE_ROOT/build/reproduce/peer-t4096" -- \
-  python tests/benchmark_native_moe.py --backend peer --deepep-scaleup \
-    --hidden 8192 --intermediate 2048 --local-experts 16 --topk 10 \
-    --tokens 4096 --chunk-tokens 4096 --ring-rows 65536 --block-m 256 \
-    --gate-up-layout g8 --gemm-config 256 64 64 64 3 \
-    --dispatch-producer --producer-input-aiu --producer-local-aiu \
-    --expert-local-grad --reuse-packed-dy --fuse-activation-backward \
-    --fuse-fc1-activation --input-copy-ilp 8 --scope step
+  --log-directory "$PPU_MOE_SOURCE_ROOT/build/reproduce/domain32" -- \
+  python tests/benchmark_native_moe.py YOUR_PRECISION_AND_RECIPE_ARGUMENTS
 ```
 
-For the strongest installed DeepEP baseline, prepare the isolated native-HGGC
-header adapter (the installed package remains unchanged):
+Prepare the installed DeepEP's isolated native-HGGC header adapter:
 
 ```bash
 python tests/prepare_deepep_elastic_compat.py --root "$PPU_MOE_SOURCE_ROOT"
@@ -107,111 +156,59 @@ export PYTHONPATH="$PPU_MOE_SOURCE_ROOT/build/campaign/deepep-native-scope:$PYTH
 export CPATH="$PPU_MOE_SOURCE_ROOT/build/campaign/compat/deepep:/usr/local/pccl/include:/usr/local/pccl/nccl_wrapper/include:/usr/local/PPU_SDK/include"
 ```
 
-Use the same launcher, dimensions, BF16, G8, MGroup/WGrad stage3, ring and timing
-scope, with `--backend elastic --deepep-scaleup --deepep-comm-sms 38
---overlap-expert-dy`. Keep the original Buffer `--backend deepep` and serial-DY
-controls in the evidence; the fastest accepted dispatch/combine result is the
-denominator. AG/RS collectives are auxiliary correctness/performance references.
-Elastic requires unique top-k IDs within each token and nondeterministic routing.
-The benchmark's balanced case generates random top-k IDs, not adjacent expert IDs.
+The tuned denominator is `--backend elastic --deepep-scaleup
+--deepep-comm-sms 38 --overlap-expert-dy`, using installed DeepEP dispatch/combine.
+BF16 uses the same G8/MGroup/WGrad-stage3 and live-context policy. FP8 uses split
+layout, current-weight quantization, vector row quantization, quantized swizzled
+weight transpose, and `DG_MOE_FP8_SOURCE_DISPATCH=1`. Leave peer input/DY fusion
+flags off for this control. DeepEP's FP8 source dispatch communicates FP8 forward
+input; its original BF16 backward input and BF16 returns remain timed.
+Keep Buffer/serial-DY controls in the evidence. AG/RS is an auxiliary reference.
+Elastic requires unique top-k expert IDs per token.
 
-Repeat `--scope forward`, `backward`, `step`. T1024 uses C1024; T8192 uses C4096.
-Backward includes replay and DW zeroing. Separately measured FWD+BWD can differ
-slightly from the complete-step measurement. Audit every host and preserve all
-rank logs; invalid/partial/interfered phases contribute no accepted latency.
+## Numerical, autograd and quality checks
 
-## Numerical and lifecycle checks
+Use `tests/test_moe_elastic_distributed.py`,
+`tests/test_deepep_moe_large_distributed.py`,
+`tests/test_moe_fp8_peer_distributed.py` and
+`tests/test_moe_training_skew_capacity.py` on all participating ranks with matching
+precision, layout, context and ring configuration. Validate every Y/DX/DW1/DW2/
+dScore element, mutable graphs, masked/empty/skew routes and capacity overflow.
+The skew script accepts `--gemm-config`; it chooses producer mode itself and has
+no `--dispatch-producer` argument. Keep unchanged numerical thresholds.
 
-```bash
-python tests/test_setup_source_metadata.py
-python tests/test_moe_training_large.py --backend peer \
-  --hidden 8192 --intermediate 2048 --experts 16 --topk 10 --tokens 80 \
-  --ring-rows 65536 --block-m 256 --gate-up-layout g8 \
-  --gemm-config 256 64 64 64 3 --dispatch-producer \
-  --producer-input-aiu --producer-local-aiu --fuse-fc1-activation \
-  --input-copy-ilp 8 --expert-local-grad --reuse-packed-dy --fuse-activation-backward
-python tests/test_moe_return_cache_equivalence.py --gemm-stages 3 --input-copy-ilp-ablation 8
-```
+`native_moe` supports FP32 master expert weights, returns FP32 expert gradients
+and requires a separate plan per outstanding captured layer. Each source chunk
+retains its last live window; earlier windows under skew are rematerialized.
+Warm full forward/backward before capture. Fixed capacities permit mutable
+X/DY/IDs/scores/valid counts. Call `plan.check()` outside capture. Caller-owned
+`weight_grad_accumulators=(dw1,dw2)` suppress parameter `.grad`; the caller owns
+clearing/reduction. Optimizer and Megatron/DP hooks are not installed implicitly.
 
-On all 32 ranks use `tests/test_deepep_moe_large_distributed.py --backend peer`
-with localE16, ring65536, BM256, G8, stage3 and graph; add FC1 activation fusion
-and ILP8. The test compares every Y/DX/DW1/DW2/dScore element to independent FP32,
-including empty, masked, reversed and duplicate/skew routing. For Elastic use
-`tests/test_moe_elastic_distributed.py --no-elastic-hybrid-mode --comm-sms 38`
-with matching ring/layout/tiles/graph. Its skew uses unique expert IDs.
-`tests/test_moe_training_skew_capacity.py --backends peer --chunk-tokens 4096`
-with the same expert-local/G8/stage3 flags separately validates full dropless
-capacity. That script selects producer mode automatically; it has no
-`--dispatch-producer` CLI flag. Do not change numerical thresholds to accept a
-failed candidate. Sampled benchmark outputs do not replace these references.
+Full-model quality uses public Tiny Shakespeare: 57.8M parameters, four MoE layers,
+H512/I1024/E8/top2, global batch8, length128, 2000 updates, seeds4827/4891/6113.
+Use `tests/run_moe_lm_seeds.py --freeze-library` with the quality runtime LUT and
+`tests/evaluate_moe_lm.py` on all111539 heldout causal targets per checkpoint.
+The fixed-route option only stabilizes the initial continuous gradient reference;
+training routing stays dynamic. Compare canonical initial-state hashes and each
+run's immutable package/extension/LUT metadata. Retain losses per seed.
+This checks a complete small model, not full Qwen2.4T convergence.
 
-## Two-domain EP64
+## Cross-domain EP64 and profiling
 
-Global ranks must be ordered as two contiguous physical domains. Initialize the
-default GPU process group and a complete ordered Gloo metadata group, then call
-`make_hierarchical_groups(domain_size=32, metadata_group=metadata)` collectively.
-Pass the returned caller-owned `groups` into `HierarchicalPeerMoEPlan` with H8192,
-I2048, localE8, top10 and the same peer options. Close all plans/device work before
-`groups.close()`. Groups can be shared by layers. Pair payload AG/RS runs on GPU;
-Gloo carries metadata only. Backward repeats dispatch and full expert replay,
-reduces DX/dScore, and keeps each expert's FP32 DW local.
+Order global ranks as two contiguous physical domains. Initialize GPU and Gloo
+metadata groups, then call `make_hierarchical_groups(domain_size=32,
+metadata_group=metadata)` collectively. `HierarchicalPeerMoEPlan` uses peer fusion
+within each domain and GPU collectives across domains. Gloo carries metadata.
+Close plans after device completion before closing caller-owned groups. Validate
+with `tests/test_moe_hierarchical_distributed.py`; benchmark with `--backend hybrid
+--hybrid-domain-size 32`. Cross-domain Elastic uses `--backend elastic
+--elastic-hybrid-mode` without `--deepep-scaleup`. Earlier cross64 results do not
+validate later context/FP8 changes or establish domain64 performance.
 
-Use `tests/test_moe_hierarchical_distributed.py --hybrid-domain-size 32` on all 64
-ranks for the independent reference. Domain partials are BF16-rounded, so flat
-DeepEP rounding differs. The four-rank
-`tests/test_moe_hierarchical_prepare_failure.py` injects a pair warmup failure,
-checks global failure propagation and validates a successful retry.
-
-Benchmark `--backend hybrid --hybrid-domain-size 32`; the cross-domain Elastic
-baseline uses `--backend elastic --elastic-hybrid-mode` without `--deepep-scaleup`.
-Match C2048 first. Separately tuned Hybrid C4096 versus Elastic C2048 must be
-labeled as different capacities. Cross64 DeepEP C4096 exceeds its int32 receive
-indexing guard; C3840 is valid but was slower than C2048. Cross-domain64 results
-cannot be relabeled as same-domain64.
-
-## Public-text whole-model validation
-
-The 57.8M four-layer H512/I1024/E8/top2 model trains all parameters on public Tiny
-Shakespeare with dynamic routing. Three paired seeds4827/4891/6113 run2000updates,
-using globalB8, sequence128 and C256. To exercise the selected WGrad stage3 even
-at these small shapes, use the quality LUT with explicit small DW keys:
-
-```bash
-export SAIL_DEEPGEMM_LUT_PATH="$PPU_MOE_SOURCE_ROOT/docs/qwen38_bilateral/quality_luts/wgrad-stage3"
-python tests/run_moe_lm_seeds.py --backend peer --name lm-peer-wg3 \
-  --steps 2000 --source-chunk-tokens 256 --block-m 256 --gate-up-layout g8 \
-  --gemm-stages 3 --fuse-fc1-activation --input-copy-ilp 8 \
-  --peer-recipe producer-window --freeze-library --fixed-route-seeds 4827,4891,6113
-```
-
-Repeat with backend `hybrid` and a different name. Each seed uses two PPUs;
-Hybrid quality uses two logical one-rank domains on that host, while actual
-cross-domain64 correctness is validated separately. The fixed-route option
-freezes branch choices ONLY for the initial continuous FP32 gradient reference;
-training stays dynamic. Unfrozen BF16/FP32 branch-tie failures are preserved.
-The runner records parameter/data/source/extension hashes, dirty tracked files,
-and freezes the dereferenced package headers plus the exact runtime LUT.
-
-Evaluate each saved seed on all 111539 heldout causal targets, using its exact
-frozen package and LUT (the Hybrid checkpoint explicitly evaluates via Peer):
-
-```bash
-PPU_MOE_RUN="$PPU_MOE_SOURCE_ROOT/build/campaign/lm-peer-wg3"
-PYTHONPATH="$PPU_MOE_RUN/frozen-library:$PPU_MOE_SOURCE_ROOT/tests" \
-SAIL_DEEPGEMM_LUT_PATH="$PPU_MOE_RUN/frozen-library/runtime-lut" \
-python tests/evaluate_moe_lm.py --checkpoint "$PPU_MOE_RUN/seed4827.pt"
-```
-
-Repeat for4891/6113 and the paired baseline. Do not use train-prefix loss or
-partial-batch evaluation as final quality. This is small-model validation,
-not a statistical noninferiority proof or full2.4T convergence.
-
-## Profiling interpretation
-
-`analyze_overlap.py --steps 3 --chunks 1 --output result.json trace.sqlite`
-partitions actual kernel intervals. Mixed kernels include peer traffic and
-compute; local-operand external consumers can include ready waits. Kernel
-intersection is not pure wire/MMA overlap or saved latency. Use complete-step
-unprofiled timings to select a recipe, and report computation slowdowns alongside
-hidden intervals. `plot_stream_overlap.py` renders the middle of three captured
-rank0 graph replays; retain source traces and all-host audit provenance.
+For profiles, partition the exact timed graph's GPU activity union and report
+idle gaps separately. GEMM kernels that read/write peers contain arithmetic,
+traffic and waits; expert gradient kernels also contain pointwise reductions.
+Their full durations are not pure wire time. Cumulative kernel durations can
+overlap and must not be added as wall time. State the rank, source hash, profiled
+span and unprofiled maximum-rank median separately.
