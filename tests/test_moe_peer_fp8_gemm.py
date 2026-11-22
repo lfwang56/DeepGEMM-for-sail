@@ -15,7 +15,7 @@ def fixture(groups, n, k, capacity):
     qw=torch.empty_like(w,dtype=torch.float8_e4m3fn)
     sw=torch.empty(groups,n//128,k//128,device='cuda')
     full=torch.tensor(capacity,device='cuda',dtype=torch.int32)
-    active=torch.zeros_like(full);status=torch.zeros_like(full)
+    num_blocks=torch.zeros_like(full);status=torch.zeros_like(full)
     lengths=torch.zeros(groups,device='cuda',dtype=torch.int32)
     group_ids=torch.zeros(capacity,device='cuda',dtype=torch.int32)
     permutation=torch.full((capacity,),-1,device='cuda',dtype=torch.int32)
@@ -33,7 +33,7 @@ def fixture(groups, n, k, capacity):
     def native():
         dg.m_grouped_fp8_gemm_nt_nopad((qx,sx),(qw,sw),reference,group_ids,
                                       m_rows=lengths,disable_ue8m0_cast=True)
-        dg._C._moe_training_peer_launch(12,[reference,permutation,reference_ptrs,active,status],
+        dg._C._moe_training_peer_launch(12,[reference,permutation,reference_ptrs,status,num_blocks],
                                         [capacity,n,destination_rows,world])
 
     def fused(keep):
@@ -51,7 +51,7 @@ def fixture(groups, n, k, capacity):
         if pattern=='empty':counts=[0]*groups
         if capacity<1000 and pattern not in ('skew','empty'):counts[1]=256
         count=sum(counts)
-        lengths.copy_(torch.tensor(counts,device='cuda',dtype=torch.int32));active.fill_(count)
+        lengths.copy_(torch.tensor(counts,device='cuda',dtype=torch.int32));num_blocks.fill_(count//128)
         ids=torch.repeat_interleave(torch.arange(groups),torch.tensor(counts))
         group_ids.zero_();group_ids[:count].copy_(ids.to('cuda',dtype=torch.int32))
         permutation.fill_(-1)
@@ -59,6 +59,7 @@ def fixture(groups, n, k, capacity):
         if pattern=='reversed':routes=routes.flip(0)
         if pattern=='masked':routes[::11]=-1
         permutation[:count].copy_(routes)
+        return count
 
     metadata('balanced');quantize();native()
     graphs={}
@@ -69,8 +70,19 @@ def fixture(groups, n, k, capacity):
             reset(actual,actual_dest);quantize();fused(keep)
         graphs[keep]=graph
     for index,pattern in enumerate(('balanced','masked','skew','empty','reversed','updated')):
-        metadata(pattern);x.add_(.001*(index+1));w.mul_(.99)
+        count=metadata(pattern);x.add_(.001*(index+1));w.mul_(.99)
         quantize();reset(reference,reference_dest);native()
+        route_ids=permutation[:count].long()
+        scatter_matches=True
+        for owner,destination in enumerate(reference_dest):
+            source_rows=((route_ids>=0)&(route_ids//destination_rows==owner)).nonzero().flatten()
+            wanted=torch.full_like(destination,-9)
+            wanted.index_copy_(0,route_ids[source_rows]%destination_rows,reference[source_rows])
+            scatter_matches &= torch.equal(wanted.view(torch.uint8),destination.view(torch.uint8))
+        print(json.dumps(dict(case='peer_fp8_scatter_oracle_reference',shape=[groups,n,k],
+                              capacity=capacity,pattern=pattern,reference='Torch index_copy of native BF16 output',
+                              every_element=True,passed=scatter_matches)),flush=True)
+        if not scatter_matches:raise AssertionError('independent route scatter oracle mismatch')
         for keep,graph in graphs.items():
             graph.replay();torch.cuda.synchronize()
             gates=dict(peer_bits=all(torch.equal(a.view(torch.uint8),b.view(torch.uint8))

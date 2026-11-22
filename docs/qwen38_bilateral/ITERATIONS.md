@@ -10736,3 +10736,170 @@ Traceback (most recent call last):
     raise AssertionError(gates)
 AssertionError: {'peer_bits': False, 'local_bits': True, 'status': True}
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1509603, "start_ticks": "16605589"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
+
+
+## Iteration72 — repair independent scatter control wiring
+
+71 proved local FP8 output is bitwise identical, while all independent
+scatter destinations remained at the -9 canary. Source inspection found
+the test passed active row count in status slot3 and zero status in
+work-count slot4. Correct order to status,num_blocks and divide aligned
+active rows by128. Add a separate Torch index_copy oracle for the
+standalone scatter, checking every destination element before comparing
+the fused return. No numerical threshold relaxation and no C++ changes.
+
+70 compiled native a908186949466b390193a80f75077feae17a65649ab88a92f0c98ce65739b442
+and JIT kernels, but first small balanced discard-local graph peer output
+failed byte equality. No timing accepted. Retain the arithmetic gates and
+run keep-local first, reporting local mismatch count, destination mismatch
+coordinates/values and pair-order ablation before the same strict assertion.
+No device/host kernel implementation changes in71.
+
+69 passed actual EP8 mutable input/weight/route/zero-capacity gates,
+actual EP32 Qwen FP32 full-gradient and fullC4096 skew gates.
+Same-host complete routedFWD+rematBWD+FP32DW: FP8legacy121.898889ms,
+cachedfloat104.171484, cachedinteger101.986591, integerasync102.989990,
+BF16split/M128104.793848. Cachedinteger/serial is best FP8 baseline.
+69 is quantizer optimization, not FP8 peer fusion. Strongest prior
+BF16G8/M256 and exact three-graph profiles are independent diagnostics.
+
+Add an isolated FP8 return primitive using the native blockwise E4M3
+MGroupedNoPad mainloop and scheduler. Preserve group-specific weight and
+scale addressing and native FP32 accumulation. Direct BF16x2 register
+stores use the existing peer route permutation/address helper; optionally
+retain the same local BF16 output for rematerialized dScore/DW consumers.
+Pass PeerGemmParams as a separate kernel argument, preserving old native
+FP8/peer parameter ABIs. JIT specialization includes keep/discard behavior,
+with exact native declaration replacement checks and occupied-grid checks.
+GPU lengths remain mutable; host rejects unsupported group counts and
+invalid dtypes/shapes before launch. This primitive requires already
+packed and quantized local input; no input-communication fusion claim.
+
+Compare every local/route output byte and unused canaries to native
+FP8 GEMM followed by the existing scatter. Test balanced/masked/skew/
+empty/reversed/changed weights/input metadata in captured graphs, small
+and actual Qwen FC2/DX shapes. Four local fake owners on one GPU only;
+actual EP integration/quality and complete-step gains remain subsequent gates.
+
+{
+  "clean": true,
+  "reference_count": 54,
+  "every_reference_passed": true,
+  "measurements": [
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 4.94556999206543,
+      "samples": [
+        4.944150161743164,
+        4.94556999206543,
+        4.94574089050293,
+        4.9450939178466795,
+        4.946574020385742
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 4.793503189086914,
+      "samples": [
+        4.793503189086914,
+        4.796640014648437,
+        4.7917030334472654,
+        4.796347045898438,
+        4.792557144165039
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 5.167734909057617,
+      "samples": [
+        5.1699981689453125,
+        5.155947875976563,
+        5.174430084228516,
+        5.167734909057617,
+        5.160754013061523
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "native_plus_scatter",
+      "median_event_ms": 7.266510772705078,
+      "samples": [
+        7.272611236572265,
+        7.2626800537109375,
+        7.266510772705078,
+        7.265464782714844,
+        7.266909790039063
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_discard",
+      "median_event_ms": 7.961486053466797,
+      "samples": [
+        7.962657165527344,
+        7.961012268066407,
+        7.961913299560547,
+        7.956452941894531,
+        7.961486053466797
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    },
+    {
+      "case": "peer_fp8_gemm_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "capacity": 65536,
+      "variant": "fused_return_keep",
+      "median_event_ms": 8.416549682617188,
+      "samples": [
+        8.416796875,
+        8.416739654541015,
+        8.412516021728516,
+        8.411351013183594,
+        8.416549682617188
+      ],
+      "scope": "isolated GEMM and return on one GPU with four local fake owners; no actual EP/full-step claim"
+    }
+  ],
+  "scope": "isolated FP8 GEMM/return using four local fake owners; no actual EP or full-step speedup"
+}
