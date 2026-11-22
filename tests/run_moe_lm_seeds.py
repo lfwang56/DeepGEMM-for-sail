@@ -14,6 +14,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--backend", choices=("collective", "peer", "hybrid", "elastic"), required=True)
 parser.add_argument("--name", required=True)
 parser.add_argument("--compute", choices=("bf16", "fp8"), default="bf16")
+parser.add_argument("--no-fuse-return", action="store_true")
 parser.add_argument("--fp8-async-weights", action="store_true")
 parser.add_argument("--steps", type=int, default=2000)
 parser.add_argument("--peer-recipe", choices=("cache", "producer", "producer-input", "producer-expert", "producer-window"), default="cache")
@@ -33,6 +34,8 @@ parser.add_argument("--input-copy-ilp", type=int, choices=(1, 2, 4, 8), default=
 parser.add_argument("--fixed-route-seeds", default="")
 parser.add_argument("--freeze-library", action="store_true")
 args = parser.parse_args()
+if args.no_fuse_return and args.backend not in ("peer", "hybrid"):
+    parser.error("--no-fuse-return requires a peer backend")
 if args.input_copy_ilp != 1 and args.backend not in ("peer", "hybrid"):
     parser.error("input copy ILP requires the peer backend")
 if (args.dag_fusion or args.dag_backward or args.dag_direct_return) and args.backend not in ("peer", "hybrid"):
@@ -141,6 +144,8 @@ for index, seed in enumerate((4827, 4891, 6113)):
         "--checkpoint", str(directory / f"seed{seed}.pt"), *recipe]
     if args.fuse_fc1_activation:
         command.append("--fuse-fc1-activation")
+    if args.no_fuse_return:
+        command.append("--no-fuse-return")
     if args.fuse_dhidden_scores:
         command.append("--fuse-dhidden-scores")
     if args.transpose_free_dgrad:
