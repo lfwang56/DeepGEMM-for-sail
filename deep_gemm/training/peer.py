@@ -40,7 +40,8 @@ class PeerMoEPlan(NativeMoEPlan):
                  input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False, dispatch_external_serial=False,
                  fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, transpose_free_dgrad=False,
                  input_helper_threads=None, input_helper_block_m=None, input_helper_block_n=None,
-                 fp8_weight_quantization=None, **kwargs):
+                 fp8_weight_quantization=None, fp8_input_pipeline=None,
+                 fp8_input_ctas=None, fp8_input_serialize=None, **kwargs):
         # Optional CTA helper recipe; environment values allow the same large
         # reference and capacity harnesses to exercise the exact candidate.
         def helper_value(value, key, default):
@@ -183,6 +184,23 @@ class PeerMoEPlan(NativeMoEPlan):
                 raise ValueError("routed-row windows require expert-local gradients without a resident pipeline")
         self.ring_rows = ring_rows
         self.fp8_peer_compute = kwargs.get("compute", "bf16") == "fp8"
+        def fp8_flag(value, key):
+            if value is None:
+                raw = os.environ.get(key, "0")
+                if raw not in ("0", "1"):
+                    raise ValueError(key + " must be0or1")
+                value = raw == "1"
+            if type(value) is not bool:
+                raise TypeError(key + " must be bool")
+            return value
+        self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
+        self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
+        self.fp8_input_ctas = helper_value(fp8_input_ctas, "DG_MOE_FP8_INPUT_CTAS", 8)
+        if self.fp8_input_pipeline and not self.fp8_peer_compute:
+            raise ValueError("FP8 input pipeline requires FP8 peer compute")
+        if self.fp8_input_serialize and not self.fp8_input_pipeline:
+            raise ValueError("FP8 input serialization requires the FP8 input pipeline")
+        self._fp8_backward = self._fp8_bf_input_pending = False
         if self.fp8_peer_compute and (self.transport != "peer" or fuse_dispatch or not active_rows
                 or not vectorized_copy or fuse_activation_backward or dispatch_cache_n or dispatch_cache_aiu
                 or staged_return or dispatch_producer or producer_local_aiu or producer_input_aiu
@@ -208,6 +226,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_active_quantization = self.fp8_mn_major_scales = self.fp8_peer_compute
         self.communication_dtype = "bf16"
         self.fp8_input_mode = "staged_bf16_then_row_quantization" if self.fp8_peer_compute else None
+        if self.fp8_input_pipeline:
+            self.fp8_input_mode = "source_fp8_pull_pipeline"
+            self.communication_dtype = "fp8_input_bf16_dw_and_return"
         self._fp8_prequantized_input = None
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
             raise TypeError("peer fusion switches must be bool")
@@ -302,6 +323,11 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and (fuse_dispatch or self.fp8_peer_compute)
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        if self.fp8_input_pipeline:
+            if not 0 < self.fp8_input_ctas < dg.get_num_sms():
+                raise ValueError("FP8 producer CTAs must leave at least one GEMM CU")
+            self._fp8_input_stream = torch.cuda.Stream(device=self.device)
+            self._fp8_bf_input_stream = torch.cuda.Stream(device=self.device)
         if self.transpose_free_dgrad:
             # dGrad reads the original expert parameters via native AIU Trans.
             # Release the now-unused transposed weight copies.
@@ -322,7 +348,8 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial,
                       self.fuse_dhidden_scores, self.transpose_free_dgrad,
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
-                      self.fp8_weight_quantization)
+                      self.fp8_weight_quantization, self.fp8_input_pipeline,
+                      self.fp8_input_ctas, self.fp8_input_serialize)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -350,11 +377,14 @@ class PeerMoEPlan(NativeMoEPlan):
             descriptions += (("raw_dy", (c, h), torch.bfloat16),
                              ("raw_scores", (c, k), torch.float32),
                              ("local_dscores", (c, k), torch.float32))
+        if self.fp8_input_pipeline:
+            descriptions += (("local_qx", (c, h), torch.float8_e4m3fn),
+                             ("local_qx_scales", (c, h // 128), torch.float32))
         layout, size = {}, 0
         for name, shape, dtype in descriptions:
             size = (size + 15) // 16 * 16
             count = math.prod(shape)
-            element = 2 if dtype == torch.bfloat16 else 8 if dtype == torch.int64 else 4
+            element = torch.empty((), dtype=dtype).element_size()
             layout[name] = (size, count * element, shape, dtype)
             size += count * element
         self.symm_handle = None
@@ -477,6 +507,9 @@ class PeerMoEPlan(NativeMoEPlan):
                 self.buffers.pop("activation_scale_" + str(width))
                 self.quantized_scale_storage[width] = storage
             self.group_ids.zero_()
+        if self.fp8_input_pipeline:
+            self.fp8_input_ready = torch.zeros(self.rows // 128, device=self.device, dtype=torch.int32)
+            self.buffers["fp8_input_ready"] = self.fp8_input_ready
         self._prepared = False
         torch.cuda.synchronize(self.device)
         if self.group is not None:
@@ -485,6 +518,7 @@ class PeerMoEPlan(NativeMoEPlan):
     def _prepare_weights(self, w1, w2, backward=False):
         if self.fp8_peer_compute:
             self._fp8_prequantized_input = None
+            self._fp8_backward = backward
         if self.transpose_free_dgrad:
             self.w1_t, self.w2_t = w1, w2
             return
@@ -497,7 +531,7 @@ class PeerMoEPlan(NativeMoEPlan):
     def _prepare_pointwise(self):
         super()._prepare_pointwise()
         if self.fp8_peer_compute:
-            dg._C._moe_training_precompile(self.device.index, [26, 27, 28, (10, 29, 30)[self.fp8_weight_quantization]])
+            dg._C._moe_training_precompile(self.device.index, [9, 26, 27, 28, (10, 29, 30)[self.fp8_weight_quantization]])
 
     def _barrier(self, tag, compile_only=False):
         _peer(5, [self.pointer_tables["barrier_state"], self.barrier_state, self.status],
@@ -517,6 +551,13 @@ class PeerMoEPlan(NativeMoEPlan):
             name = {"fc1": "w1", "fc2": "w2", "dhidden": "w2_t", "dx": "w1_t"}[role]
             width = a.shape[1]
             quantized_a = self.quantized[width]
+            if self.fp8_input_pipeline and role == "fc1":
+                return dg._C._moe_training_peer_fp8_gemm(
+                    quantized_a, self.quantized[name], output, self.lengths, self.permutation,
+                    self.pointer_tables[destination], self.chunk_tokens * self.k,
+                    keep_local=True, compile_only=compile_only,
+                    config=self.gemm_configs.get(role, ()),
+                    input_control=[self.fp8_input_ready, self.status], reserved_input_ctas=self.fp8_input_ctas)
             if self._fp8_prequantized_input != a.data_ptr():
                 _launch(26, [a, quantized_a[0], self.quantized_scale_storage[width], self.current_rows, self.status],
                         [self.rows, width, 1])
@@ -591,7 +632,38 @@ class PeerMoEPlan(NativeMoEPlan):
                     self.buffers[name] = statistics
 
     def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True, prefetch_dy=False):
-        if self.input_helper_threads:
+        if self.fp8_input_pipeline:
+            main = torch.cuda.current_stream(self.device)
+            if compile_only:
+                self._fp8_stage_quantized_input(compile_only=True)
+            else:
+                self.fp8_input_ready.zero_()
+                self._fp8_input_stream.wait_stream(main)
+                with torch.cuda.stream(self._fp8_input_stream):
+                    for tensor in (self.source_rows, self.num_blocks, self.fp8_input_ready, self.status,
+                                   *self.quantized[self.h], self.quantized_scale_storage[self.h],
+                                   self.local_qx, self.local_qx_scales, self.packed_x,
+                                   self.pointer_tables['local_qx'], self.pointer_tables['local_qx_scales'],
+                                   self.pointer_tables['local_x']):
+                        tensor.record_stream(self._fp8_input_stream)
+                    self._fp8_stage_quantized_input()
+                if self.fp8_input_serialize:
+                    main.wait_stream(self._fp8_input_stream)
+            self._peer_gemm(self.packed_x, w1, self.gate_up, self.identity_rows, role='fc1',
+                            compile_only=compile_only)
+            if not compile_only:
+                if self._fp8_backward:
+                    # Original BF16 X is needed only by DW1. Stage it after
+                    # the FP8 producer, while FC1/FC2/DW2/dHidden can progress.
+                    self._fp8_bf_input_stream.wait_stream(self._fp8_input_stream)
+                    with torch.cuda.stream(self._fp8_bf_input_stream):
+                        for tensor in (self.permutation, self.num_blocks, self.packed_x, self.status,
+                                       self.pointer_tables['local_x']):
+                            tensor.record_stream(self._fp8_bf_input_stream)
+                        self._stage_input(force_bf16=True)
+                    self._fp8_bf_input_pending = True
+                main.wait_stream(self._fp8_input_stream)
+        elif self.input_helper_threads:
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.source_rows,
                             read=True, pack_input=True, role="fc1", compile_only=compile_only,
                             keep_gate_up=keep_gate_up, fc1_helper_threads=self.input_helper_threads)
@@ -734,6 +806,8 @@ class PeerMoEPlan(NativeMoEPlan):
     def _route_chunk(self, x, ids, valid_tokens, start, zero_values=True):
         _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
                 [x.shape[0], self.chunk_tokens, self.h, self.k, start])
+        if self.fp8_input_pipeline:
+            _launch(9, [self.local_x, self.local_qx, self.local_qx_scales], [self.chunk_tokens, self.h])
         if zero_values:
             self.local_values.zero_()
         self.local_dx.zero_()
@@ -838,7 +912,24 @@ class PeerMoEPlan(NativeMoEPlan):
               [self.packed_output, self.permutation, self.pointer_tables[destination], self.status, self.num_blocks],
               [self.rows, self.h, self.chunk_tokens * self.k, self.size, self.block_m], compile_only)
 
-    def _stage_input(self, compile_only=False):
+    def _fp8_stage_quantized_input(self, compile_only=False):
+        _peer(19, [self.pointer_tables['local_qx'], self.pointer_tables['local_qx_scales'],
+                   self.pointer_tables['local_x'], self.source_rows, self.quantized[self.h][0],
+                   self.quantized_scale_storage[self.h], self.packed_x, self.num_blocks,
+                   self.fp8_input_ready, self.status],
+              [self.rows, self.h, self.chunk_tokens, self.size, self.fp8_input_ctas, 0], compile_only)
+
+    def _join_fp8_bf_input(self):
+        if self._fp8_bf_input_pending:
+            torch.cuda.current_stream(self.device).wait_stream(self._fp8_bf_input_stream)
+            self._fp8_bf_input_pending = False
+
+    def _stage_input(self, compile_only=False, force_bf16=False):
+        if self.fp8_input_pipeline and not force_bf16:
+            if compile_only:
+                self._fp8_stage_quantized_input(compile_only=True)
+                self._stage_input(compile_only=True, force_bf16=True)
+            return
         _peer(11 if self.vectorized_copy else 7,
               [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status, self.num_blocks],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
@@ -945,6 +1036,7 @@ class PeerMoEPlan(NativeMoEPlan):
                     self._reduce_score_partials()
                 if not self.fuse_activation_backward:
                     self._activation(backward=True)
+                self._join_fp8_bf_input()
                 self._wgrad(self.gate_up, self.packed_x, dw1,
                             asynchronous=self.wgrad_overlap != "none")
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
@@ -1018,6 +1110,7 @@ class PeerMoEPlan(NativeMoEPlan):
                                 read=read_dy, source="local_dy", role="dhidden")
                 if not self.fuse_activation_backward:
                     self._activation(backward=True)
+                self._join_fp8_bf_input()
                 dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
                                 write=self.fuse_return, destination="local_dx")
