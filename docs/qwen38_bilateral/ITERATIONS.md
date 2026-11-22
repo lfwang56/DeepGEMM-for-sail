@@ -17414,3 +17414,328 @@ preparation remainsoutsidetiminguntiltheproductionpanelproducerexists.
     ]
   }
 ]
+
+
+## Iteration96 — per-expert feature scales with final-only FP8 DW dequantization
+
+95 closed030c2e5a0a. Bothlayouts allCPU/native/guard tests passed, but
+compactDW1 15.0624vs global14.7400ms (BF9.62-9.70);DW2 8.1271vs7.6497.
+Immutable95Asightcounterprofilesallclean: globalFP8TCactive22.53%,
+BF1669.27%, boththeoreticaloccupancy25%, stack0; FP8FP32instructions
+373.29M vsBF1616.78M. Tensorcycles167.77Mvs335.54M confirmrawFP8TC
+cycleshalvewhiletotalwall14960.9usvs9588.2usregresses. Memorythroughput
+16.26%vs32.57%; notanHBMbandwidthsaturationclaim. Reassessgeometry
+onfrozen95:BN256S4improves14.7->13.2msbutstilltrailsBF16; larger
+warptilesregressstrongly. Noevidence compactK alone solvesbottleneck.
+PrimarysourceSDKMMAguidance reread, officialwebblogs33/34unavailable.
+
+Nativeint8_gemm_cutlass3.cuh1278-1285 already provides E4M3rawTC
+accumulationandfinalfeature-scale multiplicationforA8W8channel mode.
+UseitsmainloopinaGPUK-groupedFP32accumulatingDWwrapper. ChangeDW
+quantizationrecipe: oneFP32scaleperexpert-featureacrossalltokensK,
+forbothoperands. ScalesconstantoverKremoveper-Kblockfloating-point
+rescaling. Inputpanelsareexpert-localcompactK;GPUcounts/offsetsremain
+dynamic. FWD,DGradandexistingtrainingplansunchanged. NewprivateAPI
+_moe_training_fp8_wgrad_row, regularE4M3/FP32SF, NOTMoKMXFP8format.
+
+GateindependentCPUrow-quantizedDW everyoutput, existingnative
+A8W8FP8BF16boundarybitwisematch,mutablecounts/data,FP32accumulation,
+tails/zeroexperts,canaries/invalidmetadata. QwenprequantizedDWcomponent
+measurementsstillEXCLUDEproductionpanelquantization; nofullstepor
+convergenceclaimuntil integratedrecipeisvalidated.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 128,
+      "n": 128,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018585279758553952,
+        0.00030259485356509686,
+        0.000325778586557135
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 256,
+      "n": 384,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018577769515104592,
+        0.00029727007495239377,
+        0.00033831773907877505
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 384,
+      "n": 512,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018583044584374875,
+        0.00029908024589531124,
+        0.0003381955320946872
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_compute_only",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw1",
+      "m": 4096,
+      "n": 8192,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 9.480503845214844,
+      "fp8_ms": 13.269090270996093,
+      "speedup": 0.7144803186649175,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0007071914151310921,
+        0.0008246765937656164,
+        0.0008571046637371182
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_compute_only",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw2",
+      "m": 8192,
+      "n": 2048,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 4.930184173583984,
+      "fp8_ms": 6.688198089599609,
+      "speedup": 0.7371468529394486,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0008623432950116694,
+        0.0008947662427090108,
+        0.0008499996038153768
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 128,
+      "n": 128,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018585279758553952,
+        0.00030259485356509686,
+        0.000325778586557135
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 256,
+      "n": 384,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018577769515104592,
+        0.00029727007495239377,
+        0.00033831773907877505
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_k_grouped_dw_cpu_reference",
+      "row_scales": true,
+      "compact_panels": true,
+      "m": 384,
+      "n": 512,
+      "groups": 3,
+      "capacity": 2048,
+      "mutable_counts": true,
+      "nonzero_offsets": true,
+      "tail_zero": true,
+      "zero_expert": true,
+      "fp32_accumulation": true,
+      "guarded_output": true,
+      "invalid_metadata_guard": true,
+      "every_element": true,
+      "relative_errors": [
+        0.00018583044584374875,
+        0.00029908024589531124,
+        0.0003381955320946872
+      ],
+      "per_element_sum_absolute_product_error_bound": 0.001,
+      "native_fp8_bf16_boundary_bitwise": true,
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_compute_only",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw1",
+      "m": 4096,
+      "n": 8192,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 9.480503845214844,
+      "fp8_ms": 13.269090270996093,
+      "speedup": 0.7144803186649175,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0007071914151310921,
+        0.0008246765937656164,
+        0.0008571046637371182
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dw_compute_only",
+      "row_scales": true,
+      "compact_panels": true,
+      "role": "dw2",
+      "m": 8192,
+      "n": 2048,
+      "groups": 16,
+      "k_per_group": 2560,
+      "capacity": 65536,
+      "bf16_ms": 4.930184173583984,
+      "fp8_ms": 6.688198089599609,
+      "speedup": 0.7371468529394486,
+      "fp32_accumulation": true,
+      "sampled_reference_errors": [
+        0.0008623432950116694,
+        0.0008947662427090108,
+        0.0008499996038153768
+      ],
+      "quantization": "one scale per expert feature across token K",
+      "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 2103658,
+          "start_ticks": "18352785"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "fp8_k_grouped_dw_cpu_reference", "row_scales": true, "compact_panels": true, "m": 128, "n": 128, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.00018585279758553952, 0.00030259485356509686, 0.000325778586557135], "per_element_sum_absolute_product_error_bound": 0.001, "native_fp8_bf16_boundary_bitwise": true, "passed": true}
+{"case": "fp8_k_grouped_dw_cpu_reference", "row_scales": true, "compact_panels": true, "m": 256, "n": 384, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.00018577769515104592, 0.00029727007495239377, 0.00033831773907877505], "per_element_sum_absolute_product_error_bound": 0.001, "native_fp8_bf16_boundary_bitwise": true, "passed": true}
+{"case": "fp8_k_grouped_dw_cpu_reference", "row_scales": true, "compact_panels": true, "m": 384, "n": 512, "groups": 3, "capacity": 2048, "mutable_counts": true, "nonzero_offsets": true, "tail_zero": true, "zero_expert": true, "fp32_accumulation": true, "guarded_output": true, "invalid_metadata_guard": true, "every_element": true, "relative_errors": [0.00018583044584374875, 0.00029908024589531124, 0.0003381955320946872], "per_element_sum_absolute_product_error_bound": 0.001, "native_fp8_bf16_boundary_bitwise": true, "passed": true}
+{"case": "qwen_fp8_dw_compute_only", "row_scales": true, "compact_panels": true, "role": "dw1", "m": 4096, "n": 8192, "groups": 16, "k_per_group": 2560, "capacity": 65536, "bf16_ms": 9.480503845214844, "fp8_ms": 13.269090270996093, "speedup": 0.7144803186649175, "fp32_accumulation": true, "sampled_reference_errors": [0.0007071914151310921, 0.0008246765937656164, 0.0008571046637371182], "quantization": "one scale per expert feature across token K", "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result", "passed": true}
+{"case": "qwen_fp8_dw_compute_only", "row_scales": true, "compact_panels": true, "role": "dw2", "m": 8192, "n": 2048, "groups": 16, "k_per_group": 2560, "capacity": 65536, "bf16_ms": 4.930184173583984, "fp8_ms": 6.688198089599609, "speedup": 0.7371468529394486, "fp32_accumulation": true, "sampled_reference_errors": [0.0008623432950116694, 0.0008947662427090108, 0.0008499996038153768], "quantization": "one scale per expert feature across token K", "scope": "Prequantized DW compute only; panel quantization/transpose excluded and not a whole-step result", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2103658, "start_ticks": "18352785"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```
