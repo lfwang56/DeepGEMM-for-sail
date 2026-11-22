@@ -18,7 +18,7 @@ def main():
     h,i,e,k,t=256,256,2,2,17
     kwargs=dict(groups=groups,chunk_tokens=8,ring_rows=512,block_m=128,gate_up_layout='g8',
         expert_local_grad=True,reuse_packed_dy=True,fuse_activation_backward=True,
-        fuse_fc1_activation=True,transpose_free_dgrad=True,
+        fuse_fc1_activation=True,fuse_dhidden_scores=True,transpose_free_dgrad=True,
         gemm_configs={role:(256,64,64,64,3) for role in ('fc1','fc2','dhidden','dx')},
         device=device,check_errors=False,reuse_forward_context=True)
     cached=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=True,**kwargs)
