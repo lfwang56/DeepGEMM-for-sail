@@ -9,7 +9,7 @@ from moe_distributed_utils import destroy_training_process_group
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--dispatch-producer',action='store_true');parser.add_argument('--source-pipeline',action='store_true');parser.add_argument('--source-serialized',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--dispatch-producer',action='store_true');parser.add_argument('--source-pipeline',action='store_true');parser.add_argument('--source-serialized',action='store_true');parser.add_argument('--tail-dw-overlap',action='store_true');parser.add_argument('--tail-dw-serialized',action='store_true');args=parser.parse_args()
     rank,size=int(os.environ['RANK']),int(os.environ['WORLD_SIZE'])
     device=torch.device('cuda',int(os.environ['LOCAL_RANK']))
     torch.cuda.set_device(device);torch.set_num_threads(2);torch.manual_seed(12200+rank)
@@ -24,8 +24,8 @@ def main():
         device=device,check_errors=False,reuse_forward_context=True,
         dispatch_producer=args.dispatch_producer,producer_input_aiu=args.dispatch_producer,
         producer_local_aiu=args.dispatch_producer)
-    cached=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=True,source_pipeline=args.source_pipeline,source_serialized=args.source_serialized,**kwargs)
-    control=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=False,source_pipeline=False,source_serialized=False,**kwargs)
+    cached=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=True,source_pipeline=args.source_pipeline,source_serialized=args.source_serialized,tail_dw_overlap=args.tail_dw_overlap,tail_dw_serialized=args.tail_dw_serialized,**kwargs)
+    control=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=False,source_pipeline=False,source_serialized=False,tail_dw_overlap=False,tail_dw_serialized=False,**kwargs)
     x=(torch.randn(t,h,device=device)*.1).bfloat16()
     dy=(torch.randn_like(x)*.1).bfloat16()
     ids=((torch.arange(t,device=device)[:,None]+rank*t)*k+torch.arange(k,device=device))%(size*e)
@@ -47,7 +47,7 @@ def main():
         if reused:assert cached.forward_context_reused_windows.item()>0
         print(json.dumps(dict(case='hierarchical_pair_context_reference',name=name,rank=rank,
             ranks=size,logical_domains=2,physical_scope='one-host correctness only; no cross-domain performance claim',
-            reused=reused,source_pipeline=args.source_pipeline,source_serialized=args.source_serialized,dispatch_producer=args.dispatch_producer,errors=errors,every_element=True,passed=True)),flush=True)
+            reused=reused,source_pipeline=args.source_pipeline,source_serialized=args.source_serialized,tail_dw_overlap=args.tail_dw_overlap,tail_dw_serialized=args.tail_dw_serialized,dispatch_producer=args.dispatch_producer,errors=errors,every_element=True,passed=True)),flush=True)
     stream=torch.cuda.Stream(device);stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
         if args.source_pipeline:

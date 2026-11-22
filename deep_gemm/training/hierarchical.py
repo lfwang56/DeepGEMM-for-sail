@@ -86,7 +86,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
 
     def __init__(self, hidden, intermediate, local_experts, topk, max_tokens, *,
                  groups, chunk_tokens=128, device=None, check_errors=True, gradient_group=None,
-                 reuse_pair_context=None, source_pipeline=None, source_serialized=None, **peer_options):
+                 reuse_pair_context=None, source_pipeline=None, source_serialized=None, tail_dw_overlap=None, tail_dw_serialized=None, **peer_options):
         if not isinstance(groups, HierarchicalGroups) or groups._closed:
             raise ValueError('create and retain live HierarchicalGroups before constructing a plan')
         if min(max_tokens, chunk_tokens) < 1 or 2 * max_tokens * topk > 2**31 - 1:
@@ -119,6 +119,11 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             return value
         source_pipeline=flag(source_pipeline,'DG_MOE_HYBRID_SOURCE_PIPELINE')
         source_serialized=flag(source_serialized,'DG_MOE_HYBRID_SOURCE_SERIALIZED')
+        tail_dw_overlap=flag(tail_dw_overlap,'DG_MOE_HYBRID_TAIL_DW_OVERLAP')
+        tail_dw_serialized=flag(tail_dw_serialized,'DG_MOE_HYBRID_TAIL_DW_SERIALIZED')
+        self.hybrid_tail_dw_overlap=tail_dw_overlap
+        self.hybrid_tail_dw_serialized=tail_dw_serialized
+        self.hybrid_deferred_dw1_scheduled_last_backward=False
         self.hybrid_source_pipeline=source_pipeline
         self.hybrid_source_serialized=source_serialized
         self._source_forward_available=False
@@ -131,7 +136,7 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
         self._pair_forward_mask=None
         self._pair_forward_tensors=None
         description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
-                       groups.domain_size, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized)
+                       groups.domain_size, repr(sorted(peer_options.items())),reuse_pair_context,source_pipeline,source_serialized,tail_dw_overlap,tail_dw_serialized)
         descriptions = [None] * self.size
         dist.all_gather_object(descriptions, description, group=self.group)
         if any(item != description for item in descriptions):
@@ -140,6 +145,10 @@ class HierarchicalPeerMoEPlan(NativeMoEPlan):
             raise ValueError('source pipeline requires live pair context reuse')
         if source_serialized and not source_pipeline:
             raise ValueError('source serialization requires the source pipeline')
+        if tail_dw_overlap and not source_pipeline:
+            raise ValueError('tail DW overlap requires the source pipeline')
+        if tail_dw_serialized and not tail_dw_overlap:
+            raise ValueError('tail DW serialization requires deferred tail overlap')
         factor=1 if source_pipeline else 2
         self.inner = PeerMoEPlan(hidden, intermediate, local_experts, topk, factor * max_tokens,
                                  chunk_tokens=factor * chunk_tokens, group=groups.domain,

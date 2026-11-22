@@ -43,6 +43,8 @@ class PeerMoEPlan(NativeMoEPlan):
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
                  fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None,
                  fp8_input_cache_scales=None, reuse_forward_context=None, **kwargs):
+        self._pending_last_dw1=None
+        self._defer_last_dw1_enabled=False
         # Optional CTA helper recipe; environment values allow the same large
         # reference and capacity harnesses to exercise the exact candidate.
         def helper_value(value, key, default):
@@ -1336,8 +1338,14 @@ class PeerMoEPlan(NativeMoEPlan):
                 if not self.fuse_activation_backward:
                     self._activation(backward=True)
                 self._join_fp8_bf_input()
-                self._wgrad(self.gate_up, self.packed_x, dw1,
-                            asynchronous=self.wgrad_overlap != "none")
+                if (self._defer_last_dw1_enabled and self._using_forward_context
+                        and start+self.chunk_tokens>=self.max_tokens and window==0):
+                    # dX only reads these operands. The final window/chunk has
+                    # no following metadata overwrite before the caller joins.
+                    self._pending_last_dw1=(self.gate_up,self.packed_x,dw1,self.lengths)
+                else:
+                    self._wgrad(self.gate_up, self.packed_x, dw1,
+                                asynchronous=self.wgrad_overlap != "none")
                 self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
                                 write=self.fuse_return, destination="local_dx")
                 if not self.fuse_return:
@@ -1352,7 +1360,24 @@ class PeerMoEPlan(NativeMoEPlan):
         dscores[start:start + count].copy_(self.local_dscores[:count])
 
     @torch.no_grad()
+    def _run_deferred_dw1(self):
+        with self._execution():
+            pending=self._pending_last_dw1
+            if pending is None:
+                self._defer_last_dw1_enabled=False
+                return False
+            a,b,output,lengths=pending
+            if self.lengths.data_ptr()!=lengths.data_ptr():
+                raise RuntimeError('deferred DW1 metadata changed before completion')
+            self._wgrad(a,b,output,asynchronous=False)
+            self._pending_last_dw1=None
+            self._defer_last_dw1_enabled=False
+            return True
+
+    @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
+        if self._pending_last_dw1 is not None:
+            raise RuntimeError('complete deferred DW1 before reusing this workspace')
         with self._execution():
             self._dag_slot = 0
             self._validate(x, ids, scores, w1, w2, valid_tokens)
@@ -1367,7 +1392,14 @@ class PeerMoEPlan(NativeMoEPlan):
             return output
 
     @torch.no_grad()
-    def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None):
+    def backward(self, dy, x, ids, scores, w1, w2, valid_tokens, accumulators=None, *, _defer_last_dw1=False):
+        if self._pending_last_dw1 is not None:
+            raise RuntimeError('complete deferred DW1 before reusing this workspace')
+        if type(_defer_last_dw1) is not bool:raise TypeError('_defer_last_dw1 must be bool')
+        if _defer_last_dw1 and (self.compute!='bf16' or self.ring_rows is None
+                or not self.expert_local_grad or not self.reuse_forward_context or self.wgrad_overlap!='none'):
+            raise ValueError('deferred DW1 requires serial routed BF16 live-context gradients')
+        self._defer_last_dw1_enabled=_defer_last_dw1
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         _validate_accumulators(accumulators, w1, w2)
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():

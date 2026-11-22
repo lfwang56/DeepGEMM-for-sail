@@ -36,6 +36,17 @@ def _start(plan,payloads):
     return work
 
 
+def _start_reduce(plan,partials):
+    main=torch.cuda.current_stream(plan.device);aux=plan._source_pair_stream
+    outputs=[torch.empty_like(partial[:plan.max_tokens]) for partial in partials]
+    aux.wait_stream(main);work=[]
+    with torch.cuda.stream(aux):
+        for partial,output in zip(partials,outputs):
+            partial.record_stream(aux);output.record_stream(aux)
+            work.append(dist.reduce_scatter_tensor(output,partial,group=plan.groups.pair,async_op=True))
+    return work,outputs
+
+
 def _join(plan,work):
     # Queue local compute before any possibly host-blocking Work.wait().
     with torch.cuda.stream(plan._source_pair_stream):
@@ -90,12 +101,12 @@ def forward(plan,x,ids,scores,w1,w2,valid_tokens):
         return output
 
 
-def _backward(inner,reuse,dy,x,ids,scores,w1,w2,valid,accumulators):
+def _backward(inner,reuse,dy,x,ids,scores,w1,w2,valid,accumulators,defer_dw1=False):
     previous=inner.reuse_forward_context
     if not reuse:
         inner.reuse_forward_context=False
         inner._forward_context_available=False
-    try:return inner.backward(dy,x,ids,scores,w1,w2,valid,accumulators)
+    try:return inner.backward(dy,x,ids,scores,w1,w2,valid,accumulators,_defer_last_dw1=defer_dw1)
     finally:inner.reuse_forward_context=previous
 
 
@@ -124,8 +135,18 @@ def backward(plan,dy,x,ids,scores,w1,w2,valid_tokens,accumulators=None):
         if not plan.hybrid_source_serialized:_join(plan,work)
         if not reuse:remote_mask=_mask(plan,plan.source_remote_ids)
         remote_dx,dw1,dw2,remote_ds=_backward(plan.remote_inner,reuse,plan.source_remote_dy,
-            plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid,(dw1,dw2))
-        result=(plan._reduce_pair(_pair_result(plan,own_dx,remote_dx),x.shape[0]),dw1,dw2,
-                plan._reduce_pair(_pair_result(plan,own_ds,remote_ds),x.shape[0]))
+            plan.source_remote_x,remote_mask,plan.source_remote_scores,w1,w2,plan.inner_valid,(dw1,dw2),
+            defer_dw1=reuse and plan.hybrid_tail_dw_overlap)
+        plan.hybrid_deferred_dw1_scheduled_last_backward=plan.remote_inner._pending_last_dw1 is not None
+        if plan.hybrid_tail_dw_overlap:
+            partials=(_pair_result(plan,own_dx,remote_dx),_pair_result(plan,own_ds,remote_ds))
+            work,outputs=_start_reduce(plan,partials)
+            if plan.hybrid_tail_dw_serialized:_join(plan,work)
+            plan.remote_inner._run_deferred_dw1()
+            if not plan.hybrid_tail_dw_serialized:_join(plan,work)
+            result=(outputs[0][:x.shape[0]],dw1,dw2,outputs[1][:x.shape[0]])
+        else:
+            result=(plan._reduce_pair(_pair_result(plan,own_dx,remote_dx),x.shape[0]),dw1,dw2,
+                    plan._reduce_pair(_pair_result(plan,own_ds,remote_ds),x.shape[0]))
         if plan.check_errors and not torch.cuda.is_current_stream_capturing():plan.check()
         return result
