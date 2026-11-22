@@ -58,6 +58,7 @@ def main():
     parser.add_argument("--dgrad-compute-cus", type=int, default=0)
     parser.add_argument("--fuse-replay-gradients", action="store_true")
     parser.add_argument("--fuse-dhidden-scores", action="store_true")
+    parser.add_argument("--transpose-free-dgrad", action="store_true")
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
@@ -135,6 +136,7 @@ def main():
                            dgrad_compute_cus=args.dgrad_compute_cus,
                            fuse_replay_gradients=args.fuse_replay_gradients,
                          fuse_dhidden_scores=args.fuse_dhidden_scores,
+                         transpose_free_dgrad=args.transpose_free_dgrad,
                            ffn_fusion=args.ffn_fusion, expert_local_grad=args.expert_local_grad,
                            return_vector_bytes=args.return_vector_bytes,
                            fuse_fc1_activation=args.fuse_fc1_activation,

@@ -259,6 +259,7 @@ public:
         PeerReplayGradients gradients{};
         bool dhidden_scores = false;
         PeerDHiddenScores scores{};
+        bool weight_kn = false;
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -280,6 +281,7 @@ public:
         if (args.poll_pause_cycles) name += fmt::format("_pause{}", args.poll_pause_cycles);
         if (args.replay_gradients) name += "_replay_grad";
         if (args.dhidden_scores) name += "_dhidden_scores";
+        if (args.weight_kn) name += "_weight_kn";
         if (args.replay_warp_reduce) name += "_warp_reduce";
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
@@ -319,7 +321,8 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.interleaved_gate_up ? "true" : "false",
        args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
        args.input_copy_ilp, args.external_input ? "true" : "false", args.poll_yield_every, args.poll_pause_cycles,
-       args.dhidden_scores ? ", false, false, true"
+       args.weight_kn ? (args.dhidden_scores ? ", false, false, true, true" : ", false, false, false, true")
+                           : args.dhidden_scores ? ", false, false, true"
                            : args.replay_gradients ? (args.replay_warp_reduce ? ", true, true" : ", true") : "",
        args.pipeline.ready ? ", pipeline"
                            : args.replay_gradients ? ", deep_gemm::training::PeerDispatchPipeline{}, 0, ~0u, gradients"
@@ -356,7 +359,7 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true,
                       int input_copy_ilp = 1, bool external_input = false, int compute_cus = 0,
                       const std::vector<torch::Tensor>& replay_gradient_tensors = {},
-                      const std::vector<torch::Tensor>& dhidden_score_tensors = {}) {
+                      const std::vector<torch::Tensor>& dhidden_score_tensors = {}, bool weight_kn = false) {
     DG_HOST_ASSERT(!external_input || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !read_peer && !write_peer));
     DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
     DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu
@@ -378,7 +381,9 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     DG_HOST_ASSERT(out.scalar_type() == torch::kBFloat16);
     DG_HOST_ASSERT(a.numel() <= INT32_MAX && weight.numel() <= INT32_MAX && out.numel() <= INT32_MAX);
     const auto [m, k] = get_shape<2>(a);
-    const auto [groups, n, k_] = get_shape<3>(weight);
+    const auto [groups, weight_rows, weight_columns] = get_shape<3>(weight);
+    const int n = weight_kn ? weight_columns : weight_rows;
+    const int k_ = weight_kn ? weight_rows : weight_columns;
     DG_HOST_ASSERT(k == k_ && out.size(0) == m && out.size(1) == n && m > 0 && m % block_m == 0);
     DG_HOST_ASSERT(n > 0 && n % 128 == 0 && k > 0 && k % 128 == 0 && groups > 0);
     DG_HOST_ASSERT(source_peers.dim() == 1 && source_peers.numel() > 0 && source_peers.numel() <= 64);
@@ -476,6 +481,11 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.keep_gate_up = keep_gate_up;
     args.input_copy_ilp = input_copy_ilp;
     args.external_input = external_input;
+    DG_HOST_ASSERT(!weight_kn || (!read_peer && !fc1_activation && !pack_input
+                   && !dispatch_cache_n && !pipeline_ready.has_value()
+                   && replay_gradient_tensors.empty() && !local_input_aiu && !producer_input_aiu
+                   && !first_n_tile && !num_n_tiles && !staged_return));
+    args.weight_kn = weight_kn;
     if (!dhidden_score_tensors.empty()) {
         const auto& g = dhidden_score_tensors;
         DG_HOST_ASSERT(g.size() == 3 && replay_gradient_tensors.empty()
@@ -637,7 +647,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("keep_gate_up") = true, py::arg("input_copy_ilp") = 1,
           py::arg("external_input") = false, py::arg("compute_cus") = 0,
           py::arg("replay_gradient_tensors") = std::vector<torch::Tensor>{},
-          py::arg("dhidden_score_tensors") = std::vector<torch::Tensor>{});
+          py::arg("dhidden_score_tensors") = std::vector<torch::Tensor>{},
+          py::arg("weight_kn") = false);
 }
 
 }  // namespace deep_gemm::training

@@ -37,7 +37,15 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
                  input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False, dispatch_external_serial=False,
-                 fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, **kwargs):
+                 fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, transpose_free_dgrad=False, **kwargs):
+        if not isinstance(transpose_free_dgrad, bool):
+            raise TypeError("transpose_free_dgrad must be bool")
+        if transpose_free_dgrad and (not expert_local_grad or not reuse_packed_dy
+                or not fuse_dispatch or not fuse_return or not fuse_activation_backward
+                or ring_rows is None or dag_fusion or dag_backward or ffn_fusion
+                or dispatch_pipeline or return_pipeline or staged_return or dispatch_cache_n):
+            raise ValueError("transpose-free dGrad requires routed bilateral expert-local gradients")
+        self.transpose_free_dgrad = transpose_free_dgrad
         if not isinstance(fuse_dhidden_scores, bool):
             raise TypeError("fuse_dhidden_scores must be bool")
         if fuse_dhidden_scores and (not expert_local_grad or not reuse_packed_dy
@@ -238,6 +246,12 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and fuse_dispatch
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        if self.transpose_free_dgrad:
+            # dGrad reads the original expert parameters via native AIU Trans.
+            # Release the now-unused transposed weight copies.
+            for name in ('w1_t', 'w2_t'):
+                self.buffers.pop(name)
+                setattr(self, name, None)
         if self.overlap_expert_dy:
             self.packed_raw_dy = torch.empty_like(self.packed_dy)
             self.buffers["packed_raw_dy"] = self.packed_raw_dy
@@ -250,7 +264,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
                       self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
                       self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial,
-                      self.fuse_dhidden_scores)
+                      self.fuse_dhidden_scores, self.transpose_free_dgrad)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -397,6 +411,12 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.group is not None:
             dist.barrier(group=self.group)
 
+    def _prepare_weights(self, w1, w2, backward=False):
+        if self.transpose_free_dgrad:
+            self.w1_t, self.w2_t = w1, w2
+            return
+        return super()._prepare_weights(w1, w2, backward=backward)
+
     def _barrier(self, tag, compile_only=False):
         _peer(5, [self.pointer_tables["barrier_state"], self.barrier_state, self.status],
               [self.size, self.rank, 180 * 2_000_000_000, tag], compile_only)
@@ -413,6 +433,18 @@ class PeerMoEPlan(NativeMoEPlan):
         interleaved = self.g8_interleaved and (fc1_activation or (role == "dhidden" and self.fuse_activation_backward))
         if return_pipeline and not compile_only:
             self.return_pipeline_ready.zero_()
+        extra_arguments = []
+        if replay_gradients:
+            extra_arguments.append([self.pointer_tables['raw_dy'], self.pointer_tables['raw_scores'],
+                                    self.packed_dy, self.score_partials, self.status])
+        if self.fuse_dhidden_scores and role == 'dhidden':
+            if not extra_arguments:
+                extra_arguments.append([])
+            extra_arguments.append([self.hidden, self.packed_row_scores, self.score_partials])
+        if self.transpose_free_dgrad and role in ('dhidden', 'dx'):
+            while len(extra_arguments) < 2:
+                extra_arguments.append([])
+            extra_arguments.append(True)
         grid = dg._C._moe_training_peer_gemm(
             a, weight, output, self.pointer_tables[source], self.pointer_tables[destination],
             source_rows, self.permutation, self.work_info, self.num_blocks,
@@ -437,10 +469,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.input_copy_ilp if producer_input_aiu or (dispatch_pipeline and self.inline_dispatch) else 1,
             dispatch_pipeline and self.dispatch_external,
             self.dgrad_compute_cus if role in ("dhidden", "dx") else 0,
-            *([[self.pointer_tables['raw_dy'], self.pointer_tables['raw_scores'],
-                self.packed_dy, self.score_partials, self.status]] if replay_gradients else []),
-            *([[], [self.hidden, self.packed_row_scores, self.score_partials]]
-              if self.fuse_dhidden_scores and role == 'dhidden' else []),
+            *extra_arguments,
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"

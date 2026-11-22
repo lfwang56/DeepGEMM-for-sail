@@ -3799,3 +3799,55 @@ Timing records:
 ]
 
 47 failed the newly authored reference test before any timing. The test wrote a/b/device lengths on the caller stream and immediately read them on another stream without a dependency. Add wait_stream before each reference read; preserve bitwise equality, all shapes, dynamic inputs and invalid-argument gates. Kernel implementation and native7f30de6b are unchanged, so no JIT name change is required for this harness correction.
+
+
+## Iteration49 — direct original expert weights for dHidden/DX
+
+Use the native PPU AIU Trans=true B operand already validated by the existing
+KGrouped GEMM: conceptual [N,K], physical original [K,N] weights. A compile-time
+WeightKN flag and distinct _weight_kn name leave PeerGemmParams ABI unchanged.
+The appended default-false native/Python options retain previous behavior.
+Peer dHidden/DX use original W2/W1, freeing unused transpose buffers and
+avoiding the per-step transpose. Reject unsupported pipelines/DAG/FFN mixes
+and include the flag in the all-rank recipe agreement. Test math and layout
+against identical-input GEMMs plus unchanged full FP32/graph/distributed/skew
+gates before timing. New kernels use unique names because the JIT cache key
+does not hash included header contents.
+
+Keep score fusion46, H8192/I2048/E512/K10,T4096/C4096,ring65536,G8,BM256,
+MGroup/WGrad3, full FWD+BWD with FP32 DW zero/accumulation and strongest
+Elastic38 early-DY baseline. No reduced compute or missing gradients.
+48 full-grid chunks gave best concurrent83.176ms but serial79.925ms, so
+retain tile_chunk0 as the default/control.46 three-seed2000-step public LM
+full validation mean1.589567693 versusNative27 1.586408262(+0.199156%), all
+canonical initial hashes and clean audits matched; not Qwen convergence.
+
+Timings, with failed/partial phases retained in provenance:
+[
+  {
+    "phase": "qwen38-r2-weight49-control",
+    "clean": true,
+    "backend": "peer",
+    "ms": 79.96337280273437
+  },
+  {
+    "phase": "qwen38-r2-weight49-direct",
+    "clean": true,
+    "backend": "peer",
+    "ms": 77.261962890625
+  },
+  {
+    "phase": "qwen38-r2-weight49-direct-overlap",
+    "clean": true,
+    "backend": "peer",
+    "ms": 82.04461669921875
+  },
+  {
+    "phase": "qwen38-r2-weight49-elastic-early",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 105.7501708984375
+  }
+]
+
+First actual32 balanced/masked/skewed/reversed references passed. The following C4096-skew phase was interrupted by a whole-host gate75 on217; cancel only exact-tag owned partial ranks and switch to213/215/216/218. Preserve the rejected phase and rerun both references there before timings.

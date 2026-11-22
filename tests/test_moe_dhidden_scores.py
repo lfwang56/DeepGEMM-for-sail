@@ -19,6 +19,7 @@ def rms(a, b):
 
 def main():
     parser=argparse.ArgumentParser()
+    parser.add_argument('--transpose-free-dgrad',action='store_true')
     parser.add_argument('--hidden', type=int, default=256)
     parser.add_argument('--intermediate', type=int, default=128)
     parser.add_argument('--experts', type=int, default=4)
@@ -41,7 +42,8 @@ def main():
         gate_up_layout='g8',fuse_fc1_activation=True,expert_local_grad=True,
         reuse_packed_dy=True,fuse_activation_backward=True,dispatch_producer=True,
         producer_input_aiu=True,producer_local_aiu=True,input_copy_ilp=8,
-        fuse_dhidden_scores=True,wgrad_overlap=args.wgrad_overlap,check_errors=False,
+        fuse_dhidden_scores=True,transpose_free_dgrad=args.transpose_free_dgrad,
+        wgrad_overlap=args.wgrad_overlap,check_errors=False,
         gemm_configs={r:(256,64,64,64,3) for r in ('fc1','fc2','dhidden','dx')})
     acc=(torch.zeros_like(w1,dtype=torch.float32),torch.zeros_like(w2,dtype=torch.float32))
     def step():

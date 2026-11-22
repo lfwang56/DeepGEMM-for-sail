@@ -656,7 +656,8 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
           bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0,
-          bool ReplayGradients = false, bool ReplayWarpReduction = false, bool DHiddenScores = false>
+          bool ReplayGradients = false, bool ReplayWarpReduction = false, bool DHiddenScores = false,
+          bool WeightKN = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -774,7 +775,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
 
     // load B from hbm to tsm: use aiu load.
     using GemmOperandB = cutlass::gemm::config::DefaultGemm_AIU_Operand<
-            ArchTag, SrcT, false, cute::Int<BLOCK_N>, cute::Int<BLOCK_K>, true>;
+            ArchTag, SrcT, WeightKN, cute::Int<BLOCK_N>, cute::Int<BLOCK_K>, true>;
     using SmemLayoutB = decltype(tile_to_shape(typename GemmOperandB::SmemLayoutAtom{},
             Shape<cute::Int<BLOCK_N>, cute::Int<BLOCK_K>, cute::Int<kNumStages>>{}));
 
@@ -782,11 +783,16 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
     typename GemmOperandB::GmemTiledCopy gmem_tiled_copy_B;
     using TilerB = typename GemmOperandB::GmemTiledCopy::Tiler_MN;
     auto shape_B = cute::make_shape(Int<SHAPE_N>{}, Int<SHAPE_K>{});
-    auto stride_B = cute::make_shape((int)SHAPE_K, _1{});
-    gmem_tiled_copy_B.desc_.template init<SrcT, false, get<0>(TilerB{}), get<1>(TilerB{})>(nullptr, SHAPE_N, SHAPE_K, stride_B);
+    auto stride_B = [] {
+        if constexpr (WeightKN) return cute::make_stride(_1{}, Int<SHAPE_N>{});
+        else return cute::make_shape((int)SHAPE_K, _1{});
+    }();
+    gmem_tiled_copy_B.desc_.template init<SrcT, WeightKN, get<0>(TilerB{}), get<1>(TilerB{})>(nullptr, SHAPE_N, SHAPE_K, stride_B);
     auto gmem_thr_copy_B = gmem_tiled_copy_B.get_slice(thread_idx);
     Tensor sB = cute::make_tensor(cute::make_smem_ptr(smem_b), SmemLayoutB{});
     Tensor tBsB = gmem_thr_copy_B.partition_D(sB);
+    static_assert(cute::cosize_v<SmemLayoutB> * sizeof(SrcT)
+        <= smem_b_size(sizeof(SrcT), kNumStages, BLOCK_N, BLOCK_K));
 
     //
     // MMA Atom partitioning
