@@ -10166,3 +10166,285 @@ both transposed weights. Isolated events only; no full-step promotion.
 
 Failure tail:
 {"case": "idle_node_gate", "host": "e01-cn-2n550vu1t01-a0006", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": false, "processes": [{"gpu": 0, "pid": 3205466, "owned": false}, {"gpu": 1, "pid": 3205467, "owned": false}, {"gpu": 2, "pid": 3205468, "owned": false}, {"gpu": 3, "pid": 3205469, "owned": false}, {"gpu": 4, "pid": 3205470, "owned": false}, {"gpu": 5, "pid": 3205471, "owned": false}, {"gpu": 6, "pid": 3205472, "owned": false}, {"gpu": 7, "pid": 3205473, "owned": false}]}
+
+
+## Iteration68 — idle-host retry of cached quantizer validation
+
+66 launch failed before compilation: helper was published at repository root,
+while command incorrectly named build/campaign/run-quant66.py. Preserve
+failed whole-host audit, correct command to root/run-quant66.py and rerun
+the unchanged66 C++ and bitwise/graph fixture.
+67 whole-host gate correctly rejected218 when it became occupied; no
+compilation or GPU test executed. Change host and use a bounded idle-host
+retry controller. Preserve both failed launches, no speedup inferred.
+
+64 paired exact three-graph profiles: control121.719230ms versus
+async126.565480ms. Weight quantization26.903903->29.2738ms,
+DeepEP main12.271229->19.364288ms, weight transpose2.5809->4.368ms.
+Only2.633699ms weight quantization overlaps the DeepEP family, no
+weight-quant/GEMM overlap. Keep the serial path. The trace shows
+simultaneous work but not a step-time reduction.
+
+Add opt-in device operations29/30, retaining operation10 and all
+production-plan defaults. Each256-thread CTA loads its128x128 BF16
+block once using eight uint4 vectors per thread, retains packed words,
+reduces the unchanged block scale, converts with the same native
+E4M3 pair operation and division, and writes uint2 vectors. Two max
+strategies: four FP32 chains versus integer BF16 absolute-value bits
+(ignoring NaNs and retaining infinity). Restrict the active-row MN
+layout specialization to operations26--28; weight dimensions must not
+be interpreted as that layout flag. Params ABI unchanged.
+
+Validate every output byte/scale plus canaries against operation10
+with random/zero/nonfinite/subnormal/extreme BF16 inputs and changed
+weights under graph replay. Shapes include actual Qwen W1/W2 and
+both transposed weights. Isolated events only; no full-step promotion.
+
+{
+  "clean": true,
+  "reference_count": 48,
+  "every_reference_passed": true,
+  "measurements": [
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        4096,
+        8192
+      ],
+      "operation": 10,
+      "median_event_ms": 5.973215103149414,
+      "samples": [
+        5.972097015380859,
+        5.9747661590576175,
+        5.972817993164062,
+        5.974420166015625,
+        5.972595977783203,
+        5.975783157348633,
+        5.973215103149414
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        4096,
+        8192
+      ],
+      "operation": 29,
+      "median_event_ms": 2.0370059967041017,
+      "samples": [
+        2.034626007080078,
+        2.0370059967041017,
+        2.037252998352051,
+        2.0376909255981444,
+        2.036130905151367,
+        2.038563919067383,
+        2.0358110427856446
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        4096,
+        8192
+      ],
+      "operation": 30,
+      "median_event_ms": 1.5708410263061523,
+      "samples": [
+        1.570851993560791,
+        1.569838047027588,
+        1.5713760375976562,
+        1.570928955078125,
+        1.5699569702148437,
+        1.5708410263061523,
+        1.5699210166931152
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "operation": 10,
+      "median_event_ms": 5.9773399353027346,
+      "samples": [
+        5.978261184692383,
+        5.9773399353027346,
+        5.978126144409179,
+        5.976187896728516,
+        5.976858901977539,
+        5.976768112182617,
+        5.978097152709961
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "operation": 29,
+      "median_event_ms": 2.0417150497436523,
+      "samples": [
+        2.042066955566406,
+        2.041826057434082,
+        2.0417150497436523,
+        2.0423580169677735,
+        2.0408729553222655,
+        2.0401159286499024,
+        2.041259002685547
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        8192,
+        4096
+      ],
+      "operation": 30,
+      "median_event_ms": 1.5682970046997071,
+      "samples": [
+        1.5678930282592773,
+        1.5682970046997071,
+        1.5684590339660645,
+        1.5675479888916015,
+        1.5685750007629395,
+        1.5681180000305175,
+        1.5684269905090331
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "operation": 10,
+      "median_event_ms": 2.9955089569091795,
+      "samples": [
+        2.9953969955444335,
+        2.9940860748291014,
+        2.995772933959961,
+        2.9964599609375,
+        2.9940959930419924,
+        2.9955089569091795,
+        2.9958030700683596
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "operation": 29,
+      "median_event_ms": 1.0277190208435059,
+      "samples": [
+        1.0264739990234375,
+        1.028250026702881,
+        1.028299045562744,
+        1.0272600173950195,
+        1.0277190208435059,
+        1.0280420303344726,
+        1.0268759727478027
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        8192,
+        2048
+      ],
+      "operation": 30,
+      "median_event_ms": 0.7932610034942627,
+      "samples": [
+        0.7926050186157226,
+        0.7928540229797363,
+        0.7936039924621582,
+        0.7927040100097656,
+        0.7934490203857422,
+        0.7932610034942627,
+        0.793356990814209
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        2048,
+        8192
+      ],
+      "operation": 10,
+      "median_event_ms": 2.9997079849243162,
+      "samples": [
+        3.0001359939575196,
+        2.998876953125,
+        2.9983720779418945,
+        2.9997079849243162,
+        2.998954010009766,
+        2.9998170852661135,
+        3.000227928161621
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        2048,
+        8192
+      ],
+      "operation": 29,
+      "median_event_ms": 1.0257360458374023,
+      "samples": [
+        1.0248499870300294,
+        1.025477981567383,
+        1.0258769989013672,
+        1.0259059906005858,
+        1.0257360458374023,
+        1.0250539779663086,
+        1.0257949829101562
+      ],
+      "scope": "isolated weight quantization only"
+    },
+    {
+      "case": "cached_weight_quantization_signal",
+      "shape": [
+        16,
+        2048,
+        8192
+      ],
+      "operation": 30,
+      "median_event_ms": 0.7929240226745605,
+      "samples": [
+        0.792234992980957,
+        0.7936460018157959,
+        0.7929679870605468,
+        0.7929269790649414,
+        0.7927199840545655,
+        0.7928770065307618,
+        0.7929240226745605
+      ],
+      "scope": "isolated weight quantization only"
+    }
+  ],
+  "scope": "isolated weight quantizer, no EP/full-step fusion speedup"
+}
