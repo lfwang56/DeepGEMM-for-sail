@@ -35740,3 +35740,765 @@ Rawfailuretail:
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3967940, "start_ticks": "19066362"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration108 — pipeline BF16 peer input, quantization and FP8 FC1
+
+NewpeerOp25 owns one M128 tile, caches source row addresses, packs original
+BF16 X for FP32 DW, quantizes to the unchanged E4M3 recipe, coalesces scale
+stores through shared memory, fences all outputs and publishes READY.
+DG_MOE_FP8_BF16_INPUT_PIPELINE1 enables a separate producer stream and
+bounded producer CTA grid. Native FP8 consumers acquire covered M128 tiles
+and leave producer_ctas CUs available by limiting their persistent grid.
+This is a CTA budget, not physical CU affinity. Forward contexts retain BF16
+X; no second backward BF16 dispatch is needed for cached windows.
+Serialized and serialized-full-grid controls remain available. No promotion
+until independent EP8/EP32 mutable graph and full-step comparisons pass.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 4,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 69.0241943359375,
+      "speedup": 0.03619102047197417,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 8,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 34.539248657226565,
+      "speedup": 0.07232514103200607,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 12,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 23.211715698242188,
+      "speedup": 0.10762048194751128,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 16,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 17.189590454101562,
+      "speedup": 0.14532376655183096,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 24,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 12.010517883300782,
+      "speedup": 0.20798903548919334,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 32,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 8.580982208251953,
+      "speedup": 0.2911153956095104,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 65536,
+      "active": 40960,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 4,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 69.0241943359375,
+      "speedup": 0.03619102047197417,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 8,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 34.539248657226565,
+      "speedup": 0.07232514103200607,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 12,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 23.211715698242188,
+      "speedup": 0.10762048194751128,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 16,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 17.189590454101562,
+      "speedup": 0.14532376655183096,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 24,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 12.010517883300782,
+      "speedup": 0.20798903548919334,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_performance",
+      "producer_ctas": 32,
+      "before_ms": 2.4980560302734376,
+      "after_ms": 8.580982208251953,
+      "speedup": 0.2911153956095104,
+      "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 1574238,
+          "start_ticks": "217755004"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0004", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "quantized_tile_publication_reference", "width": 128, "capacity": 512, "active": 0, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 128, "capacity": 512, "active": 128, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 128, "capacity": 512, "active": 256, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 128, "capacity": 512, "active": 512, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 0, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 128, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 256, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 512, "capacity": 512, "active": 512, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 0, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 128, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 256, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 512, "active": 512, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_reference", "width": 8192, "capacity": 65536, "active": 40960, "graph": true, "mutable_sources": true, "every_element": true, "gates": {"cpu_bf16_bits": true, "bf16_bits": true, "q_bits": true, "scale_bits": true, "bf_guards": true, "q_guards": true, "sf_guards": true, "ready": true, "ready_guards": true, "status": true}, "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 4, "before_ms": 2.4980560302734376, "after_ms": 69.0241943359375, "speedup": 0.03619102047197417, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 8, "before_ms": 2.4980560302734376, "after_ms": 34.539248657226565, "speedup": 0.07232514103200607, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 12, "before_ms": 2.4980560302734376, "after_ms": 23.211715698242188, "speedup": 0.10762048194751128, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 16, "before_ms": 2.4980560302734376, "after_ms": 17.189590454101562, "speedup": 0.14532376655183096, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 24, "before_ms": 2.4980560302734376, "after_ms": 12.010517883300782, "speedup": 0.20798903548919334, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "quantized_tile_publication_performance", "producer_ctas": 32, "before_ms": 2.4980560302734376, "after_ms": 8.580982208251953, "speedup": 0.2911153956095104, "scope": "Local producer and READY reset only; no GEMM overlap and no cross-host traffic", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1574238, "start_ticks": "217755004"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```
