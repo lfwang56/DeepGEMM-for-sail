@@ -1,6 +1,6 @@
 """Two logical domains on one host: live context and all-rank invalidation gates."""
 from datetime import timedelta
-import json,os
+import argparse,json,os
 import torch
 import torch.distributed as dist
 from deep_gemm.training.hierarchical import HierarchicalPeerMoEPlan,make_hierarchical_groups
@@ -9,6 +9,7 @@ from moe_distributed_utils import destroy_training_process_group
 
 
 def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--dispatch-producer',action='store_true');args=parser.parse_args()
     rank,size=int(os.environ['RANK']),int(os.environ['WORLD_SIZE'])
     device=torch.device('cuda',int(os.environ['LOCAL_RANK']))
     torch.cuda.set_device(device);torch.set_num_threads(2);torch.manual_seed(12200+rank)
@@ -20,7 +21,9 @@ def main():
         expert_local_grad=True,reuse_packed_dy=True,fuse_activation_backward=True,
         fuse_fc1_activation=True,fuse_dhidden_scores=True,transpose_free_dgrad=True,
         gemm_configs={role:(256,64,64,64,3) for role in ('fc1','fc2','dhidden','dx')},
-        device=device,check_errors=False,reuse_forward_context=True)
+        device=device,check_errors=False,reuse_forward_context=True,
+        dispatch_producer=args.dispatch_producer,producer_input_aiu=args.dispatch_producer,
+        producer_local_aiu=args.dispatch_producer)
     cached=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=True,**kwargs)
     control=HierarchicalPeerMoEPlan(h,i,e,k,t,reuse_pair_context=False,**kwargs)
     x=(torch.randn(t,h,device=device)*.1).bfloat16()
@@ -44,7 +47,7 @@ def main():
         if reused:assert cached.forward_context_reused_windows.item()>0
         print(json.dumps(dict(case='hierarchical_pair_context_reference',name=name,rank=rank,
             ranks=size,logical_domains=2,physical_scope='one-host correctness only; no cross-domain performance claim',
-            reused=reused,errors=errors,every_element=True,passed=True)),flush=True)
+            reused=reused,dispatch_producer=args.dispatch_producer,errors=errors,every_element=True,passed=True)),flush=True)
     stream=torch.cuda.Stream(device);stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(stream):
         a=step(cached);b=step(control);check('live_eager',a,b,True)

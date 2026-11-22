@@ -1078,7 +1078,10 @@ class PeerMoEPlan(NativeMoEPlan):
             return
         if not self.fuse_dispatch:
             self._stage_input()
-        self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output or self.reuse_forward_context,
+        # A reused BF16 forward must retain expert-packed X for DW1 even
+        # when FC1 directly reads peers without a separate producer.
+        self._fc1(w1, pack_input=pack_input or (return_output and self.reuse_forward_context),
+                  keep_gate_up=not return_output or self.reuse_forward_context,
                   prefetch_dy=prefetch_dy)
         if not self.fuse_fc1_activation:
             self._activation()
