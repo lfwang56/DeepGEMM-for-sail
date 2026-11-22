@@ -33,7 +33,7 @@ def panels(left,right,counts,offsets):
         if left.device.type=='cpu':
             ar=(aq.float().reshape(m,padded//128,128)*sa[...,None]).reshape_as(a)
             br=(bq.float().reshape(n//128,128,padded//128,128)*sb[:,None,:,None]).reshape_as(b)
-            expected.append(ar@br.t())
+            expected.append((ar@br.t(),ar.abs()@br.abs().t()))
     return (ql,sl),(qr,sr),expected
 
 
@@ -65,15 +65,36 @@ def unit(m,n):
         initial=torch.randn(g,m,n,generator=rng)*.01;out.copy_(initial)
         graph.replay();torch.cuda.synchronize()
         want=initial.clone()
+        bounds=torch.zeros_like(want)
         for j,value in enumerate(expected):
-            if value is not None:want[j]+=value
+            if value is not None:want[j]+=value[0];bounds[j]=value[1]
         actual=out.cpu();err=rel(actual,want);errors.append(err)
-        assert err<.003 and torch.allclose(actual,want,rtol=.01,atol=1e-4),err
+        scaled_error=float(((actual-want).abs()/(bounds+1e-5)).max())
+        assert err<.003 and scaled_error<.001,(err,scaled_error)
+        # Verify the reused Tensor Cell mainloop independently against the
+        # established native FP8 GEMM, at its BF16 output boundary. This
+        # separates inherited scale/accumulator rounding from layout errors.
+        out.zero_();graph.replay();torch.cuda.synchronize()
+        for j,count in enumerate(counts):
+            if not count:
+                assert not torch.count_nonzero(out[j]);continue
+            start=offsets[j];k=(count+127)//128*128
+            qa=a[0][:,start:start+k].contiguous()
+            sa=a[1][start//128:(start+k)//128].contiguous().t()
+            qb=b[0][:,start:start+k].contiguous().unsqueeze(0)
+            sb=b[1][:,start//128:(start+k)//128].contiguous().unsqueeze(0)
+            native=torch.empty(m,n,device='cuda',dtype=torch.bfloat16)
+            info=torch.zeros(m//128,device='cuda',dtype=torch.int32)
+            length=torch.tensor([m],device='cuda',dtype=torch.int32)
+            dg.m_grouped_fp8_gemm_nt_nopad((qa,sa),(qb,sb),native,info,m_rows=length,
+                disable_ue8m0_cast=True,configs=(dg.get_num_sms(),128,128,128,32,64,3,(0,0,0)))
+            torch.cuda.synchronize()
+            assert torch.equal(out[j].bfloat16(),native),'DW primitive/native FP8 boundary mismatch'
         assert not status.item() and torch.all(raw[:16]==113) and torch.all(raw[-16:]==113)
     before=out.clone();lens[1]=513;status.zero_();graph.replay();torch.cuda.synchronize()
     assert status.item()==2 and torch.equal(out[1],before[1])
     assert torch.all(raw[:16]==113) and torch.all(raw[-16:]==113)
-    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,passed=True)),flush=True)
+    print(json.dumps(dict(case='fp8_k_grouped_dw_cpu_reference',m=m,n=n,groups=g,capacity=r,mutable_counts=True,nonzero_offsets=True,tail_zero=True,zero_expert=True,fp32_accumulation=True,guarded_output=True,invalid_metadata_guard=True,every_element=True,relative_errors=errors,per_element_sum_absolute_product_error_bound=.001,native_fp8_bf16_boundary_bitwise=True,passed=True)),flush=True)
 
 
 def large(role):

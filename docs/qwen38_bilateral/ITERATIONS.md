@@ -16491,3 +16491,80 @@ AssertionError: 0.00012585666263476014
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1520841, "start_ticks": "18125235"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
 
 ```
+
+
+## Iteration93 — validate FP8 DW against inherited native arithmetic
+
+92 closed78980973a1. Nativecompiled5ab243c178e2fa538cdbd5ff7baa6112bc7f944489fbb71c87551f65d242945a.
+First128x128CPU/mutablegraph/canary/invalidmetadatacase passed.
+256x384caseRMS0.00012586 was below0.003 butfailedanabsolute1e-4
+near-zeroallclosethreshold. Noendtoendtrainingorperformanceclaim.
+
+Keepkernelunchanged. AddanindependentestablishednativeFP8GEMMcheck:
+foreachexpert,compactthesamequantizedoperands/scalesanduseexisting
+MGroupedNoPadGEMMwithmatching128x128warp/stageconfiguration. Require
+everycustomDWfloat32elementroundstotheexactsameBF16outputasnative.
+RetainCPUall-outputRMS0.003andboundeachoutput'sabsoluteerror by
+0.001timesindependentabs(A)@abs(B).T+1e-5, whichdoesnotdivideby
+near-zerocancellationresults. KeepFP32accumulationchecks, changeddata/
+counts,nonzerooffsets,tails,zeroexperts,canariesandinvalidmetadata.
+Thisaddsanexplicitnativearithmeticgateinstead ofassumingtheexisting
+PPUTensorCellmainloophasexactSIMTfloat32rounding.
+
+PrequantizedQwenDW1/DW2componentbenchmarkonlyafterallnumericgates.
+Quantization/transposecoststillnotincluded;integrationandqualitypending.
+
+{
+  "clean": false,
+  "passed": false,
+  "metrics": [],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 1563936,
+          "start_ticks": "18142687"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 1
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad.py", line 135, in <module>
+    for shape in ((128,128),(256,384),(384,512)):unit(*shape)
+                                                 ^^^^^^^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_fp8_wgrad.py", line 89, in unit
+    dg.m_grouped_fp8_gemm_nt_nopad((qa,sa),(qb,sb),native,info,m_rows=length,
+RuntimeError: Assertion error (/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/gemm.hpp:874): m == m_ && m_ == m__ && k == k_ && n == n_
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1563936, "start_ticks": "18142687"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
+
+```
