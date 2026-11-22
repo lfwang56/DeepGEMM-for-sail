@@ -962,7 +962,8 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
                                         const torch::Tensor& b,
                                         const torch::Tensor& d,
                                         const torch::Tensor& grouped_layout,
-                                        const int max_group_k) {
+                                        const int max_group_k,
+                                        const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && a.is_contiguous());
     DG_HOST_ASSERT(b.is_cuda() && b.dim() == 2 && b.is_contiguous());
     DG_HOST_ASSERT(d.is_cuda() && d.dim() == 3 && d.is_contiguous());
@@ -988,8 +989,14 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
             && right < left + lhs.numel() * lhs.element_size();
     };
     DG_HOST_ASSERT(!overlaps(d, a) && !overlaps(d, b) && !overlaps(d, grouped_layout));
+    if (cta_probe.has_value()) {
+        DG_HOST_ASSERT(cta_probe->is_cuda() && cta_probe->device() == a.device());
+        DG_HOST_ASSERT(cta_probe->scalar_type() == torch::kInt64 && cta_probe->is_contiguous());
+        DG_HOST_ASSERT(!overlaps(*cta_probe, a) && !overlaps(*cta_probe, b)
+                       && !overlaps(*cta_probe, d) && !overlaps(*cta_probe, grouped_layout));
+    }
     k_grouped_bf16_gemm_tn_contiguous_impl(
-        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true);
+        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true, cta_probe);
 }
 
 void m_grouped_bf16_gemm_nt_contiguous(const torch::Tensor& lhs, const torch::Tensor& rhs,
@@ -2011,7 +2018,8 @@ static void acblaslt_gemm_tt(const torch::Tensor& a, const torch::Tensor& b,
 
 static void register_apis(pybind11::module_& m) {
     m.def("k_grouped_bf16_gemm_tn_device", &k_grouped_bf16_gemm_tn_device,
-          py::arg("a"), py::arg("b"), py::arg("d"), py::arg("grouped_layout"), py::arg("max_group_k"));
+          py::arg("a"), py::arg("b"), py::arg("d"), py::arg("grouped_layout"), py::arg("max_group_k"),
+          py::arg("cta_probe") = std::nullopt);
     // BF16 GEMMs
     m.def("gemm_fp32_fp32_fp32_nt", &gemm_fp32_fp32_fp32_nt,
           py::arg("a"), py::arg("b"), py::arg("d"));

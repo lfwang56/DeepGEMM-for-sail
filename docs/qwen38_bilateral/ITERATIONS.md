@@ -3528,3 +3528,33 @@ MGroup/WGrad stage3,BF16. Only whole-host-clean four-node phases count.
 Fastest accepted peer: {"name": "qwen38-wlf-ep32-iter44-warp-control-attempt0", "backend": "peer", "ms": 83.1763671875}
 
 Fastest accepted elastic: {"name": "qwen38-wlf-ep32-iter44-warp-elastic-early", "backend": "elastic", "ms": 105.67620849609375}
+
+
+## Iteration45 — per-CTA clocks to distinguish residency from kernel spans
+
+The resumed24h campaign first corrected the prior DW causal attribution. Matched
+immutable-wheel profiles, same4hosts, sameH8192/I2048/E512/top10,T4096/C4096,
+G8,BM256,MGroup/WGradstage3 gave:
+
+| Configuration | DWtotalms | GPUkernelunionms | WGgrid |
+| --- | ---: | ---: | ---: |
+| Fullserial |16.184150|83.539595|39|
+| WG16/DGrad23serial |38.071336|117.683016|16|
+| WG16/DGrad23parallel |38.217898|89.997003|16|
+| Fullparallel |31.772179|87.855552|39|
+
+Thus the old16.6->37.8 comparison mostly mixed CTA capacity with concurrency.
+Matchedcappedparalleladds0.4%DWspan, whilefullgridparallelnearlydoublesDWspan.
+This diagnosticadds an optionalInt64CUDAprobe to the dynamic BF16 WGrad API,
+with a distinct kernel name/signature; defaultNone leaves the old call and
+KGroupedGemmArgs GPUABI unchanged. It records native SDK2.2 __ppu_read_clock64
+perCTAentry/exit, finalCTAbarrier, rejectsincorrectdtype/device/contiguity/alias
+orcapacity. PerCTAelapsed includesstalls/preemptionafterentry and is notpureMMA
+time. CrossCUclockvaluesareNOTcompared. A manualdiagnosticplan subclass passes
+a separate caller-ownedbufferperWGcall and retainslifetimesonauxiliarystream.
+FullQwenoutputs/gradientsarecheckedbitwiseto uninstrumentedplansbeforeprofiling.
+Thisisdiagnostic-only, NOTanoptimizationwin. No change to numerical thresholds,
+modelwork, strong baselineorproductionrecipe. Wholehostauditsgovernacceptance.
+
+Closure records:
+[]

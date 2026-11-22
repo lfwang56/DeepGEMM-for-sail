@@ -30,12 +30,14 @@ public:
         int warp_map;
         bool aiu_before_tsm;
         std::string kernel_name;
+        bool cta_probe = false;
     };
 
     struct Args {
         LaunchInfo launch_info;
         LaunchArgs launch_args;
         KGroupedGemmArgs kernel_params;
+        void* cta_probe_ptr = nullptr;
     };
 
     static std::string generate_impl(const Args& args) {
@@ -60,13 +62,15 @@ constexpr uint32_t BLOCK_SIZE = 32 * (BLOCK_M / WARP_M) * (BLOCK_N / WARP_N);
 
 extern "C"
 __launch_bounds__(BLOCK_SIZE, 1)
-__global__ void {}(const KGroupedGemmArgs args) {{
+__global__ void {}(const KGroupedGemmArgs args{}) {{
+    {}
     bf16_k_grouped_gemm_impl<
         cutlass::bfloat16_t, float, GemmType::KGroupedContiguous,
         SHAPE_M, SHAPE_N, NUM_GROUPS,
         BLOCK_M, BLOCK_N, BLOCK_K, WARP_M, WARP_N, BLOCK_SIZE, NUM_STAGES, true,
         WARP_MAP, AIU_BEFORE_TSMLD
     >(args);
+    {}
 }}
 
 }}  // namespace deep_gemm
@@ -82,11 +86,20 @@ __global__ void {}(const KGroupedGemmArgs args) {{
             args.launch_info.num_stages,
             args.launch_info.warp_map,
             args.launch_info.aiu_before_tsm,
-            args.launch_info.kernel_name);
+            args.launch_info.kernel_name,
+            args.launch_info.cta_probe ? ", unsigned long long* cta_probe" : "",
+            args.launch_info.cta_probe ? "const unsigned long long cta_begin = __ppu_read_clock64();" : "",
+            args.launch_info.cta_probe ?
+                "__syncthreads(); if (threadIdx.x == 0) { "
+                "cta_probe[2 * blockIdx.x] = cta_begin; "
+                "cta_probe[2 * blockIdx.x + 1] = __ppu_read_clock64(); }" : "");
     }
 
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params));
+        if (args.launch_info.cta_probe)
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.cta_probe_ptr));
+        else
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params));
     }
 };
 
@@ -95,7 +108,8 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const std::optional<torch::Tensor>& c, const torch::Tensor& d,
     const int& m, const int& n, const int& sum_k,
     const std::vector<int>& ks_cpu, const torch::Tensor& grouped_layout,
-    const bool device_lengths = false) {
+    const bool device_lengths = false,
+    const std::optional<torch::Tensor>& cta_probe = std::nullopt) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
     // Follow upstream: choose the config using the largest group's K.
     const auto max_k = *std::max_element(ks_cpu.begin(), ks_cpu.end());
@@ -112,11 +126,12 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const int block_size = 32 * (block_m / warp_m) * (block_n / warp_n);
     const int smem_size = static_cast<int>(gemm_smem_total_size(
         2, num_stages, block_m, block_n, block_k));
-    const std::string kernel_name = "bf16_k_grouped_gemm";
+    const std::string kernel_name = cta_probe.has_value()
+        ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,
-                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name},
+                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value()},
         .launch_args = {get_grid_shape(num_sms), dim3(block_size), smem_size},
         .kernel_params = {
             .a_ptr = a.data_ptr(),
@@ -145,6 +160,10 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     if (compute_cus)
         args.launch_args.grid_dim.x = std::min(args.launch_args.grid_dim.x,
                                               uint32_t(compute_cus * blocks_per_cu));
+    if (cta_probe.has_value()) {
+        DG_HOST_ASSERT(cta_probe->numel() >= 2 * args.launch_args.grid_dim.x);
+        args.cta_probe_ptr = cta_probe->data_ptr();
+    }
 
     DgProfParam dg_prof_params;
     if (deep_gemm::profiling_enabled() && !device_lengths) {
