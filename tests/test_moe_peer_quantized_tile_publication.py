@@ -4,7 +4,7 @@ import torch
 import deep_gemm as dg
 
 
-def fixture(width,capacity=512,tokens=83,measure=False,co_resident=False,elastic_workers=False):
+def fixture(width,capacity=512,tokens=83,measure=False,co_resident=False,elastic_workers=False,slices=1):
     world,k=4,10
     x=(torch.randn(world,tokens,width,device='cuda')*.2).bfloat16()
     table=torch.tensor([x[j].data_ptr() for j in range(world)],device='cuda',dtype=torch.int64)
@@ -22,7 +22,7 @@ def fixture(width,capacity=512,tokens=83,measure=False,co_resident=False,elastic
         ctas=(4*dg.get_num_sms() if elastic_workers else dg.get_num_sms() if co_resident else 8) if ctas is None else ctas
         ready.zero_()
         dg._C._moe_training_peer_launch(25,[table,perm,bf,status,blocks,q,sf,ready],
-            [*dims,ctas,2 if elastic_workers else int(co_resident)] if co_resident else [*dims,ctas])
+            [*dims,ctas,2 if elastic_workers else int(co_resident),slices])
     control();producer();torch.cuda.synchronize()
     cg,pg=torch.cuda.CUDAGraph(),torch.cuda.CUDAGraph()
     with torch.cuda.graph(cg):control()
@@ -33,8 +33,8 @@ def fixture(width,capacity=512,tokens=83,measure=False,co_resident=False,elastic
         bfraw.fill_(-19);qraw.fill_(117);sfraw.fill_(-17);refbf.fill_(-19);refq.view(torch.uint8).fill_(117);refsf.fill_(-17);status.zero_()
         cg.replay();pg.replay();torch.cuda.synchronize()
         safe=ids[:active].clamp(min=0);expected=x[safe//(tokens*k),(safe%(tokens*k))//k].clone();expected[ids[:active]<0]=0
-        gates=dict(cpu_bf16_bits=torch.equal(bf[:active].view(torch.int16),expected.view(torch.int16)),bf16_bits=torch.equal(bf.view(torch.int16),refbf.view(torch.int16)),q_bits=torch.equal(q.view(torch.uint8),refq.view(torch.uint8)),scale_bits=torch.equal(sf.view(torch.uint8),refsf.view(torch.uint8)),bf_guards=bool(torch.all(bfraw[:64]==-19)&torch.all(bfraw[-64:]==-19)),q_guards=bool(torch.all(qraw[:128]==117)&torch.all(qraw[-128:]==117)),sf_guards=bool(torch.all(sfraw[:32]==-17)&torch.all(sfraw[-32:]==-17)),ready=torch.equal(ready, (torch.arange(capacity//128,device='cuda')<active//128).int()),ready_guards=bool(torch.all(readyraw[:8]==173)&torch.all(readyraw[-8:]==173)),status=status.item()==0)
-        print(json.dumps(dict(case='quantized_tile_publication_reference',width=width,capacity=capacity,active=active,graph=True,mutable_sources=True,every_element=True,gates=gates,passed=all(gates.values()))),flush=True)
+        gates=dict(cpu_bf16_bits=torch.equal(bf[:active].view(torch.int16),expected.view(torch.int16)),bf16_bits=torch.equal(bf.view(torch.int16),refbf.view(torch.int16)),q_bits=torch.equal(q.view(torch.uint8),refq.view(torch.uint8)),scale_bits=torch.equal(sf.view(torch.uint8),refsf.view(torch.uint8)),bf_guards=bool(torch.all(bfraw[:64]==-19)&torch.all(bfraw[-64:]==-19)),q_guards=bool(torch.all(qraw[:128]==117)&torch.all(qraw[-128:]==117)),sf_guards=bool(torch.all(sfraw[:32]==-17)&torch.all(sfraw[-32:]==-17)),ready=torch.equal(ready, (torch.arange(capacity//128,device='cuda')<active//128).int()*slices),ready_guards=bool(torch.all(readyraw[:8]==173)&torch.all(readyraw[-8:]==173)),status=status.item()==0)
+        print(json.dumps(dict(case='quantized_tile_publication_reference',width=width,capacity=capacity,active=active,input_slices=slices,graph=True,mutable_sources=True,every_element=True,gates=gates,passed=all(gates.values()))),flush=True)
         assert all(gates.values()),gates
     blocks.fill_(1);perm[0]=world*tokens*k;status.zero_();pg.replay();torch.cuda.synchronize()
     assert status.item()==2 and not torch.count_nonzero(bf[0]) and not torch.count_nonzero(q[0].view(torch.uint8))

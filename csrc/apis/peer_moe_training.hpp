@@ -44,7 +44,8 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 )", args.launch_args.block_dim.x, args.operation, args.operation,
        fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : (tiled_quant || input_tiles) ? args.params.dim[2] : 0,
        args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
-       (tiled_quant || input_tiles) ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
+       input_tiles ? fmt::format(", false, {}, {}",args.params.dim[3],args.params.dim[8] ? args.params.dim[8] : 1) :
+       tiled_quant ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params));
@@ -97,10 +98,12 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             blocks=dims[5];
             break;
         case PeerOperation::PackQuantizedInputTiles:
-            DG_HOST_ASSERT(tensors.size()==8 && (dims.size()==7 || dims.size()==8));
+            DG_HOST_ASSERT(tensors.size()==8 && (dims.size()==7 || dims.size()==8 || dims.size()==9));
             DG_HOST_ASSERT(dims.size()==7 || (dims[7]<=2 &&
                 (dims[7]!=1 || dims[6]==get_num_sms()) &&
                 (dims[7]!=2 || (dims[6]>=get_num_sms() && dims[6]%get_num_sms()==0))));
+            if(dims.size()==9)DG_HOST_ASSERT(dims[8]>=1 && dims[8]<=16 &&
+                (dims[8]&(dims[8]-1))==0 && dims[1]%(128*dims[8])==0);
             DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192 &&
                            dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 &&
                            dims[4]<=64 && dims[5]==128 && dims[6]>0 && dims[6]<=8*get_num_sms());
@@ -333,7 +336,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     PeerRuntime::Args args{operation, {dim3(blocks), dim3(threads), 0}, params};
     const auto code = PeerRuntime::generate(args);
     const auto runtime = compiler->build(fmt::format("moe_training_peer_{}", operation), code);
-    if(operation==int(PeerOperation::PackQuantizedInputTiles) && dims.size()==8 && dims[7]) {
+    if(operation==int(PeerOperation::PackQuantizedInputTiles) && dims.size()>=8 && dims[7]) {
         int occupancy=0;
         DG_HGGC_UNIFIED_CHECK(hgOccupancyMaxActiveBlocksPerMultiprocessor(
             &occupancy,runtime->kernel,threads,0));
@@ -344,8 +347,10 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
 
 static int peer_input_occupancy(const int device,const std::vector<int64_t>& dims) {
     const c10::cuda::CUDAGuard guard(device);
-    DG_HOST_ASSERT((dims.size()==7 || dims.size()==8) && dims[1]>=128 && dims[1]<=8192 &&
+    DG_HOST_ASSERT((dims.size()==7 || dims.size()==8 || dims.size()==9) && dims[1]>=128 && dims[1]<=8192 &&
                    dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 && dims[4]<=64);
+    if(dims.size()==9)DG_HOST_ASSERT(dims[8]>=1 && dims[8]<=16 &&
+        (dims[8]&(dims[8]-1))==0 && dims[1]%(128*dims[8])==0);
     Params params{};
     for(size_t i=0;i<dims.size();++i)params.dim[i]=dims[i];
     PeerRuntime::Args args{int(PeerOperation::PackQuantizedInputTiles),{dim3(get_num_sms()),dim3(256),0},params};

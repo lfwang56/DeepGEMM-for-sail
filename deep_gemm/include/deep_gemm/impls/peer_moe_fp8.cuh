@@ -154,7 +154,7 @@ public:
         for (uint32_t tile = input_row_base / 128;
              tile < (input_row_base + input_valid_rows + 127) / 128; ++tile) {
           if (tile >= input.signal_capacity) { atomicOr(input.status, 2u); input_failed = 1; break; }
-          while (tix::ld_acq(input.ready + tile) != 1u) {
+          while (tix::ld_acq(input.ready + tile) != uint32_t(DG_TRAINING_FP8_INPUT_READY_COUNT)) {
             if (tix::ld_acq(input.status) || clock64() - begin > input.timeout_cycles) {
               atomicOr(input.status, 8u); input_failed = 1; break;
             }

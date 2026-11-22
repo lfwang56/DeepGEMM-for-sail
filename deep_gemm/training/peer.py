@@ -198,6 +198,11 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_bf16_input_pipeline = fp8_flag(None, "DG_MOE_FP8_BF16_INPUT_PIPELINE")
         self.fp8_input_co_resident = fp8_flag(None, "DG_MOE_FP8_INPUT_CO_RESIDENT")
         self.fp8_input_elastic_workers = fp8_flag(None, "DG_MOE_FP8_INPUT_ELASTIC_WORKERS")
+        self.fp8_input_slices = helper_value(None, "DG_MOE_FP8_INPUT_SLICES", 1)
+        if self.fp8_input_slices not in (1,2,4,8,16):
+            raise ValueError("FP8 input slices must be1,2,4,8or16")
+        if self.fp8_input_slices!=1 and not self.fp8_bf16_input_pipeline:
+            raise ValueError("sliced input requires the BF16 quantized producer")
         if self.fp8_input_elastic_workers and not self.fp8_input_co_resident:
             raise ValueError("elastic input workers require co-resident input")
         self.fp8_return_pipeline = fp8_flag(None, "DG_MOE_FP8_RETURN_PIPELINE")
@@ -380,6 +385,8 @@ class PeerMoEPlan(NativeMoEPlan):
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and (fuse_dispatch or self.fp8_peer_compute)
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        if self.h % (128*self.fp8_input_slices):
+            raise ValueError("hidden width must be divisible by128times FP8 input slices")
         if self.fp8_return_pipeline:
             if not 0 < self.fp8_return_ctas < dg.get_num_sms():
                 raise ValueError("FP8 return copy CTAs must leave GEMM resources")
@@ -421,7 +428,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation, self.fp8_input_co_resident,self.fp8_input_elastic_workers)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation, self.fp8_input_co_resident,self.fp8_input_elastic_workers,self.fp8_input_slices)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -702,7 +709,7 @@ class PeerMoEPlan(NativeMoEPlan):
                     keep_local=True, compile_only=compile_only,
                     config=self.gemm_configs.get(role, ()),
                     input_control=[self.fp8_input_ready, self.status]+([self.fp8_input_work_counter] if self.fp8_input_elastic_workers else []), reserved_input_ctas=self.fp8_input_ctas,
-                    co_resident_input=self.fp8_input_co_resident)
+                    co_resident_input=self.fp8_input_co_resident,input_ready_count=self.fp8_input_slices)
             if self._fp8_prequantized_input != a.data_ptr():
                 _launch(34 if self.fp8_vector_row_quant else 26, [a, quantized_a[0], self.quantized_scale_storage[width], self.current_rows, self.status],
                         [self.rows, width, 1])
@@ -1157,7 +1164,7 @@ class PeerMoEPlan(NativeMoEPlan):
                    self.status, self.num_blocks, self.quantized[self.h][0],
                    self.quantized_scale_storage[self.h], self.fp8_input_ready],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size, 128, self.fp8_input_ctas,
-               2 if self.fp8_input_elastic_workers else int(self.fp8_input_co_resident)], compile_only)
+               2 if self.fp8_input_elastic_workers else int(self.fp8_input_co_resident),self.fp8_input_slices], compile_only)
 
     def _fp8_elastic_input_worker(self):
         stream=torch.cuda.current_stream(self.device)
@@ -1168,7 +1175,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.quantized[self.h],self.quantized['w1'],self.gate_up,self.lengths,self.permutation,
             self.pointer_tables['local_values'],self.chunk_tokens*self.k,keep_local=True,
             config=self.gemm_configs['fc1'],input_control=[self.fp8_input_ready,self.status,self.fp8_input_work_counter],
-            reserved_input_ctas=self.fp8_input_ctas,co_resident_input=True)
+            reserved_input_ctas=self.fp8_input_ctas,co_resident_input=True,input_ready_count=self.fp8_input_slices)
 
     def _fp8_stage_quantized_input(self, compile_only=False):
         _peer(19, [self.pointer_tables['local_qx'], self.pointer_tables['local_qx_scales'],

@@ -23,12 +23,13 @@ public:
         int return_store_bytes;
         bool activation_backward;
         uint32_t* input_work_counter;
+        int input_ready_count;
     };
     static auto compile_key(const Args& args) {
         return std::make_tuple(FP8GemmRuntime::compile_key(
             {args.launch_info, args.launch_args, args.kernel_params}), args.keep_local, args.input_mode, args.output_mode, args.copy_only,
             args.copy_only ? args.copy_threads : 0, args.return_store_bytes, args.activation_backward,
-            args.input_work_counter!=nullptr,
+            args.input_work_counter!=nullptr, args.input_ready_count,
             args.copy_only || args.return_store_bytes==16 ? args.peers.destination_rows_per_rank : 0);
     }
     static std::string generate_impl(const Args& args) {
@@ -54,8 +55,8 @@ public:
         }
         replace("typename GemmKernel::Params params", "typename GemmKernel::Params params, const deep_gemm::training::PeerGemmParams peers, const deep_gemm::training::PeerDispatchPipeline input, const deep_gemm::training::PeerDispatchPipeline output, uint32_t* input_work_counter");
         replace("op(params, smem);", "op(params, peers, input, output, input_work_counter, smem);");
-        return fmt::format("#define DG_TRAINING_FP8_PEER_KEEP_LOCAL {}\n#define DG_TRAINING_FP8_PEER_INPUT {}\n#define DG_TRAINING_FP8_RETURN_PIPELINE {}\n#define DG_TRAINING_FP8_RETURN_STRIDE {}\n#define DG_TRAINING_FP8_RETURN_STORE_BYTES {}\n#define DG_TRAINING_FP8_ACTIVATION_BACKWARD {}\n#define DG_TRAINING_FP8_INPUT_DYNAMIC {}\n",
-                           int(args.keep_local), int(args.input_mode), int(args.output_mode), args.peers.destination_rows_per_rank, args.return_store_bytes, int(args.activation_backward), int(args.input_work_counter!=nullptr)) + source;
+        return fmt::format("#define DG_TRAINING_FP8_PEER_KEEP_LOCAL {}\n#define DG_TRAINING_FP8_PEER_INPUT {}\n#define DG_TRAINING_FP8_RETURN_PIPELINE {}\n#define DG_TRAINING_FP8_RETURN_STRIDE {}\n#define DG_TRAINING_FP8_RETURN_STORE_BYTES {}\n#define DG_TRAINING_FP8_ACTIVATION_BACKWARD {}\n#define DG_TRAINING_FP8_INPUT_DYNAMIC {}\n#define DG_TRAINING_FP8_INPUT_READY_COUNT {}\n",
+                           int(args.keep_local), int(args.input_mode), int(args.output_mode), args.peers.destination_rows_per_rank, args.return_store_bytes, int(args.activation_backward), int(args.input_work_counter!=nullptr), args.input_ready_count) + source;
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.peers, args.input, args.output,args.input_work_counter));
@@ -73,7 +74,7 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
                            const std::vector<torch::Tensor>& input_control, int reserved_input_ctas,
                            const std::vector<torch::Tensor>& return_control, int reserved_return_ctas, bool copy_only, int copy_threads,
                            int return_store_bytes, const std::optional<torch::Tensor>& activation_gate_up,
-                           bool co_resident_input) {
+                           bool co_resident_input, int input_ready_count) {
     const auto& a = lhs.first;
     const auto& b = rhs.first;
     const auto& sa = lhs.second;
@@ -102,6 +103,9 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     auto aligned_sa = get_mn_major_tma_aligned_tensor(sa);
     const int num_sms = get_num_sms();
     const bool input_mode = !input_control.empty();
+    DG_HOST_ASSERT(input_ready_count>=1 && input_ready_count<=16 &&
+        (input_ready_count&(input_ready_count-1))==0 &&
+        (input_mode ? k%(128*input_ready_count)==0 : input_ready_count==1));
     const bool dynamic_input=input_control.size()==3;
     PeerDispatchPipeline input{}, output{};
     const bool output_mode = !return_control.empty();
@@ -202,7 +206,8 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
         .peers = peers, .keep_local = keep_local, .input = input, .input_mode = input_mode,
         .output = output, .output_mode = output_mode, .copy_only = copy_only, .copy_threads = copy_threads,
         .return_store_bytes = return_store_bytes, .activation_backward = activation_backward,
-        .input_work_counter = dynamic_input ? reinterpret_cast<uint32_t*>(input_control[2].data_ptr<int32_t>()) : nullptr};
+        .input_work_counter = dynamic_input ? reinterpret_cast<uint32_t*>(input_control[2].data_ptr<int32_t>()) : nullptr,
+        .input_ready_count = input_ready_count};
     if(return_store_bytes==16) {
         args.launch_args.smem_size=std::max<size_t>(args.launch_args.smem_size,size_t(bm)*(bn+16)*sizeof(cutlass::bfloat16_t));
         DG_HOST_ASSERT(args.launch_args.smem_size+size_t(bm)*sizeof(uint64_t)+8<=256*1024);
@@ -238,7 +243,7 @@ static void register_peer_fp8_apis(pybind11::module_& m) {
           py::arg("copy_only") = false, py::arg("copy_threads") = 512,
           py::arg("return_store_bytes") = 4,
           py::arg("activation_gate_up") = std::nullopt,
-          py::arg("co_resident_input") = false);
+          py::arg("co_resident_input") = false, py::arg("input_ready_count") = 1);
 }
 
 } // namespace deep_gemm::training

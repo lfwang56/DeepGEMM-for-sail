@@ -46,7 +46,7 @@ __device__ __forceinline__ float* fp8_input_scale_tile() {
 }
 
 template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false,
-          bool CacheFp8Scales = false, uint32_t InputTopk = 0>
+          bool CacheFp8Scales = false, uint32_t InputTopk = 0, uint32_t InputSlices = 1>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
@@ -161,15 +161,19 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
     } else if constexpr (Op == PeerOperation::PackQuantizedInputTiles) {
         static_assert(InputWidth>=128 && InputWidth<=8192 && InputWidth%128==0);
         static_assert(InputBlockM>0 && InputTopk>0);
+        static_assert(InputSlices>=1 && InputSlices<=16 && (InputSlices&(InputSlices-1))==0 &&
+                      InputWidth%(128*InputSlices)==0);
         const int blocks=peer_pointer<int32_t>(p,4)[0];
         if(blocks<0 || blocks>p.dim[0]/128) {
             if(index==0)atomicOr(peer_pointer<int32_t>(p,3),2);
             return;
         }
-        constexpr int segments=InputWidth/128;
+        constexpr int stripe_width=InputWidth/InputSlices,segments=stripe_width/128;
         __shared__ uint64_t addresses[128];
-        float* scales=fp8_input_scale_tile<InputWidth>();
-        for(int tile=block_index;tile<blocks;tile+=gridDim.x) {
+        float* scales=fp8_input_scale_tile<stripe_width>();
+        for(int work=block_index;work<blocks*InputSlices;work+=gridDim.x) {
+            const int tile=work/InputSlices,stripe=work%InputSlices;
+            const int column_base=stripe*stripe_width;
             const int64_t base=int64_t(tile)*128;
             if(threadIdx.x<128) {
                 const int route=peer_pointer<int32_t>(p,1)[base+threadIdx.x];
@@ -186,8 +190,8 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                 const int row=group/segments,segment=group%segments;
                 const auto* source=reinterpret_cast<const __ppu_bfloat16*>(addresses[row]);
                 uint4 raw{};
-                if(source)raw=*reinterpret_cast<const uint4*>(source+segment*128+lane*8);
-                const int64_t at=(base+row)*InputWidth+segment*128+lane*8;
+                if(source)raw=*reinterpret_cast<const uint4*>(source+column_base+segment*128+lane*8);
+                const int64_t at=(base+row)*InputWidth+column_base+segment*128+lane*8;
                 *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,2)+at)=raw;
                 float scale;
                 *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,5)+at)=peer_quantize_eight(raw,scale);
@@ -196,9 +200,10 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             __syncthreads();
             for(int item=threadIdx.x;item<128*segments;item+=blockDim.x) {
                 const int row=item%128,segment=item/128;
-                peer_pointer<float>(p,6)[int64_t(segment)*p.dim[0]+base+row]=scales[row*(segments+1)+segment];
+                peer_pointer<float>(p,6)[int64_t(stripe*segments+segment)*p.dim[0]+base+row]=scales[row*(segments+1)+segment];
             }
-            // Every writer fences all three outputs before READY publication.
+            // Each stripe fences BF16/FP8/scales before its release increment.
+            // Consumers acquire READY==InputSlices before reading this M tile.
             __threadfence();
             __syncthreads();
             if(threadIdx.x==0)tix::red_add_rel(peer_pointer<uint32_t>(p,7)+tile,1u);

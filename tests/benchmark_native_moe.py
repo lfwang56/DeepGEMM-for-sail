@@ -495,6 +495,7 @@ def main():
                     "fp8_fuse_dhidden_activation": getattr(plan, "fp8_fuse_dhidden_activation", None),
                     "peer_fp8_input_co_resident": getattr(plan, "fp8_input_co_resident", None),
                     "peer_fp8_input_elastic_workers": getattr(plan, "fp8_input_elastic_workers", None),
+                    "peer_fp8_input_slices": getattr(plan, "fp8_input_slices", None),
                     "fp8_active_quantization": getattr(plan, "fp8_active_quantization", None),
                     "fp8_mn_major_scales": getattr(plan, "fp8_mn_major_scales", None),
                     "communication_dtype": getattr(plan, "communication_dtype", "bf16"),
