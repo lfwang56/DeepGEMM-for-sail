@@ -3879,3 +3879,218 @@ Compiler diagnostics:
 hgcc error: Exited with error code 1
 RuntimeError: Assertion error (/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/../../jit/compiler.hpp:360): false and "HGCC compilation failed"
 ```
+
+
+## Iteration51 — repair optional padding code generation and screen local WGrad
+
+50 added a template suffix placeholder after the kernel signature, but put
+its format argument before kernel_name. Move only that argument to the proper
+position; unpadded generated code is exactly the pre50 control again. Native
+28c2caa977bf built clean221. Positive padding has distinct kernel names and
+unchanged complete-K FP32 accumulation order. Identical-input beta=1, dynamic
+K lengths/graphs and all outputs must remain bitwise equal.
+
+The local signal uses both actual Qwen WGrad shapes,E16,K2560 per group,
+40960 active rows/65536 physical capacity, explicit stage3 LUT, pads0/1024/
+2048/3072. Five warmups,20 graph iterations x5repeats, CUDA events on the
+calling stream, mandatory FP32 output zero included identically. Every
+output is checked bitwise before and after timing. This is a single-device
+compute screening signal, not a distributed layer speedup or concurrency
+measurement. Full-layer checks and strongest matched baseline remain required.
+
+Whole-host-clean signal: True.
+
+[
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 10.725743103027344,
+    "samples": [
+      10.739514923095703,
+      10.694802856445312,
+      10.726995086669922,
+      10.689097595214843,
+      10.725743103027344
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 1024,
+    "bitwise_equal": true,
+    "median_event_ms": 10.843592834472656,
+    "samples": [
+      10.838162994384765,
+      10.806593322753907,
+      10.902048492431641,
+      10.843592834472656,
+      10.920320129394531
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "bitwise_equal": true,
+    "median_event_ms": 10.534927368164062,
+    "samples": [
+      10.501466369628906,
+      10.534927368164062,
+      10.575544738769532,
+      10.566062927246094,
+      10.53423843383789
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw1",
+    "groups": 16,
+    "m": 4096,
+    "n": 8192,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 3072,
+    "bitwise_equal": true,
+    "median_event_ms": 10.6969482421875,
+    "samples": [
+      10.67537612915039,
+      10.715386199951173,
+      10.67709732055664,
+      10.6969482421875,
+      10.73496322631836
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 0,
+    "bitwise_equal": true,
+    "median_event_ms": 5.541792678833008,
+    "samples": [
+      5.572383880615234,
+      5.541792678833008,
+      5.541344451904297,
+      5.53904914855957,
+      5.556304931640625
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 1024,
+    "bitwise_equal": true,
+    "median_event_ms": 5.6313018798828125,
+    "samples": [
+      5.662535095214844,
+      5.614418411254883,
+      5.6313018798828125,
+      5.607024002075195,
+      5.642911148071289
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 2048,
+    "bitwise_equal": true,
+    "median_event_ms": 5.511712646484375,
+    "samples": [
+      5.514414978027344,
+      5.552880477905274,
+      5.486806488037109,
+      5.511712646484375,
+      5.506344604492187
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  },
+  {
+    "case": "local_wgrad_bpad_signal",
+    "role": "dw2",
+    "groups": 16,
+    "m": 8192,
+    "n": 2048,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "pad_bytes": 3072,
+    "bitwise_equal": true,
+    "median_event_ms": 5.555102920532226,
+    "samples": [
+      5.535223388671875,
+      5.547711944580078,
+      5.555102920532226,
+      5.589346313476563,
+      5.562659835815429
+    ],
+    "warmup": 5,
+    "iterations": 20,
+    "repeats": 5,
+    "extension_sha256": "28c2caa977bf5d9974e627876d47c12c50e748a4c9553dd50ccd348e7706c7cf",
+    "scope": "single-device grouped WGrad plus mandatory FP32 output zero; no communication or complete-layer speedup"
+  }
+]

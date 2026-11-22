@@ -89,11 +89,11 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
             args.launch_info.num_stages,
             args.launch_info.warp_map,
             args.launch_info.aiu_before_tsm,
-            args.launch_info.b_padding_bytes ? fmt::format(", {}", args.launch_info.b_padding_bytes) : "",
             args.launch_info.kernel_name,
             args.launch_info.cta_probe ? ", unsigned long long* cta_probe"
                 : args.launch_info.output_tile_range ? ", const uint2 tile_range" : "",
             args.launch_info.cta_probe ? "const unsigned long long cta_begin = __ppu_read_clock64();" : "",
+            args.launch_info.b_padding_bytes ? fmt::format(", {}", args.launch_info.b_padding_bytes) : "",
             args.launch_info.output_tile_range ? ", tile_range.x, tile_range.y" : "",
             args.launch_info.cta_probe ?
                 "__syncthreads(); if (threadIdx.x == 0) { "
