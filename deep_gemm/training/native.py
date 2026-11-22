@@ -260,6 +260,22 @@ class NativeMoEPlan:
                 self._quantize_weight("w1_t", self.w1_t)
                 self._quantize_weight("w2_t", self.w2_t)
 
+    def _matching_forward_context(self, tensors):
+        if not getattr(self, 'reuse_forward_context', False):
+            return False
+        local = self._forward_context_available and self._forward_context_fingerprint == self._context_fingerprint(*tensors)
+        if torch.cuda.is_current_stream_capturing():
+            if not local:
+                raise RuntimeError('forward-context graphs require a matching forward before backward')
+            return True
+        if self.group is not None:
+            # A single rank changing inputs invalidates cached routed values
+            # on other ranks too. Agree using host metadata outside capture.
+            decisions = [None] * self.size
+            dist.all_gather_object(decisions, local, group=self.group)
+            return all(decisions)
+        return local
+
     @torch.no_grad()
     def prepare(self, w1, w2):
         """Warm local GEMMs before any EP payload collective is enqueued.

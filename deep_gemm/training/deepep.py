@@ -21,7 +21,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
     def __init__(self, *args, comm_sms=8, gemm_configs=None, rdma_qps=None, ring_rows=None, elastic_hybrid=None,
                  fp8_active_quantization=None, fp8_mn_major_scales=None,
                  fp8_async_weight_quantization=None, fp8_weight_quantization=None,
-                 fp8_source_dispatch=None, **kwargs):
+                 fp8_source_dispatch=None, reuse_forward_context=None, **kwargs):
         def quant_flag(value, key):
             if value is None:
                 raw = os.environ.get(key, "0")
@@ -35,6 +35,12 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.fp8_mn_major_scales = quant_flag(fp8_mn_major_scales, "DG_MOE_FP8_MN_MAJOR_SCALES")
         self.fp8_async_weight_quantization = quant_flag(fp8_async_weight_quantization, "DG_MOE_FP8_ASYNC_WEIGHTS")
         self.fp8_source_dispatch = quant_flag(fp8_source_dispatch, "DG_MOE_FP8_SOURCE_DISPATCH")
+        self.reuse_forward_context = quant_flag(reuse_forward_context, "DG_MOE_REUSE_FORWARD_CONTEXT")
+        if self.reuse_forward_context and (ring_rows is None or kwargs.get('wgrad_overlap', 'none') != 'none'
+                or (kwargs.get('compute', 'bf16') == 'fp8' and not (self.fp8_active_quantization and self.fp8_mn_major_scales))):
+            raise ValueError('DeepEP forward context requires routed windows and synchronous gradients, with active MN FP8 scales')
+        self._forward_context_available = self._using_forward_context = False
+        self._forward_context_fingerprint = None
         if self.fp8_source_dispatch and (kwargs.get('compute', 'bf16') != 'fp8' or elastic_hybrid is None
                 or not self.fp8_active_quantization or not self.fp8_mn_major_scales):
             raise ValueError('source FP8 dispatch requires Elastic FP8 compute with active MN scales')
@@ -65,7 +71,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
             self.communication_dtype = 'fp8_forward_input_bf16_backward_input_and_return'
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
         recipe = (self.fp8_active_quantization, self.fp8_mn_major_scales, self.fp8_async_weight_quantization,
-                  self.fp8_weight_quantization, self.fp8_source_dispatch)
+                  self.fp8_weight_quantization, self.fp8_source_dispatch, self.reuse_forward_context)
         recipes = [None] * self.size
         dist.all_gather_object(recipes, recipe, group=self.group)
         if any(other != recipe for other in recipes):
@@ -144,6 +150,46 @@ class DeepEPMoEPlan(NativeMoEPlan):
         if ring_rows is not None:
             allocate_route_windows(self)
             self.recv_accumulator = self._allocate("deepep_recv_accumulator", (n, self.h), torch.float32)
+        self.forward_context_slots = []
+        self.forward_context_receives = []
+        if self.reuse_forward_context:
+            original = {name: getattr(self, name) for name in
+                        ('gate_up', 'hidden', 'packed_output', 'global_offsets', 'global_lengths', 'global_permutation')}
+            if self.compute == 'fp8':
+                original.update(quantized_hidden=self.quantized[self.i][0],
+                                quantized_hidden_scales=self.quantized_scale_storage[self.i])
+            for slot in range(max(1, (self.max_tokens + self.chunk_tokens - 1) // self.chunk_tokens)):
+                tensors = original if slot == 0 else {name: torch.empty_like(value) for name, value in original.items()}
+                if slot:
+                    self.buffers.update({f'forward_context_{slot}_{name}': value for name, value in tensors.items()})
+                self.forward_context_slots.append(tensors)
+                self.forward_context_receives.append(None)
+            for name, shape, dtype in (('replay_offsets', (self.e + 1,), torch.int32),
+                                      ('replay_lengths', (self.e,), torch.int32),
+                                      ('replay_blocks', (1,), torch.int32),
+                                      ('cache_only_blocks', (1,), torch.int32),
+                                      ('context_placeholder_blocks', (1,), torch.int32),
+                                      ('forward_context_reused_windows', (1,), torch.int32),
+                                      ('forward_context_reused_rows', (1,), torch.int64)):
+                value = self._allocate(name, shape, dtype)
+                value.zero_()
+                setattr(self, name, value)
+
+    @staticmethod
+    def _context_fingerprint(*tensors):
+        return tuple((value.data_ptr(), value._version, tuple(value.shape)) for value in tensors)
+
+    def _activate_forward_context(self, start):
+        if not self.reuse_forward_context:
+            return
+        for name, value in self.forward_context_slots[start // self.chunk_tokens].items():
+            if name == 'quantized_hidden':
+                self.quantized[self.i] = (value, self.quantized[self.i][1])
+            elif name == 'quantized_hidden_scales':
+                self.quantized_scale_storage[self.i] = value
+                self.quantized[self.i] = (self.quantized[self.i][0], value.t())
+            else:
+                setattr(self, name, value)
 
     def _allocate(self, name, shape, dtype):
         value = torch.empty(shape, device=self.device, dtype=dtype)
@@ -229,6 +275,15 @@ class DeepEPMoEPlan(NativeMoEPlan):
             operations.append(25)
             set_route_window(self, 0, compile_only=True)
         dg._C._moe_training_precompile(self.device.index, operations)
+        if self.reuse_forward_context:
+            self._prepare_context_replay(0, compile_only=True)
+
+    def _prepare_context_replay(self, start, compile_only=False):
+        dg._C._moe_training_peer_launch(20,
+            [self.offsets, self.lengths, self.context_placeholder_blocks, self.global_offsets,
+             self.replay_offsets, self.replay_lengths, self.replay_blocks, self.cache_only_blocks,
+             self.status, self.forward_context_reused_windows, self.forward_context_reused_rows],
+            [self.e, self.rows, start], compile_only)
 
     def _gemm(self, a, weight, output, name, prequantized=False):
         role = {"w1": "fc1", "w2": "fc2", "w2_t": "dhidden", "w1_t": "dx"}[name]
@@ -252,6 +307,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                                            m_rows=self.lengths, **options)
 
     def _dispatch_chunk(self, x, ids, scores, valid_tokens, start):
+        self._activate_forward_context(start)
         t, c, h, k = x.shape[0], self.chunk_tokens, self.h, self.k
         _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
                 [t, c, h, k, start])
@@ -272,6 +328,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
             num_tokens_per_expert=expert_counts, is_token_in_rank=in_rank,
             num_worst_tokens=self.recv_capacity, async_finish=True)
         event.current_stream_wait()
+        if self.reuse_forward_context and not self._fp8_dispatch_backward:
+            self.forward_context_receives[start // self.chunk_tokens] = (rx, rw, handle)
         data = rx[0] if isinstance(rx, tuple) else rx
         if data.shape != (self.recv_capacity, h) or ri.shape != (self.recv_capacity, k):
             raise RuntimeError("unexpected DeepEP fixed-capacity receive layout")
@@ -314,11 +372,21 @@ class DeepEPMoEPlan(NativeMoEPlan):
         if not self.fp8_source_dispatch or self._fp8_dispatch_backward:
             _launch(20, [data, self.permutation, self.packed_x, self.current_rows, self.status],
                     [self.rows, h, self.recv_capacity, k])
-        if self.fp8_source_dispatch:
-            self._pack_received_fp8()
         return rw, handle
 
-    def _expert_forward(self, w1, w2):
+    def _expert_forward(self, w1, w2, _context_masked=False):
+        if self._using_forward_context and not _context_masked:
+            self._prepare_context_replay(self._context_window_start)
+            original = self.offsets, self.lengths, self.current_rows
+            self.offsets, self.lengths = self.replay_offsets, self.replay_lengths
+            self.current_rows = self.replay_offsets[self.e:self.e + 1]
+            try:
+                self._expert_forward(w1, w2, _context_masked=True)
+            finally:
+                self.offsets, self.lengths, self.current_rows = original
+            return
+        if self.fp8_source_dispatch:
+            self._pack_received_fp8()
         self._gemm(self.packed_x, w1, self.gate_up, "w1", prequantized=self.fp8_source_dispatch)
         fused = self._activation()
         self._gemm(self.hidden, w2, self.packed_output, "w2", prequantized=fused)
@@ -345,8 +413,22 @@ class DeepEPMoEPlan(NativeMoEPlan):
         if not self.fp8_source_dispatch or self._fp8_dispatch_backward:
             _launch(20, [self.window_recv_x, self.permutation, self.packed_x, self.current_rows, self.status],
                     [self.rows, self.h, self.recv_capacity, self.k])
-        if self.fp8_source_dispatch:
-            self._pack_received_fp8()
+
+    def _restore_forward_chunk(self, x, ids, valid_tokens, start):
+        self._activate_forward_context(start)
+        rx, rw, handle = self.forward_context_receives[start // self.chunk_tokens]
+        if isinstance(rx, tuple):
+            # Reuse the exact forward quantization. Only original BF16 X for
+            # DW must be dispatched, using the same cached receive ordering.
+            self.window_recv_q, self.window_recv_qsf = rx
+            _launch(13, [x, ids, self.local_x, self.local_ids, valid_tokens, self.status],
+                    [x.shape[0], self.chunk_tokens, self.h, self.k, start])
+            self.window_recv_x, _, _, _, _, event = self.deep_ep_buffer.dispatch(
+                self.local_x, handle=handle, async_finish=True)
+            event.current_stream_wait()
+        else:
+            self.window_recv_x = rx
+        return rw, handle
 
     def _pack_received_fp8(self):
         _launch(31, [self.window_recv_q, self.window_recv_qsf, self.permutation,
@@ -363,13 +445,16 @@ class DeepEPMoEPlan(NativeMoEPlan):
     def forward(self, x, ids, scores, w1, w2, valid_tokens):
         self._validate(x, ids, scores, w1, w2, valid_tokens)
         with self._execution():
+            self._fp8_dispatch_backward = self._using_forward_context = False
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
             # Weights may change in-place between graph replays or eager calls.
             # Match Native's dynamic FP8 recipe; quantization is inside timing.
-            if self.compute == "fp8":
-                self._prepare_weights(w1, w2)
+            self._prepare_weights(w1, w2)
+            if self.reuse_forward_context:
+                self.forward_context_reused_windows.zero_()
+                self.forward_context_reused_rows.zero_()
             output = torch.empty_like(x)
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 rw, handle = self._dispatch_chunk(x, ids, scores, valid_tokens, start)
@@ -387,6 +472,9 @@ class DeepEPMoEPlan(NativeMoEPlan):
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             self._join_weight_quantization()
+            if self.reuse_forward_context:
+                self._forward_context_fingerprint = self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens)
+                self._forward_context_available = True
             return output
 
     @torch.no_grad()
@@ -398,6 +486,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
         if dy.shape != x.shape or dy.dtype != x.dtype or dy.device != x.device or not dy.is_contiguous():
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
+            self._using_forward_context = self._matching_forward_context((x, ids, scores, w1, w2, valid_tokens))
             self.prepare(w1, w2)
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.reset_errors()
@@ -406,7 +495,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
             dw1, dw2 = ((torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
                         if accumulators is None else accumulators)
             for start in range(0, self.max_tokens, self.chunk_tokens):
-                rw, handle = self._dispatch_chunk(x, ids, scores, valid_tokens, start)
+                rw, handle = (self._restore_forward_chunk(x, ids, valid_tokens, start) if self._using_forward_context
+                              else self._dispatch_chunk(x, ids, scores, valid_tokens, start))
                 if self.ring_rows is None:
                     self._expert_forward(w1, w2)
                 count = max(0, min(self.chunk_tokens, x.shape[0] - start))
@@ -431,8 +521,10 @@ class DeepEPMoEPlan(NativeMoEPlan):
                     self._expert_backward_rows(rdy, rw, dw1, dw2)
                 else:
                     self.recv_accumulator.zero_()
-                    for window in range(0, self.full_row_capacity, self.rows):
+                    windows = range(0, self.full_row_capacity, self.rows)
+                    for window in reversed(windows) if self._using_forward_context else windows:
                         self._set_window(window)
+                        self._context_window_start = window
                         self._expert_forward(w1, w2)
                         self._expert_backward_rows(rdy, rw, dw1, dw2)
                         self._reduce_window(rw, window, weighted=False)
@@ -443,6 +535,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
             self._join_weight_quantization()
+            self._forward_context_available = self._using_forward_context = False
             return dx, dw1, dw2, dscores
 
     def _expert_backward_rows(self, rdy, rw, dw1, dw2):

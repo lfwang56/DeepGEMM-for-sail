@@ -14934,3 +14934,207 @@ claiming an industry-baseline ratio for the retained-context mode.
     ]
   }
 ]
+
+
+## Iteration87 — matched DeepEP forward-context baseline and LM gates
+
+86 allmetadata/6EP8+14actual32phases passed cleanly. BF16 live-context
+fullstepT4096 64.3935 vsreplay76.9233ms;T16384 253.4960vs303.3307.
+FP8 contextpipeline76.1207/staged74.8433 vsreplay87.8922;T16384
+270.6929/265.4096vs317.9115. GPU counters confirm1/4reusedwindows
+and padded rows. These are context-policy savings, not purecommfusion.
+FP8 still trails BF16 under the same reuse policy.
+
+Add the same bounded per-source-chunk context policy to DeepEP. Retain
+forward receive tensors, routing handles, receive weights and local
+last-window intermediates. Backward uses identical receive ordering:
+BF16 forward payloads can be retained; sourceFP8 mode dispatches the
+originalBF16 X for unchangedDW through the cached forward handle and
+reuses the exact forward input quantization. GPU-mask only the live
+last-window replay; other windows replay normally. Preserve allmutability
+and FP32expertgradients. Defaults retain prior full-replay behavior.
+
+Agree eager context eligibility across allranks so a rank-local input
+change invalidates remote cached values too. Joint captured context
+graphs require a matchingforward. Keep sharedFP8 pack operations inside
+the masked replay scope, avoiding cached hidden-quantization overwrite.
+Correct benchmark scope metadata and save context mode in LM checkpoints.
+
+Gate independentCPU/native gradients, changed graph inputs/weights/routes,
+zero capacity and T65/C32multiple chunks onactualEP8, plusa rank-local
+input-change fallback check forDeepEPandPeer. Complete57.8M public-text
+LM20-step full-model gradient/optimizer gates forBF16andFP8Peercontext.
+Then actual32QwenBF16/FP8gradients and samehost matched DeepEP/Peer
+context/replay controls atT4096/T16384. Strong sourceFP8/BF16payload
+controls are compared under the same replay policy before anyratio claim.
+
+[
+  {
+    "name": "qwen38-r2-context87-ep8-deepep-bf16-payload",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context87-ep8-deepep-control-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context87-ep8-deepep-fp8-payload",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context87-ep8-deepep-multichunk",
+    "clean": false,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  }
+]

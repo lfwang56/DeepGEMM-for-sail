@@ -1175,8 +1175,7 @@ class PeerMoEPlan(NativeMoEPlan):
         if dy.shape != x.shape or dy.device != x.device or dy.dtype != x.dtype or not dy.is_contiguous():
             raise ValueError("dy must be contiguous and match x")
         with self._execution():
-            self._using_forward_context = (self.reuse_forward_context and self._forward_context_available
-                and self._forward_context_fingerprint == self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens))
+            self._using_forward_context = self._matching_forward_context((x, ids, scores, w1, w2, valid_tokens))
             if self.dag_fusion or self.dag_backward:
                 self._dag_slot = self.dag_forward_slots
             self.prepare(w1, w2)

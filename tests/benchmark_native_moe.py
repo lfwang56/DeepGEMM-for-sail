@@ -547,7 +547,9 @@ def main():
                     "sample_relative_rms_vs_first_backend": sample_errors,
                     "timed_sample_relative_rms_vs_first_backend": timed_errors,
                     "timing_scope": args.scope,
-                    "scope": ("forward; no backward, optimizer or shared expert" if args.scope == "forward"
+                    "scope": ("forward + full backward with live-window context reuse + FP32 wgrad zero/accumulation; no optimizer" if args.scope == "step" and getattr(plan, "reuse_forward_context", False) else
+                              "full backward with live-window context reuse + FP32 wgrad zero/accumulation; no optimizer" if args.scope == "backward" and getattr(plan, "reuse_forward_context", False) else
+                              "forward; no backward, optimizer or shared expert" if args.scope == "forward"
                               else "full backward replay + FP32 wgrad zero/accumulation; no optimizer or shared expert"
                               if args.scope == "backward" else
                               "forward + full backward replay + FP32 wgrad zero/accumulation; no optimizer"),

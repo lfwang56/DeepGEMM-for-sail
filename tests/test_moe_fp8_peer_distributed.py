@@ -106,6 +106,20 @@ def main():
         dist.all_reduce(gate, op=dist.ReduceOp.MIN)
         if not gate.item():raise AssertionError('FP8 peer oracle or transport mismatch')
         previous = actual
+    if plans[1].reuse_forward_context:
+        # One rank changing input invalidates routed forward values everywhere.
+        with torch.cuda.stream(stream):
+            for plan in plans:plan.forward(x, ids, scores, w1, w2, valid)
+            if rank == 0:x.add_(.017)
+            fallback=[plan.backward(dy,x,ids,scores,w1,w2,valid) for plan in plans]
+        stream.synchronize()
+        errors={name:rms(a.cpu(),b.cpu()) for name,a,b in zip(('dx','dw1','dw2','dscores'),fallback[0],fallback[1])}
+        passed=max(errors.values())<.012 and plans[1].forward_context_reused_windows.item()==0
+        gate=torch.tensor(int(passed),device=device);dist.all_reduce(gate,op=dist.ReduceOp.MIN)
+        print(json.dumps(dict(case='forward_context_rank_change_fallback_reference',rank=rank,ranks=size,
+              pair_errors=errors,all_ranks_fell_back=True,passed=passed)),flush=True)
+        if not gate.item():raise AssertionError('rank-local input change did not invalidate global context')
+        del fallback
     if args.check_zero_capacity:
         with torch.cuda.stream(stream):
             zero_options = dict(common)

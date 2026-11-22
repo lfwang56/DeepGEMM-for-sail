@@ -170,6 +170,7 @@ def save_checkpoints(model, optimizer, config, manifest, options, generator, ran
                   plan_options=dict(block_m=options.block_m, gate_up_layout=options.gate_up_layout,
                                     fuse_dispatch=not (options.backend == "peer" and options.compute == "fp8"),
                                     fuse_return=not options.no_fuse_return,
+                                    reuse_forward_context=os.environ.get("DG_MOE_REUSE_FORWARD_CONTEXT", "0") == "1",
                                     deepep_comm_sms=options.deepep_comm_sms,
                                     fp8_active_quantization=options.fp8_active_quantization or (options.backend == "peer" and options.compute == "fp8"),
                                     fp8_mn_major_scales=options.fp8_mn_major_scales or (options.backend == "peer" and options.compute == "fp8"),

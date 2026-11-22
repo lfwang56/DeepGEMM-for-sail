@@ -70,6 +70,8 @@ def rms(a, b):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--tokens', type=int, default=17)
+    ap.add_argument('--chunk-tokens', type=int, default=32)
     ap.add_argument('--hidden', type=int, default=256)
     ap.add_argument('--intermediate', type=int, default=128)
     ap.add_argument('--early-dy', action='store_true')
@@ -82,7 +84,7 @@ def main():
     torch.backends.cuda.matmul.allow_tf32 = False
     dist.init_process_group('nccl', device_id=device, timeout=timedelta(seconds=600))
     cpu_group = dist.new_group(backend='gloo', timeout=timedelta(seconds=600))
-    h, i, e, k, t, c = args.hidden, args.intermediate, 2, 3, 17, 32
+    h, i, e, k, t, c = args.hidden, args.intermediate, 2, 3, args.tokens, args.chunk_tokens
     if size * e < k:
         raise ValueError('test requires at least2 ranks')
     rng = torch.Generator().manual_seed(607821)
@@ -150,6 +152,8 @@ def main():
         print(json.dumps(dict(case='fp8_deepep_mutable_graph_reference', rank=rank,
               ranks=size, pattern=pattern, compute='fp8_e4m3', communication=plans[1].communication_dtype,
               fp8_source_dispatch=plans[1].fp8_source_dispatch,
+              reuse_forward_context=plans[1].reuse_forward_context,
+              reused_windows=int(plans[1].forward_context_reused_windows.item()) if plans[1].reuse_forward_context else 0,
               activation_scales='row_128', weight_scales='128x128_fp32',
               wgrad='bf16_inputs_fp32_accumulation', early_dy=args.early_dy,
               oracle_errors=errors, native_pair_errors=pair, every_element=True, passed=passed)), flush=True)
@@ -157,6 +161,20 @@ def main():
         dist.all_reduce(gate, op=dist.ReduceOp.MIN)
         if not gate.item():raise AssertionError('FP8 DeepEP oracle or transport mismatch')
         previous = actual
+    if plans[1].reuse_forward_context:
+        # One rank changing input invalidates routed forward values everywhere.
+        with torch.cuda.stream(stream):
+            for plan in plans:plan.forward(x, ids, scores, w1, w2, valid)
+            if rank == 0:x.add_(.017)
+            fallback=[plan.backward(dy,x,ids,scores,w1,w2,valid) for plan in plans]
+        stream.synchronize()
+        errors={name:rms(a.cpu(),b.cpu()) for name,a,b in zip(('dx','dw1','dw2','dscores'),fallback[0],fallback[1])}
+        passed=max(errors.values())<.012 and plans[1].forward_context_reused_windows.item()==0
+        gate=torch.tensor(int(passed),device=device);dist.all_reduce(gate,op=dist.ReduceOp.MIN)
+        print(json.dumps(dict(case='forward_context_rank_change_fallback_reference',rank=rank,ranks=size,
+              pair_errors=errors,all_ranks_fell_back=True,passed=passed)),flush=True)
+        if not gate.item():raise AssertionError('rank-local input change did not invalidate global context')
+        del fallback
     if args.check_zero_capacity:
         with torch.cuda.stream(stream):
             zero_options = dict(common)
