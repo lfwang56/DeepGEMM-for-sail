@@ -51,6 +51,12 @@ def fixture(width,capacity=512,tokens=83,measure=False):
             gates=dict(cpu_style_bf16_reference=torch.equal(bf[:active],expected),bf16_bits=torch.equal(bf,refbf),q_bits=torch.equal(q.view(torch.uint8),refq.view(torch.uint8)),scale_bits=torch.equal(sf.view(torch.uint8),refsf.view(torch.uint8)),bf16_guards=bool(torch.all(bfraw[:64]==-19)&torch.all(bfraw[-64:]==-19)),q_guards=bool(torch.all(qraw[:128]==117)&torch.all(qraw[-128:]==117)),sf_guards=bool(torch.all(sfraw[:32]==-17)&torch.all(sfraw[-32:]==-17)),dscore_bits=torch.equal(ds,refds),status=status.item()==0)
             print(json.dumps(dict(case='fused_peer_quantization_reference',width=width,capacity=capacity,active=active,backward=backward,graph=True,mutable_source_and_routes=True,zero_route_scores=True,source_owners_local=True,every_element=True,gates=gates,passed=all(gates.values()))),flush=True)
             assert all(gates.values()),gates
+    # An invalid positive route is rejected and has zero packed data.
+    blocks.fill_(1);rows.fill_(128);perm[0]=world*tokens*k
+    for idx in (1,3):
+        status.zero_();graphs[idx].replay();torch.cuda.synchronize()
+        assert status.item()==2 and not torch.count_nonzero(bf[0]) and not torch.count_nonzero(q[0].view(torch.uint8))
+    perm[0]=-1
     # Bad GPU work counts must preserve every output and canary.
     for bad in (-1,capacity//128+1):
         blocks.fill_(bad);status.zero_();bfraw.fill_(-19);qraw.fill_(117);sfraw.fill_(-17);ds.fill_(-23)

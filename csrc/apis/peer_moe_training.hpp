@@ -159,7 +159,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             blocks = int64_t(get_num_sms()) * 2;
             break;
         case PeerOperation::ExpertLocalGradientsQuantized:
-        case PeerOperation::ExpertLocalGradients:
+        case PeerOperation::ExpertLocalGradients: {
             DG_HOST_ASSERT(dims.size() == 5 || dims.size() == 6);
             const bool quantized = static_cast<PeerOperation>(operation)==PeerOperation::ExpertLocalGradientsQuantized;
             DG_HOST_ASSERT(quantized ? tensors.size()==10 : (tensors.size() == 8 || tensors.size() == 9));
@@ -178,6 +178,7 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             } else if (tensors.size() == 9) expect(8, dims[0] * dims[1], bf);
             blocks = int64_t(get_num_sms()) * 2;
             break;
+        }
         case PeerOperation::CountRoutes:
             schema(5, 5);
             DG_HOST_ASSERT(dims[1] > 0 && dims[3] > 0 && dims[3] <= 64 && dims[2] < dims[3]);
