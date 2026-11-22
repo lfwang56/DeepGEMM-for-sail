@@ -84,7 +84,7 @@ def unit(m,n):
             qb=b[0][:,start:start+k].contiguous().unsqueeze(0)
             sb=b[1][:,start//128:(start+k)//128].contiguous().unsqueeze(0)
             native=torch.empty(m,n,device='cuda',dtype=torch.bfloat16)
-            info=torch.zeros(m//128,device='cuda',dtype=torch.int32)
+            info=torch.zeros(m,device='cuda',dtype=torch.int32)
             length=torch.tensor([m],device='cuda',dtype=torch.int32)
             dg.m_grouped_fp8_gemm_nt_nopad((qa,sa),(qb,sb),native,info,m_rows=length,
                 disable_ue8m0_cast=True,configs=(dg.get_num_sms(),128,128,128,32,64,3,(0,0,0)))
