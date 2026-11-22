@@ -5985,3 +5985,323 @@ Whole-host-clean local signal: True.
     "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
   }
 ]
+
+
+## Iteration58 — wider N tiles and smaller M compute tiles preserve route metadata
+
+57 passed16 all-buffer bitwise references and12 local measurements but
+BM256 helpers64 regressed9.08->12.37ms locally. Fresh paired Acu gates are
+clean: ordinary remaining15Ntiles(3840cols) ComputeCU79.79%,7.788ms,
+DRAM708.8GB/s,TSMconflict.12; helper16tiles(4096cols)54.00%,12.288ms,
+DRAM1089.3GB/s,conflict.16,168regs/zero local. Inferred transferred DRAM
+bytes rise5.52->13.38GB despite only6.7%more output columns AND additional
+input staging. This is evidence of a locality/supply problem, not proof
+that all regression is one specific cache mechanism.
+
+Test BM128/BN512/S3 so each CTA reuses A over a wider N tile, with
+WM64/WN64 or WM32/WN128 and32/64 helper threads. SMEM245760B plus helper
+address scratch fits the device limit. Preserve the original256-row route
+metadata and bounded rings: SelectedMTileScheduler optionally maps each
+metadata block to two128-row compute blocks with correct group row bases,
+valid tails and source positions. Default metadata geometry remains BM.
+No Params ABI, accumulation order, synchronization primitive or precision
+boundary changes. Host rejects unsupported subdivisions before GPU work.
+
+Compare with the previous two-kernel BM256/BN256 producer/local control
+on identical fresh data. Small FP32, fullQwen all-buffer BITWISE, mutable
+routing/weight graphs, ragged experts, empty and full-skew are mandatory.
+Local5warm20x5 remains a screening signal without real peer networking
+or full routed-layer work. No EP/full-step winner is inferred.
+
+Whole-host-clean local signal: True.
+
+[
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 256,
+    "block_n": 256,
+    "warp": "64x64",
+    "helpers": 0,
+    "keep_gate_up": true,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 9.074748992919922,
+    "samples": [
+      9.074748992919922,
+      9.071237945556641,
+      9.073707580566406,
+      9.075790405273438,
+      9.075820159912109
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "64x64",
+    "helpers": 32,
+    "keep_gate_up": true,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 11.256562805175781,
+    "samples": [
+      11.236678314208984,
+      11.233284759521485,
+      11.256562805175781,
+      11.287483215332031,
+      11.361042022705078
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "64x64",
+    "helpers": 64,
+    "keep_gate_up": true,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 10.863043212890625,
+    "samples": [
+      10.864515686035157,
+      10.863374328613281,
+      10.861647796630859,
+      10.861298370361329,
+      10.863043212890625
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 256,
+    "block_n": 256,
+    "warp": "64x64",
+    "helpers": 0,
+    "keep_gate_up": false,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 9.040080261230468,
+    "samples": [
+      9.040080261230468,
+      9.040476989746093,
+      9.037613677978516,
+      9.042330169677735,
+      9.037637329101562
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "64x64",
+    "helpers": 32,
+    "keep_gate_up": false,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 11.194194030761718,
+    "samples": [
+      11.194194030761718,
+      11.195843505859376,
+      11.157728576660157,
+      11.180686950683594,
+      11.222759246826172
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "64x64",
+    "helpers": 64,
+    "keep_gate_up": false,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 10.820321655273437,
+    "samples": [
+      10.821986389160156,
+      10.823141479492188,
+      10.82029037475586,
+      10.819991302490234,
+      10.820321655273437
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 256,
+    "block_n": 256,
+    "warp": "32x128",
+    "helpers": 0,
+    "keep_gate_up": true,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 9.109687805175781,
+    "samples": [
+      9.114808654785156,
+      9.109197998046875,
+      9.1100341796875,
+      9.108560180664062,
+      9.109687805175781
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "32x128",
+    "helpers": 32,
+    "keep_gate_up": true,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 28.375631713867186,
+    "samples": [
+      28.375631713867186,
+      28.36962890625,
+      28.373916625976562,
+      28.385015869140624,
+      28.383245849609374
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "32x128",
+    "helpers": 64,
+    "keep_gate_up": true,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 27.437863159179688,
+    "samples": [
+      27.437863159179688,
+      27.418011474609376,
+      27.43993225097656,
+      27.423483276367186,
+      27.44508056640625
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 256,
+    "block_n": 256,
+    "warp": "32x128",
+    "helpers": 0,
+    "keep_gate_up": false,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 9.069805908203126,
+    "samples": [
+      9.07144546508789,
+      9.069805908203126,
+      9.059544372558594,
+      9.064885711669922,
+      9.076593017578125
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "32x128",
+    "helpers": 32,
+    "keep_gate_up": false,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 12.594880676269531,
+    "samples": [
+      12.594880676269531,
+      12.643661499023438,
+      12.439649963378907,
+      12.538642883300781,
+      12.653858184814453
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  },
+  {
+    "case": "local_input_helper_wide_signal",
+    "hidden": 8192,
+    "intermediate": 2048,
+    "experts": 16,
+    "block_m": 256,
+    "compute_block_m": 128,
+    "block_n": 512,
+    "warp": "32x128",
+    "helpers": 64,
+    "keep_gate_up": false,
+    "capacity": 65536,
+    "active_rows": 40960,
+    "median_event_ms": 12.695458221435548,
+    "samples": [
+      12.727931213378906,
+      12.565179443359375,
+      12.637451934814454,
+      12.728486633300781,
+      12.695458221435548
+    ],
+    "extension_sha256": "d9460c6ee5eb75ad7a298274a6fa70ce6e7cca4c0aefa860d2f8077e4adcc260",
+    "scope": "Single-device FC1 input staging+GEMM+SwiGLU; source owners emulated by local arrays; no EP/full-step speedup"
+  }
+]

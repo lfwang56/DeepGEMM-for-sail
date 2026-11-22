@@ -7,21 +7,24 @@ namespace deep_gemm {
 template <uint32_t ShapeN, uint32_t ShapeK, uint32_t Groups,
           uint32_t BM, uint32_t BN, uint32_t BK, uint32_t WM, uint32_t WN,
           uint32_t ComputeThreads, int Stages, uint32_t HelperThreads,
-          bool KeepGateUp, uint32_t CopyILP>
+          bool KeepGateUp, uint32_t CopyILP, uint32_t MetadataBM = BM>
 __device__ __forceinline__ void training_bf16_input_helpers_impl(
         const training::PeerGemmParams params) {
     static_assert(HelperThreads == 32 || HelperThreads == 64);
     static_assert(CopyILP == 1 || CopyILP == 2 || CopyILP == 4 || CopyILP == 8);
     static_assert(ShapeK % 8 == 0);
+    static_assert(MetadataBM >= BM && MetadataBM % BM == 0);
+    constexpr uint32_t Ratio = MetadataBM / BM;
     constexpr uint32_t TotalThreads = ComputeThreads + HelperThreads;
-    const uint32_t tiles = __ldg(params.gemm.aligned_num_m_blocks);
+    const uint32_t tiles = __ldg(params.gemm.aligned_num_m_blocks) * Ratio;
     if (threadIdx.x >= ComputeThreads) {
         const uint32_t helper = threadIdx.x - ComputeThreads;
         __shared__ uint64_t addresses[BM];
         for (uint32_t tile = blockIdx.x; tile < tiles; tile += gridDim.x) {
             const uint4 record = __ldg(
-                reinterpret_cast<const uint4*>(params.gemm.expert_ids_and_cumsum) + tile);
-            const uint32_t row_base = record.w + (tile - record.z) * BM;
+                reinterpret_cast<const uint4*>(params.gemm.expert_ids_and_cumsum) + tile / Ratio);
+            const uint32_t row_base = record.w + (tile / Ratio - record.z) * MetadataBM
+                + (tile % Ratio) * BM;
             for (uint32_t row = helper; row < BM; row += HelperThreads) {
                 const uint32_t source = __ldg(params.gemm.sorted_token_ids + tile * BM + row);
                 uint64_t address = 0;
@@ -78,7 +81,7 @@ __device__ __forceinline__ void training_bf16_input_helpers_impl(
             4, true, true, KeepGateUp, CopyILP, // G8 FC1/SwiGLU
             false, 0, 0,                      // no external readiness waits
             false, false, false, false,        // no gradient/KN sidecars
-            ComputeThreads                    // consumers-only barrier0
+            ComputeThreads, MetadataBM        // subgroup and original metadata geometry
         >(params, training::PeerDispatchPipeline{}, tile);
     }
 }

@@ -7,7 +7,8 @@ namespace deep_gemm::training {
 
 // A CTA owns the complete N sweep of one M tile. The caller can run two
 // dependent GEMMs on that tile without waiting for unrelated tiles or CTAs.
-template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E>
+template <GemmType Type, uint32_t N, uint32_t K, uint32_t BM, uint32_t BN, uint32_t E,
+          uint32_t MetadataBM = BM>
 struct SelectedMTileScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
     using Base = FusedGemmScheduler<Type, N, K, BM, BN, E>;
     uint32_t selected, selected_n;
@@ -18,14 +19,19 @@ struct SelectedMTileScheduler : FusedGemmScheduler<Type, N, K, BM, BN, E> {
         const uint32_t iteration = this->current_iter++;
         if (selected_n != ~0u && iteration != 0) return false;
         n = selected_n == ~0u ? iteration : selected_n;
-        if (selected >= this->num_aligned_m_blocks_ || n >= (N + BN - 1) / BN) return false;
-        const uint4 record = __ldg(this->expert_ids_and_cumsum_ + selected);
-        m = selected - record.z;
+        static_assert(MetadataBM >= BM && MetadataBM % BM == 0);
+        constexpr uint32_t ratio = MetadataBM / BM;
+        if (selected >= this->num_aligned_m_blocks_ * ratio || n >= (N + BN - 1) / BN) return false;
+        const uint32_t parent = selected / ratio, part = selected % ratio;
+        const uint4 record = __ldg(this->expert_ids_and_cumsum_ + parent);
+        const uint32_t row = (parent - record.z) * MetadataBM + part * BM;
+        if (row >= record.y) return false;
+        m = row / BM;
         this->curr_group_idx = record.x;
         this->curr_group_m = record.y;
         this->cumsum_m_block_idx = selected;
-        this->curr_block_m_offset = record.w + m * BM;
-        this->valid_m_in_block = min(BM, record.y - m * BM);
+        this->curr_block_m_offset = record.w + row;
+        this->valid_m_in_block = min(BM, record.y - row);
         return true;
     }
 };

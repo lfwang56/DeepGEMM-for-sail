@@ -663,7 +663,7 @@ template <class _SrcT, GemmType kGemmType,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
           bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0,
           bool ReplayGradients = false, bool ReplayWarpReduction = false, bool DHiddenScores = false,
-          bool WeightKN = false, uint32_t SyncThreads = 0>
+          bool WeightKN = false, uint32_t SyncThreads = 0, uint32_t MetadataBlockM = BLOCK_M>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
@@ -739,7 +739,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                                              !PeerWrite, InlineDispatch, PollYieldEvery, PollPauseCycles>,
         SlicedScheduler>;
     using TileScheduler = std::conditional_t<FixedMTile,
-        training::SelectedMTileScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups>,
+        training::SelectedMTileScheduler<kGemmType, SHAPE_N, SHAPE_K, BLOCK_M, BLOCK_N, kNumGroups, MetadataBlockM>,
         PipelineScheduler>;
     static_assert(!FixedMTile || (!DispatchPipeline && !PeerRead && DispatchCacheN == 0));
 
