@@ -11994,3 +11994,331 @@ convergence or Qwen2.4T validation.
     "work/qwen38-r2-lm79-peer-fp8-separate-seeds.log": "{\"case\": \"idle_node_gate\", \"host\": \"e01-cn-9yq4xwro401-a0004\", \"selected_gpus\": [0, 1, 2, 3, 4, 5, 6, 7], \"allowed\": false, \"processes\": [{\"gpu\": 0, \"pid\": 3841077, \"owned\": false}, {\"gpu\": 1, \"pid\": 3841078, \"owned\": false}, {\"gpu\": 2, \"pid\": 3841079, \"owned\": false}, {\"gpu\": 3, \"pid\": 3841080, \"owned\": false}]}\n"
   }
 }
+
+
+## Iteration80 — source-quantized FP8 tile producer and acquiring GEMM
+
+77 profile shows10.54ms staged BF16 input and no input-copy/GEMM
+overlap. Add peer operation19: copy prequantized source E4M3 rows and
+row/128 FP32 scales into packed local FP8/MN-scale buffers, optionally
+copy original BF16 rows for unchanged DW math, fence every writer and
+release-publish each128-row tile. Bounded128-thread producer CTAs reuse
+row addresses. Invalid GPU block counts flag status before any writes.
+
+Extend the regular FP8 wrapper with a separately keyed input mode and
+separate pipeline launch argument. Its native M192 tiles acquire all
+covered128-row signals before loading operands, retain the native
+local epilogue and skip return scatter. Reserve producer CUs by capping
+the waiting-consumer grid to39 minus producer CTAs; do not multiply by
+occupancy. Timeout/status checks prevent silent indefinite waits.
+Existing return mode defaults preserve their math and grid.
+
+Gate against independently Torch-packed BF16 rows, existing row quantizer
+and native FP8 GEMM: every quantization byte/scale, original BF16 DW
+inputs, inactive canaries, changed source/routes/lengths, zero expert
+lengths, exact serial/parallel outputs, graph replay and omitted-BF16
+copy. Component timings include source quantization, producer and FC1,
+with identical serial/parallel kernels and grids. Source owner buffers
+are local on one PPU; these are not realEP/full-step fusion gains.
+
+79 frozen-source quality recovery completed on idle218 with clean train
+and eval audits. Both FP8 Peer return modes ran3 paired EP2 seeds,
+2000 real updates per complete57.8M public-text LM,111539 heldout targets
+per checkpoint. Native same-precision evaluation mean fused1.5872299962
+(SD.0044566182), separate1.5898601084(SD.0042452312), relative-.16543%.
+Canonical initialization and shared frozen file/LUT hashes match.
+This is small-model quality evidence, not Qwen2.4T convergence or
+statistical noninferiority. Original occupied87 gate evidence remains.
+
+{
+  "log_sha256": "81a009d4c541533cb8ed2f049c56e1b36b7eed94313a9a95cdf3c49b778f283c",
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        128,
+        256,
+        384,
+        512
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        0,
+        128,
+        512,
+        128
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        512,
+        512,
+        512,
+        512
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_no_bf16_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_no_bf16_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 2,
+      "consumer_ctas": 37,
+      "source_quantization_in_timing": true,
+      "bf16_dw_copy": true,
+      "median_ms": 118.12786865234375,
+      "samples_ms": [
+        118.2434814453125,
+        117.70810546875,
+        118.12786865234375,
+        117.90555419921876,
+        118.13475341796875
+      ],
+      "scope": "source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 2,
+      "consumer_ctas": 37,
+      "source_quantization_in_timing": true,
+      "bf16_dw_copy": true,
+      "median_ms": 108.83997802734375,
+      "samples_ms": [
+        108.77215576171875,
+        108.87392578125,
+        108.7365234375,
+        108.83997802734375,
+        108.90555419921876
+      ],
+      "scope": "source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 2856689,
+          "start_ticks": "17069578"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ],
+  "raw_tail": "{\"case\": \"idle_node_gate\", \"host\": \"e01-cn-9yq4xwro401-a0002\", \"selected_gpus\": [0, 1, 2, 3, 4, 5, 6, 7], \"allowed\": true, \"processes\": []}\ndeep_gemm/_C.cpython-312-x86_64-linux-gnu.so cd0f839ed18c15d6ac99a02df9c84cc0298e42438ef1a045e444859fb259f5f4\ndevice_props.name:ZW-M890P\n{\"case\": \"fp8_peer_input_component_reference\", \"shape\": [4, 512, 512, 2048], \"counts\": [128, 256, 384, 512], \"graph\": true, \"source_owners_local\": true, \"all_quantization_bytes\": true, \"all_scales\": true, \"bf16_dw_copy\": true, \"inactive_canaries\": true, \"serial_parallel_exact\": true, \"errors\": {\"serial\": 0.0, \"parallel\": 0.0}, \"passed\": true}\n{\"case\": \"fp8_peer_input_component_reference\", \"shape\": [4, 512, 512, 2048], \"counts\": [0, 128, 512, 128], \"graph\": true, \"source_owners_local\": true, \"all_quantization_bytes\": true, \"all_scales\": true, \"bf16_dw_copy\": true, \"inactive_canaries\": true, \"serial_parallel_exact\": true, \"errors\": {\"serial\": 0.0, \"parallel\": 0.0}, \"passed\": true}\n{\"case\": \"fp8_peer_input_component_reference\", \"shape\": [4, 512, 512, 2048], \"counts\": [0, 0, 0, 0], \"graph\": true, \"source_owners_local\": true, \"all_quantization_bytes\": true, \"all_scales\": true, \"bf16_dw_copy\": true, \"inactive_canaries\": true, \"serial_parallel_exact\": true, \"errors\": {\"serial\": 0.0, \"parallel\": 0.0}, \"passed\": true}\n{\"case\": \"fp8_peer_input_component_reference\", \"shape\": [4, 512, 512, 2048], \"counts\": [512, 512, 512, 512], \"graph\": true, \"source_owners_local\": true, \"all_quantization_bytes\": true, \"all_scales\": true, \"bf16_dw_copy\": true, \"inactive_canaries\": true, \"serial_parallel_exact\": true, \"errors\": {\"serial\": 0.0, \"parallel\": 0.0}, \"passed\": true}\n{\"case\": \"fp8_peer_input_no_bf16_reference\", \"shape\": [4, 512, 512, 2048], \"passed\": true}\n{\"case\": \"fp8_peer_input_component_reference\", \"shape\": [16, 4096, 8192, 65536], \"counts\": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], \"graph\": true, \"source_owners_local\": true, \"all_quantization_bytes\": true, \"all_scales\": true, \"bf16_dw_copy\": true, \"inactive_canaries\": true, \"serial_parallel_exact\": true, \"errors\": {\"serial\": 0.0, \"parallel\": 0.0}, \"passed\": true}\n{\"case\": \"fp8_peer_input_component_reference\", \"shape\": [16, 4096, 8192, 65536], \"counts\": [2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560], \"graph\": true, \"source_owners_local\": true, \"all_quantization_bytes\": true, \"all_scales\": true, \"bf16_dw_copy\": true, \"inactive_canaries\": true, \"serial_parallel_exact\": true, \"errors\": {\"serial\": 0.0, \"parallel\": 0.0}, \"passed\": true}\n{\"case\": \"fp8_peer_input_no_bf16_reference\", \"shape\": [16, 4096, 8192, 65536], \"passed\": true}\n{\"case\": \"fp8_peer_input_component_performance\", \"mode\": \"serial\", \"shape\": [16, 4096, 8192, 65536], \"source_owners_local\": true, \"producer_ctas\": 2, \"consumer_ctas\": 37, \"source_quantization_in_timing\": true, \"bf16_dw_copy\": true, \"median_ms\": 118.12786865234375, \"samples_ms\": [118.2434814453125, 117.70810546875, 118.12786865234375, 117.90555419921876, 118.13475341796875], \"scope\": \"source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step\"}\n{\"case\": \"fp8_peer_input_component_performance\", \"mode\": \"parallel\", \"shape\": [16, 4096, 8192, 65536], \"source_owners_local\": true, \"producer_ctas\": 2, \"consumer_ctas\": 37, \"source_quantization_in_timing\": true, \"bf16_dw_copy\": true, \"median_ms\": 108.83997802734375, \"samples_ms\": [108.77215576171875, 108.87392578125, 108.7365234375, 108.83997802734375, 108.90555419921876], \"scope\": \"source row quantization + input producer + FC1 GEMM; local fake source owners; not complete step\"}\n{\"case\": \"idle_node_postflight\", \"host\": \"e01-cn-9yq4xwro401-a0002\", \"allowed\": true, \"processes\": [], \"observed_foreign_during_command\": [], \"verified_owned_processes\": [{\"pid\": 2856689, \"start_ticks\": \"17069578\"}], \"monitoring_errors\": [], \"monitor_interval_seconds\": 2, \"command_returncode\": 0}\n"
+}

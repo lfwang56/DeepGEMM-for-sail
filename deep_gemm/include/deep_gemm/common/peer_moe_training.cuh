@@ -25,6 +25,7 @@ enum class PeerOperation : int {
     AssistInputTiles,
     ReduceScorePartials,
     StageRawWeightedDy,
+    StageFp8InputTiles,
 };
 
 struct PeerGemmParams {

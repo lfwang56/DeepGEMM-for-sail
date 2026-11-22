@@ -18,7 +18,48 @@ template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, b
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::SetRouteWindow) {
+    if constexpr (Op == PeerOperation::StageFp8InputTiles) {
+        const int64_t capacity = p.dim[0], width = p.dim[1], tokens = p.dim[2];
+        const int blocks = peer_pointer<int32_t>(p, 7)[0];
+        auto* status = peer_pointer<uint32_t>(p, 9);
+        if (blocks < 0 || blocks > capacity / 128) {
+            if (index == 0) atomicOr(status, 2u);
+            return;
+        }
+        __shared__ uint64_t q_addresses[128], scale_addresses[128], bf_addresses[128];
+        for (int tile = block_index; tile < blocks; tile += gridDim.x) {
+            const int64_t base_row = int64_t(tile) * 128;
+            const int source = peer_pointer<int32_t>(p, 3)[base_row + threadIdx.x];
+            const bool valid = source >= 0 && source < tokens * p.dim[3];
+            const int owner = valid ? source / tokens : 0;
+            const int row = valid ? source % tokens : 0;
+            q_addresses[threadIdx.x] = valid ? peer_pointer<uint64_t>(p, 0)[owner] + int64_t(row) * width : 0;
+            scale_addresses[threadIdx.x] = valid ? peer_pointer<uint64_t>(p, 1)[owner] + int64_t(row) * (width / 128) * 4 : 0;
+            bf_addresses[threadIdx.x] = valid && p.dim[5] ? peer_pointer<uint64_t>(p, 2)[owner] + int64_t(row) * width * 2 : 0;
+            __syncthreads();
+            const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+            // Each warp reuses the route's source addresses across a full row.
+            for (int r = warp; r < 128; r += 4) {
+                const auto* src_q = reinterpret_cast<const uint4*>(q_addresses[r]);
+                const auto* src_bf = reinterpret_cast<const uint4*>(bf_addresses[r]);
+                for (int column = lane; column < width / 16; column += 32)
+                    peer_pointer<uint4>(p, 4)[(base_row + r) * (width / 16) + column] = src_q ? src_q[column] : uint4{};
+                for (int segment = lane; segment < width / 128; segment += 32)
+                    peer_pointer<float>(p, 5)[int64_t(segment) * capacity + base_row + r] = scale_addresses[r]
+                        ? reinterpret_cast<const float*>(scale_addresses[r])[segment] : (1e-4f / 448.f);
+                if (p.dim[5]) {
+                    for (int column = lane; column < width / 8; column += 32)
+                        peer_pointer<uint4>(p, 6)[(base_row + r) * (width / 8) + column] = src_bf ? src_bf[column] : uint4{};
+                }
+            }
+            // Every writer fences its payload before thread0 publishes the
+            // tile. Consumers acquire all 128-row signals covered by M192.
+            __threadfence();
+            __syncthreads();
+            if (threadIdx.x == 0) tix::red_add_rel(peer_pointer<uint32_t>(p, 8) + tile, 1u);
+            __syncthreads();
+        }
+    } else if constexpr (Op == PeerOperation::SetRouteWindow) {
         const auto* offsets = peer_pointer<int32_t>(p, 0);
         const int64_t total = offsets[p.dim[0]];
         if (total < 0 || total > p.dim[1]) {

@@ -37,7 +37,8 @@ public:
     static constexpr int MaxThreadsPerBlock = Base::MaxThreadsPerBlock;
     static constexpr int MinBlocksPerMultiprocessor = Base::MinBlocksPerMultiprocessor;
     CUTLASS_DEVICE void
-  operator()(Params const& params, const training::PeerGemmParams& peers, char* smem_buf) {
+  operator()(Params const& params, const training::PeerGemmParams& peers,
+             const training::PeerDispatchPipeline& input, char* smem_buf) {
     using namespace cute;
     using X = Underscore;
     int warp_idx = cutlass::canonical_warp_idx_sync();
@@ -88,6 +89,28 @@ public:
       auto offset_scalea = deep_scheduler.curr_offset_scalea();
       auto scale_offset_b = deep_scheduler.curr_offset_b(m_block_idx);
       const auto offset_a = deep_scheduler.curr_offset_a(get<2>(params.mainloop.dA));
+#if DG_TRAINING_FP8_PEER_INPUT
+      const uint32_t input_row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
+      const uint32_t input_valid_rows = uint32_t(cute::min(int(size<0>(TileShape{})), int(M) - int(m_coord) * int(size<0>(TileShape{}))));
+      __shared__ int input_failed;
+      if (threadIdx.x == 0) {
+        input_failed = 0;
+        const uint64_t begin = clock64();
+        // Native M192 can cover two route-aligned M128 publication tiles.
+        for (uint32_t tile = input_row_base / 128;
+             tile < (input_row_base + input_valid_rows + 127) / 128; ++tile) {
+          if (tile >= input.signal_capacity) { atomicOr(input.status, 2u); input_failed = 1; break; }
+          while (tix::ld_acq(input.ready + tile) != 1u) {
+            if (tix::ld_acq(input.status) || clock64() - begin > input.timeout_cycles) {
+              atomicOr(input.status, 8u); input_failed = 1; break;
+            }
+          }
+          if (input_failed) break;
+        }
+      }
+      __syncthreads();
+      if (input_failed) return;
+#endif
       auto offset_b = deep_scheduler.curr_offset_b(m_block_idx, get<2>(params.mainloop.dB));
       const ElementA* ptr_A = reinterpret_cast<const ElementA*>(params.mainloop.ptr_A) + offset_a;
       const ElementB* weight_base = reinterpret_cast<const ElementB*>(params.mainloop.ptr_B);
@@ -154,9 +177,11 @@ public:
       const auto coordinates = thread_mma.partition_C(make_identity_tensor(take<0, 2>(blk_shape)));
       const uint32_t row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
       const uint32_t valid_rows = uint32_t(cute::min(int(size<0>(TileShape{})), int(M) - int(m_coord) * int(size<0>(TileShape{}))));
+#if !DG_TRAINING_FP8_PEER_INPUT
       training::scatter_peer_output<cutlass::bfloat16_t, TileScheduler::SHAPE_N, false>(
           accumulators, coordinates, peers, row_base, valid_rows,
           uint32_t(n_coord) * size<1>(TileShape{}));
+#endif
 #if DG_TRAINING_FP8_PEER_KEEP_LOCAL
       // update params.epilogue for ptrC and ptrD
       auto params_epilogue_local = params.epilogue;
