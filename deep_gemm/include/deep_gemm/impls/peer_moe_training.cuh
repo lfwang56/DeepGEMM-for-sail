@@ -6,12 +6,36 @@
 #include <type_traits>
 #include <deep_gemm/common/peer_moe_training.cuh>
 #include <deep_gemm/tix/sys_atomics.cuh>
+#include <deep_gemm/epilogue/activation_quant_ops.cuh>
 
 namespace deep_gemm::training {
 
 template <typename T>
 __device__ __forceinline__ T* peer_pointer(const Params& p, int index) {
     return reinterpret_cast<T*>(p.ptr[index]);
+}
+
+// Same128-value BF16->E4M3 row recipe as training operation26/34.
+// Two independent16-lane segments share a warp; each lane owns8 values.
+__device__ __forceinline__ uint2 peer_quantize_eight(const uint4 raw,float& scale) {
+    const unsigned words[4]={raw.x,raw.y,raw.z,raw.w};
+    unsigned maximum=0;
+    #pragma unroll
+    for(int j=0;j<4;++j) {
+        const unsigned lo=words[j]&0x7fffu,hi=(words[j]>>16)&0x7fffu;
+        if(lo<=0x7f80u)maximum=max(maximum,lo);
+        if(hi<=0x7f80u)maximum=max(maximum,hi);
+    }
+    const unsigned mask=0xffffu<<((threadIdx.x&31)>=16?16:0);
+    #pragma unroll
+    for(int delta=8;delta>0;delta>>=1)maximum=max(maximum,__shfl_down_sync(mask,maximum,delta,16));
+    maximum=__shfl_sync(mask,maximum,0,16);
+    scale=fmaxf(__uint_as_float(maximum<<16),1e-4f)/448.f;
+    unsigned packed[4];
+    #pragma unroll
+    for(int j=0;j<4;++j)packed[j]=epilogue::quant::fp8_pair(
+        __uint_as_float(words[j]<<16)/scale,__uint_as_float(words[j]&0xffff0000u)/scale);
+    return make_uint2(packed[0]|(packed[1]<<16),packed[2]|(packed[3]<<16));
 }
 
 template <uint32_t Width>
@@ -26,7 +50,34 @@ template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, b
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::PrepareContextReplay) {
+    if constexpr (Op == PeerOperation::PackActiveQuantized) {
+        const int64_t rows=int64_t(peer_pointer<int32_t>(p,4)[0])*128;
+        if(rows<0 || rows>p.dim[0]) {
+            if(index==0)atomicOr(peer_pointer<int32_t>(p,3),2);
+            return;
+        }
+        const int64_t width=InputWidth?InputWidth:p.dim[1],segments=width/128;
+        const int within=threadIdx.x&15;
+        for(int64_t group=block_index*16+threadIdx.x/16;group<rows*segments;
+            group+=int64_t(gridDim.x)*16) {
+            const int64_t row=group/segments,segment=group%segments;
+            const int route=peer_pointer<int32_t>(p,1)[row];
+            const int64_t source_row=route>=0?int64_t(route)/p.dim[3]:0;
+            const int owner=source_row/p.dim[2];
+            const bool valid=route>=0 && owner<p.dim[4];
+            if(route>=0 && !valid && within==0)atomicOr(peer_pointer<int32_t>(p,3),2);
+            uint4 raw{};
+            if(valid) {
+                const auto* source=reinterpret_cast<const __ppu_bfloat16*>(peer_pointer<uint64_t>(p,0)[owner]);
+                raw=*reinterpret_cast<const uint4*>(source+(source_row%p.dim[2])*width+segment*128+within*8);
+            }
+            const int64_t at=row*width+segment*128+within*8;
+            *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,2)+at)=raw;
+            float scale;
+            *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,5)+at)=peer_quantize_eight(raw,scale);
+            if(within==0)peer_pointer<float>(p,6)[segment*p.dim[0]+row]=scale;
+        }
+    } else if constexpr (Op == PeerOperation::PrepareContextReplay) {
         const int e = p.dim[0], total = peer_pointer<int32_t>(p, 3)[e];
         const bool invalid = total < 0;
         const bool cached = !invalid && total > 0 && (int64_t(total - 1) / p.dim[1]) * p.dim[1] == p.dim[2];
@@ -330,7 +381,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                 peer_pointer<uint4>(p, 4)[row * width + column] = scaled;
             }
         }
-    } else if constexpr (Op == PeerOperation::ExpertLocalGradients) {
+    } else if constexpr (Op == PeerOperation::ExpertLocalGradients || Op == PeerOperation::ExpertLocalGradientsQuantized) {
         // Keep replayed Y at its expert. Pull raw source DY and scores once
         // here, produce the mandatory BF16 packed DY and return one FP32
         // derivative per unique source route. Valid zero scores still have a
@@ -350,7 +401,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             const int64_t local_route = valid ? route % stride : 0;
             // Both modes share this exact dot/weighting kernel. Only the DY
             // address changes, preserving its FP32 accumulation order.
-            const uint4* dy = valid ? (p.ptr[8] ? peer_pointer<uint4>(p, 8) + row * width
+            const uint4* dy = valid ? ((Op == PeerOperation::ExpertLocalGradients && p.ptr[8]) ? peer_pointer<uint4>(p, 8) + row * width
                 : reinterpret_cast<const uint4*>(peer_pointer<uint64_t>(p, 0)[owner])
                     + (local_route / p.dim[3]) * width) : nullptr;
             const float score = valid ? reinterpret_cast<const float*>(peer_pointer<uint64_t>(p, 1)[owner])[local_route] : 0.f;
@@ -369,6 +420,12 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
                     dot += value * __bfloat162float(y[j]);
                 }
                 peer_pointer<uint4>(p, 5)[row * width + column] = raw_weighted;
+                if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantized) {
+                    float scale;
+                    const uint2 packed=peer_quantize_eight(raw_weighted,scale);
+                    peer_pointer<uint2>(p,8)[row*(p.dim[1]/8)+column]=packed;
+                    if((lane&15)==0)peer_pointer<float>(p,9)[(column/16)*p.dim[0]+row]=scale;
+                }
             }
             #pragma unroll
             for (int delta = 16; delta; delta >>= 1) dot += __shfl_down_sync(0xffffffffu, dot, delta);

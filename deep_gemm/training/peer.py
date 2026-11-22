@@ -198,6 +198,13 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_input_serialize = fp8_flag(fp8_input_serialize, "DG_MOE_FP8_INPUT_SERIALIZE")
         self.fp8_serial_full_grid = fp8_flag(None, "DG_MOE_FP8_INPUT_SERIAL_FULL_GRID")
         self.fp8_input_cache_scales = fp8_flag(fp8_input_cache_scales, "DG_MOE_FP8_INPUT_CACHE_SCALES")
+        stage_quant = os.environ.get('DG_MOE_FP8_FUSED_STAGE_QUANT','0')
+        if stage_quant not in ('0','1','2','3'):
+            raise ValueError('DG_MOE_FP8_FUSED_STAGE_QUANT must be0,1,2or3')
+        self.fp8_fused_stage_quant = int(stage_quant)
+        if self.fp8_fused_stage_quant and (not self.fp8_peer_compute or self.fp8_input_pipeline
+                or not expert_local_grad or kwargs.get('block_m',128)!=128):
+            raise ValueError('fused stage quantization requires staged FP8 M128 expert-local gradients')
         self.reuse_forward_context = fp8_flag(reuse_forward_context, "DG_MOE_REUSE_FORWARD_CONTEXT")
         if self.reuse_forward_context and (ring_rows is None or not expert_local_grad
                 or ffn_fusion or dag_fusion or dag_backward or fuse_replay_gradients
@@ -246,6 +253,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fp8_input_pipeline:
             self.fp8_input_mode = "source_fp8_pull_pipeline"
             self.communication_dtype = "fp8_input_bf16_dw_and_return"
+        if self.fp8_fused_stage_quant & 1:
+            self.fp8_input_mode = "staged_bf16_with_fused_row_quantization"
         self._fp8_prequantized_input = None
         if not isinstance(fuse_dispatch, bool) or not isinstance(fuse_return, bool):
             raise TypeError("peer fusion switches must be bool")
@@ -369,7 +378,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -1039,6 +1048,13 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._fp8_stage_quantized_input(compile_only=True)
                 self._stage_input(compile_only=True, force_bf16=True)
             return
+        if self.fp8_fused_stage_quant & 1 and not force_bf16:
+            _peer(21,[self.pointer_tables['local_x'],self.permutation,self.packed_x,self.status,
+                      self.num_blocks if blocks_override is None else blocks_override,
+                      self.quantized[self.h][0],self.quantized_scale_storage[self.h]],
+                  [self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+            if not compile_only:self._fp8_prequantized_input=self.packed_x.data_ptr()
+            return
         _peer(11 if self.vectorized_copy else 7,
               [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status,
                self.num_blocks if blocks_override is None else blocks_override],
@@ -1100,8 +1116,13 @@ class PeerMoEPlan(NativeMoEPlan):
             if not compile_only:
                 self._join_gradient_prefetch()
             tensors.append(self.packed_raw_dy)
-        _peer(13, tensors,
-              [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
+        if self.fp8_fused_stage_quant & 2:
+            tensors.extend((self.quantized[self.h][0],self.quantized_scale_storage[self.h]))
+            _peer(22,tensors,[self.rows,self.h,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+            if not compile_only:self._fp8_prequantized_input=self.packed_dy.data_ptr()
+        else:
+            _peer(13, tensors,
+                  [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
 
     def _prefetch_raw_dy(self, compile_only=False):
         _peer(15, [self.pointer_tables["raw_dy"], self.permutation, self.packed_raw_dy,

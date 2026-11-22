@@ -22134,3 +22134,101 @@ ssed": true}
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2722956, "start_ticks": "18594925"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration101 — fuse FP8 quantization into existing peer input and DY staging
+
+100 closed2b0551edf3, all100 quantization bitwise/special/canary gates
+passed. Five frozen100EP8 distributed checks clean; EP32 unchanged
+source verification is in flight. No promotion before complete step.
+
+Frozen99 pipeline profiles all6phases clean. Staged69.5228ms, parallel8
+70.8171ms, serial38 72.5155ms. Quantized input producer plus separate
+BF16 DW input staging fails to beat staged. Preserve BF16 packed X
+while fusing its unchanged128-element FP8 quantization into the original
+peer copy; avoid rereading the full packed tensor. In backward, keep
+legacy ExpertLocalGradients BF16 weighting and FP32 dot accumulation
+order; emit FP8 DY and SF alongside BF16 DY, avoiding independent
+quantization. No new stream/resource partition or precision recipe.
+
+DG_MOE_FP8_FUSED_STAGE_QUANT0(default),1FWD,2DY,3both; M128 staged
+FP8 expert-local plans only, all ranks agree. New peer operations21/22.
+Unit gates compare BF16, all FP8 bytes/SF bits, dScore bits with old
+copy/weighting+quant34, mutable GPU work/source/routes, padding and
+zero scores, inactive/outer canaries, invalid metadata. Component
+timings use fake local owners and are not real communication gains.
+
+{
+  "clean": false,
+  "passed": false,
+  "metrics": [],
+  "records": []
+}
+
+Rawfailuretail:
+```
+<deep_gemm::MegaMoEPhaseKind::Linear2, Ranks>::Args&, int) [with int Ranks = 64; typename GemmRuntime<deep_gemm::MegaMoEPhaseKind::Linear2, Ranks>::Args = GemmRuntime<deep_gemm::MegaMoEPhaseKind::Linear2, 64>::Args]’
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/sm80_int8_int8_mega_moe.hpp:506:26:   required from ‘void deep_gemm::mega_int8::int8_mega_moe_impl(const at::Tensor&, const std::tuple<at::Tensor, at::Tensor>&, const std::tuple<at::Tensor, at::Tensor>&, uint8_t*, const deep_gemm::layout::Int8MegaMoEBuffer&, const std::vector<long int>&, int, int, int, int, float, CopyStreamResources&, deep_gemm::GatedActivation, float, float, float, int32_t*, bool) [with int Ranks = 64; uint8_t = unsigned char; deep_gemm::layout::Int8MegaMoEBuffer = deep_gemm::layout::MegaMoEBufferLayout<true>; int32_t = int]’
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/sm80_int8_int8_mega_moe.hpp:518:58:   required from ‘deep_gemm::mega_int8::int8_int8_mega_moe_impl(uint8_t*, const deep_gemm::layout::Int8MegaMoEBuffer&, int, int, CopyStreamResources&, const std::vector<long int>&, int, const at::Tensor&, const std::tuple<at::Tensor, at::Tensor>&, const std::tuple<at::Tensor, at::Tensor>&, const std::optional<at::Tensor>&, int, deep_gemm::GatedActivation, float, float, float, float, bool)::<lambda(auto:212)> [with auto:212 = std::integral_constant<int, 64>]’
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/mega_moe_runtime.hpp:57:26:   required from ‘void deep_gemm::mega::for_ranks(int, F&&) [with F = deep_gemm::mega_int8::int8_int8_mega_moe_impl(uint8_t*, const deep_gemm::layout::Int8MegaMoEBuffer&, int, int, CopyStreamResources&, const std::vector<long int>&, int, const at::Tensor&, const std::tuple<at::Tensor, at::Tensor>&, const std::tuple<at::Tensor, at::Tensor>&, const std::optional<at::Tensor>&, int, deep_gemm::GatedActivation, float, float, float, float, bool)::<lambda(auto:212)>]’
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/sm80_int8_int8_mega_moe.hpp:517:25:   required from here
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/sm80_int8_int8_mega_moe.hpp:167:46: warning: ‘offsetof’ within non-standard-layout type ‘deep_gemm::mega_int8::GemmRuntime<deep_gemm::MegaMoEPhaseKind::Linear2, 64>::Params’ {aka ‘deep_gemm::mega_int8::Int8ScatterParams<64>’} is conditionally-supported [-Winvalid-offsetof]
+  167 |             linear, sizeof(Params), offsetof(Params, collective_mainloop_params),
+      |                                              ^
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/sm80_int8_int8_mega_moe.hpp:168:22: warning: ‘offsetof’ within non-standard-layout type ‘deep_gemm::mega_int8::GemmRuntime<deep_gemm::MegaMoEPhaseKind::Linear2, 64>::Params’ {aka ‘deep_gemm::mega_int8::Int8ScatterParams<64>’} is conditionally-supported [-Winvalid-offsetof]
+  168 |             offsetof(Params, collective_epilogue_params), offsetof(Params, scheduler),
+      |                      ^
+/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/csrc/apis/../jit_kernels/impls/sm80_int8_int8_mega_moe.hpp:168:68: warning: ‘offsetof’ within non-standard-layout type ‘deep_gemm::mega_int8::GemmRuntime<deep_gemm::MegaMoEPhaseKind::Linear2, 64>::Params’ {aka ‘deep_gemm::mega_int8::Int8ScatterParams<64>’} is conditionally-supported [-Winvalid-offsetof]
+  168 |             offsetof(Params, collective_epilogue_params), offsetof(Params, scheduler),
+      |                                                                    ^
+ninja: build stopped: subcommand failed.
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/site-packages/torch/utils/cpp_extension.py", line 2786, in _run_ninja_build
+    subprocess.run(
+  File "/usr/local/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['ninja', '-v', '-j', '2']' returned non-zero exit status 1.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/setup.py", line 210, in <module>
+    setuptools.setup(
+  File "/usr/local/lib/python3.12/site-packages/setuptools/__init__.py", line 104, in setup
+    return distutils.core.setup(**attrs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/core.py", line 184, in setup
+    return run_commands(dist)
+           ^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/core.py", line 200, in run_commands
+    dist.run_commands()
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/dist.py", line 969, in run_commands
+    self.run_command(cmd)
+  File "/usr/local/lib/python3.12/site-packages/setuptools/dist.py", line 967, in run_command
+    super().run_command(command)
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/dist.py", line 988, in run_command
+    cmd_obj.run()
+  File "/usr/local/lib/python3.12/site-packages/setuptools/command/build_ext.py", line 91, in run
+    _build_ext.run(self)
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/command/build_ext.py", line 359, in run
+    self.build_extensions()
+  File "/usr/local/lib/python3.12/site-packages/torch/utils/cpp_extension.py", line 1184, in build_extensions
+    build_ext.build_extensions(self)
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/command/build_ext.py", line 479, in build_extensions
+    self._build_extensions_serial()
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/command/build_ext.py", line 505, in _build_extensions_serial
+    self.build_extension(ext)
+  File "/usr/local/lib/python3.12/site-packages/setuptools/command/build_ext.py", line 252, in build_extension
+    _build_ext.build_extension(self, ext)
+  File "/usr/local/lib/python3.12/site-packages/setuptools/_distutils/command/build_ext.py", line 560, in build_extension
+    objects = self.compiler.compile(
+              ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/site-packages/torch/utils/cpp_extension.py", line 924, in unix_wrap_ninja_compile
+    _write_ninja_file_and_compile_objects(
+  File "/usr/local/lib/python3.12/site-packages/torch/utils/cpp_extension.py", line 2361, in _write_ninja_file_and_compile_objects
+    _run_ninja_build(
+  File "/usr/local/lib/python3.12/site-packages/torch/utils/cpp_extension.py", line 2803, in _run_ninja_build
+    raise RuntimeError(message) from e
+RuntimeError: Error compiling objects for extension
+
+```

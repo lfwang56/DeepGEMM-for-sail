@@ -28,6 +28,8 @@ public:
         const int warp_rows = get_env<int>("DG_INPUT_ASSIST_WARP_ROWS", 1);
         DG_HOST_ASSERT(warp_rows == 0 || warp_rows == 1);
         const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
+        const bool fused_quant = args.operation == int(PeerOperation::PackActiveQuantized) ||
+                                 args.operation == int(PeerOperation::ExpertLocalGradientsQuantized);
         const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
         return fmt::format(R"(
 #include <deep_gemm/impls/peer_moe_training.cuh>
@@ -36,7 +38,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
     deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}{}>(params);
 }}
 )", args.launch_args.block_dim.x, args.operation, args.operation,
-       assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0,
+       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : 0,
        args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
        cache_fp8_scales ? ", true" : "");
     }
@@ -47,7 +49,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::PrepareContextReplay));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ExpertLocalGradientsQuantized));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -64,6 +66,17 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     int64_t work = 0, blocks = -1;
     int threads = 256;
     switch (static_cast<PeerOperation>(operation)) {
+        case PeerOperation::PackActiveQuantized:
+            schema(7,6);
+            DG_HOST_ASSERT(dims[0]>0 && dims[1]>0 && dims[1]%128==0 && dims[2]>0 && dims[3]>0 &&
+                           dims[4]>0 && dims[4]<=64 && dims[5]==128 && dims[0]%128==0);
+            expect(0,dims[4],i64);expect(1,dims[0],i32);expect(2,dims[0]*dims[1],bf);
+            expect(3,1,i32);expect(4,1,i32);expect(5,dims[0]*dims[1],torch::kFloat8_e4m3fn);
+            expect(6,dims[0]*(dims[1]/128),torch::kFloat32);
+            DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[2].data_ptr())%16==0 &&
+                           reinterpret_cast<uintptr_t>(tensors[5].data_ptr())%8==0);
+            blocks=int64_t(get_num_sms())*4;
+            break;
         case PeerOperation::PrepareContextReplay:
             schema(11, 3);
             DG_HOST_ASSERT(dims[0] > 0 && dims[0] < 128 && dims[1] > 0 && dims[2] % dims[1] == 0);
@@ -145,16 +158,24 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             DG_HOST_ASSERT(!tensors[3].is_alias_of(tensors[4]));
             blocks = int64_t(get_num_sms()) * 2;
             break;
+        case PeerOperation::ExpertLocalGradientsQuantized:
         case PeerOperation::ExpertLocalGradients:
             DG_HOST_ASSERT(dims.size() == 5 || dims.size() == 6);
-            DG_HOST_ASSERT(tensors.size() == 8 || tensors.size() == 9);
+            const bool quantized = static_cast<PeerOperation>(operation)==PeerOperation::ExpertLocalGradientsQuantized;
+            DG_HOST_ASSERT(quantized ? tensors.size()==10 : (tensors.size() == 8 || tensors.size() == 9));
             if (dims.size() == 6) DG_HOST_ASSERT(dims[5] == 128 || dims[5] == 256);
             DG_HOST_ASSERT(dims[1] > 0 && dims[1] % 8 == 0 && dims[2] > 0 && dims[3] > 0
                            && dims[4] > 0 && dims[4] <= 64);
             expect(0, dims[4], i64); expect(1, dims[4], i64); expect(2, dims[4], i64);
             expect(3, dims[0], i32); expect(4, dims[0] * dims[1], bf);
             expect(5, dims[0] * dims[1], bf); expect(6, 1, i32); expect(7, 1, i32);
-            if (tensors.size() == 9) expect(8, dims[0] * dims[1], bf);
+            if (quantized) {
+                DG_HOST_ASSERT(dims.size()==6 && dims[5]==128 && dims[1]%128==0);
+                expect(8,dims[0]*dims[1],torch::kFloat8_e4m3fn);
+                expect(9,dims[0]*(dims[1]/128),torch::kFloat32);
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[5].data_ptr())%16==0 &&
+                               reinterpret_cast<uintptr_t>(tensors[8].data_ptr())%8==0);
+            } else if (tensors.size() == 9) expect(8, dims[0] * dims[1], bf);
             blocks = int64_t(get_num_sms()) * 2;
             break;
         case PeerOperation::CountRoutes:

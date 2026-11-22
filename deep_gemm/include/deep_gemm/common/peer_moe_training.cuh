@@ -27,6 +27,8 @@ enum class PeerOperation : int {
     StageRawWeightedDy,
     StageFp8InputTiles,
     PrepareContextReplay,
+    PackActiveQuantized,
+    ExpertLocalGradientsQuantized,
 };
 
 struct PeerGemmParams {
