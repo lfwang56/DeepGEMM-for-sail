@@ -15138,3 +15138,327 @@ controls are compared under the same replay policy before anyratio claim.
     ]
   }
 ]
+
+
+## Iteration88 — preserve receive-route indices in multichunk context
+
+Iteration87 single-chunk FP8/BF16 transport gates passed, but T65/C32
+failed the balanced input-gradient oracle on seven ranks. DW and dscores
+remained correct. Route-window offsets/permutation were retained per
+source chunk, while route_experts/route_rows used for receive-side
+DX reduction still referred to the final forward source chunk. Retain
+both indices in each bounded context slot. No math/precision change.
+
+Rerun EP8 controls, both multichunk transport types, mutable routing,
+rank-local invalidation and zero capacity; complete BF16/FP8 full-model
+20-step optimizer/reference gates; then matched actual EP32 baseline
+and fused context/full-replay timing and gradient references.
+
+[
+  {
+    "name": "qwen38-r2-context88-ep8-deepep-bf16-payload",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context88-ep8-deepep-control-attempt0",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context88-ep8-deepep-fp8-payload",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context88-ep8-deepep-multichunk",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context88-ep8-deepep-multichunk-bf16-payload",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_deepep_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  },
+  {
+    "name": "qwen38-r2-context88-ep8-peer-guard",
+    "clean": true,
+    "metrics": [
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_peer_mutable_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      },
+      {
+        "case": "fp8_peer_zero_capacity_graph_reference",
+        "backend": null,
+        "median_max_rank_event_ms": null,
+        "passed": true,
+        "peer_fp8_input_mode": null,
+        "peer_fp8_input_ctas": null,
+        "peer_fp8_input_serialized": null
+      }
+    ]
+  }
+]

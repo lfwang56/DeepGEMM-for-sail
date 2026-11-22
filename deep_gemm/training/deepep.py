@@ -154,7 +154,8 @@ class DeepEPMoEPlan(NativeMoEPlan):
         self.forward_context_receives = []
         if self.reuse_forward_context:
             original = {name: getattr(self, name) for name in
-                        ('gate_up', 'hidden', 'packed_output', 'global_offsets', 'global_lengths', 'global_permutation')}
+                        ('gate_up', 'hidden', 'packed_output', 'global_offsets', 'global_lengths', 'global_permutation',
+                         'route_experts', 'route_rows')}
             if self.compute == 'fp8':
                 original.update(quantized_hidden=self.quantized[self.i][0],
                                 quantized_hidden_scales=self.quantized_scale_storage[self.i])
