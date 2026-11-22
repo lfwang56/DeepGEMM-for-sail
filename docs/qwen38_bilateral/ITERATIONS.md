@@ -3728,3 +3728,74 @@ Timing records:
 []
 
 Candidate blocked before distributed timing: new full-Qwen identical-input chunk reference failed bitwise comparison (3.2% elements, maxabs0.007013624); small shapes had passed. No speedup accepted. Preserve work/qwen38-r2-wgchunk47-preflight.log. Investigate implementation and test stream ordering after closing this attempt.
+
+
+## Iteration48 — short output-tile WGrad launches with full CTA grids
+
+The matched CTA clocks show far less in-CTA elapsed growth than kernel spans
+under full-grid concurrency. Test short complete-K output-tile intervals,
+letting dGrad/communication dispatch between WGrad launches without cutting
+its persistent grid. DG_BF16_WGRAD_TILE_CHUNK0(default) retains the prior
+launch; positive1..2^20 partitions only device-length WGrad output tiles.
+A distinct _tile_range kernel gets a separate uint2 argument, preserving
+KGroupedGemmArgs. Every tile has the original complete K accumulation order
+and beta=1; no work, precision, gradient or route is omitted.
+Reject negative/oversized chunks and multi-launch CTA-probe ambiguity before
+output mutation. Static CPU-length APIs retain their original behavior.
+The first CPU build on215 encountered foreign GPU work and was excluded by
+its whole-node gate; switch to218 for clean build and PPU preflights. No
+foreign task was stopped. Frozen iteration46 LM quality runs are isolated.
+
+Complete H8192/I2048/E512/K10,T4096/C4096,ring65536,G8,BM256,MGroup/WGrad3.
+Strong Elastic38 early-DY denominator and all-rank audits remain unchanged.
+Raw dHidden score fusion46 is kept constant in all Peer cases. Serial chunks
+control launch overhead versus concurrency. Timings including failed/partial
+phases are retained in provenance; only clean complete steps count.
+
+Timing records:
+[
+  {
+    "phase": "qwen38-r2-wgchunk48-both-1024",
+    "clean": true,
+    "backend": "peer",
+    "ms": 83.254248046875
+  },
+  {
+    "phase": "qwen38-r2-wgchunk48-both-2048",
+    "clean": true,
+    "backend": "peer",
+    "ms": 83.1755859375
+  },
+  {
+    "phase": "qwen38-r2-wgchunk48-both-4096",
+    "clean": true,
+    "backend": "peer",
+    "ms": 83.87572021484375
+  },
+  {
+    "phase": "qwen38-r2-wgchunk48-both-512",
+    "clean": true,
+    "backend": "peer",
+    "ms": 84.01217041015624
+  },
+  {
+    "phase": "qwen38-r2-wgchunk48-control",
+    "clean": true,
+    "backend": "peer",
+    "ms": 79.9606201171875
+  },
+  {
+    "phase": "qwen38-r2-wgchunk48-elastic-early",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 105.69415283203125
+  },
+  {
+    "phase": "qwen38-r2-wgchunk48-serial-2048",
+    "clean": true,
+    "backend": "peer",
+    "ms": 79.92532348632812
+  }
+]
+
+47 failed the newly authored reference test before any timing. The test wrote a/b/device lengths on the caller stream and immediately read them on another stream without a dependency. Add wait_stream before each reference read; preserve bitwise equality, all shapes, dynamic inputs and invalid-argument gates. Kernel implementation and native7f30de6b are unchanged, so no JIT name change is required for this harness correction.

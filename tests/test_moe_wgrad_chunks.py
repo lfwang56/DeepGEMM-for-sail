@@ -20,6 +20,7 @@ def main():
         stream=torch.cuda.Stream();stream.wait_stream(torch.cuda.current_stream())
         for chunk in ((257,512,1024) if groups==16 else (1,5,17,100000)):
             lengths.fill_(2560 if args.qwen and groups==16 else 256)
+            stream.wait_stream(torch.cuda.current_stream())
             os.environ['DG_BF16_WGRAD_TILE_CHUNK']='0'
             with torch.cuda.stream(stream):
                 plain.copy_(initial);dg.k_grouped_bf16_gemm_tn_device(a,b,plain,lengths,capacity)
@@ -35,6 +36,9 @@ def main():
                 a.mul_(.91);b.add_(.0001)
                 lengths.zero_()
                 if pattern=='mixed':lengths[groups//2]=256
+                # Updates run on the caller stream; order the reference stream
+                # before it reads these fresh inputs and device lengths.
+                stream.wait_stream(torch.cuda.current_stream())
                 os.environ['DG_BF16_WGRAD_TILE_CHUNK']='0'
                 with torch.cuda.stream(stream):
                     plain.copy_(initial);dg.k_grouped_bf16_gemm_tn_device(a,b,plain,lengths,capacity)
