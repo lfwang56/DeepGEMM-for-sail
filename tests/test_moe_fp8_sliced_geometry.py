@@ -38,7 +38,7 @@ def main():
     gc.collect();torch.cuda.synchronize()
     for width,slices in ((128,1),(512,2),(512,4),(8192,8),(8192,16)):
         producer_fixture(width,co_resident=True,elastic_workers=True,slices=slices)
-    config=[256,128,64,64,2]
+    config=[128,128,32,64,3]
     joint_fixture(4,512,512,2048,256,[[128,256,384,512],[0,128,512,128],[0,0,0,0],[512]*4],
         ctas=4*dg.get_num_sms(),threads=256,bf16_source=True,co_resident=True,
         config=config,elastic_workers=True,slices=2)

@@ -437,7 +437,7 @@ class PeerMoEPlan(NativeMoEPlan):
             gemm_configs = {role: (256, 64, 64, 64, 2) for role in ("fc1", "fc2", "dhidden", "dx")}
         self.gemm_configs = {} if gemm_configs is None else {name: tuple(value) for name, value in gemm_configs.items()}
         if self.fp8_input_co_resident:
-            self.gemm_configs.setdefault('fc1',(256,128,64,64,2))
+            self.gemm_configs.setdefault('fc1',(128,128,32,64,3))
         if self.fp8_return_pipeline:
             for role in ('fc2', 'dx'):
                 config = self.gemm_configs.setdefault(role, (256, 128, 32, 64, 3))

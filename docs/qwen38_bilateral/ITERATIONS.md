@@ -55217,3 +55217,3303 @@ RuntimeError: FP8 peer return with K<=512 requires at least three stages
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3768961, "start_ticks": "20566223"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
 
 ```
+
+
+## Iteration120 — restore the efficient tile and validate bounded sliced input
+
+119failed its unit group because its new2stage geometry is intentionally
+rejected for K<=512. Producer byte checks passed before that host guard;
+no EP8 phases were run. A separate read-only frozen117 whole-layer EP8
+proxy (128experts, notEP32) passed host audits but was strongly negative:
+control61.911ms, wide-tile staged173.635ms, concurrent246.160ms,
+elastic246.201ms. Do not promote that geometry. Function occupancy alone
+did not predict performance; no spill/root-cause claim without counters.
+
+Restore the experimental co-resident default128x128/warp32x64/3stage.
+Keep119's host rejection of elastic producer budgets above156CTAs and
+118's optional sliced READY protocol. Use this efficient supported tile
+for BOTH small and actual-Qwen-sized component gates, then six EP8
+normal/zero-capacity/multi-chunk phases. Three guards,20producer byte
+references,four small and10large joint references,15timing arms.
+
+All stable114 settings and its independent installed wheel are unchanged.
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_sliced_input_schema_guard",
+      "rejected": [
+        [
+          "producer",
+          0
+        ],
+        [
+          "consumer",
+          0
+        ],
+        [
+          "producer",
+          3
+        ],
+        [
+          "consumer",
+          3
+        ],
+        [
+          "producer",
+          4
+        ],
+        [
+          "consumer",
+          4
+        ],
+        [
+          "producer",
+          32
+        ],
+        [
+          "consumer",
+          32
+        ]
+      ],
+      "valid_slices": [
+        1,
+        2
+      ],
+      "passed": true
+    },
+    {
+      "case": "fp8_co_resident_resource_guard",
+      "producer_blocks_per_cu": 7,
+      "consumer_minimum_blocks_per_cu": 2,
+      "unsafe_default_rejected_before_launch": true,
+      "producer_grid": 39,
+      "consumer_grid": 39,
+      "elastic_workers": true,
+      "invalid_layout_guard_and_retry": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_elastic_budget_guard",
+      "maximum_producer_ctas": 156,
+      "rejected": [
+        [
+          "producer",
+          195
+        ],
+        [
+          "consumer",
+          195
+        ],
+        [
+          "producer",
+          312
+        ],
+        [
+          "consumer",
+          312
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        128,
+        256,
+        384,
+        512
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 118,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        0,
+        128,
+        512,
+        128
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 102,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        512,
+        512,
+        512,
+        512
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 142,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.861887359619141,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "samples_ms": [
+        9.80489273071289,
+        9.940402221679687,
+        9.861887359619141,
+        9.838223266601563,
+        9.872051239013672
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 11.467810821533202,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "samples_ms": [
+        11.472894287109375,
+        11.467810821533202,
+        11.428542327880859,
+        11.496513366699219,
+        11.412525177001953
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.980452728271484,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "samples_ms": [
+        10.892412567138672,
+        11.006022644042968,
+        10.956275939941406,
+        11.156568145751953,
+        10.980452728271484
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.84784393310547,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "samples_ms": [
+        9.842996215820312,
+        9.84784393310547,
+        9.878312683105468,
+        9.842687225341797,
+        9.909356689453125
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 11.016551971435547,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "samples_ms": [
+        11.041683197021484,
+        11.016551971435547,
+        10.982066345214843,
+        11.01800765991211,
+        10.968158721923828
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.480239868164062,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "samples_ms": [
+        10.575472259521485,
+        10.419568634033203,
+        10.551103210449218,
+        10.480239868164062,
+        10.401628875732422
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.842691040039062,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "samples_ms": [
+        9.803334808349609,
+        9.842691040039062,
+        9.879953765869141,
+        9.84262466430664,
+        9.847533416748046
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.871739196777344,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "samples_ms": [
+        10.855238342285157,
+        10.871739196777344,
+        10.880287170410156,
+        10.85509033203125,
+        10.878633880615235
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.918878936767578,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "samples_ms": [
+        9.874944305419922,
+        9.878140258789063,
+        9.930589294433593,
+        9.918878936767578,
+        9.92435073852539
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.861579132080077,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "samples_ms": [
+        9.861579132080077,
+        9.903064727783203,
+        9.847978210449218,
+        9.817767333984374,
+        9.872254943847656
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.82477264404297,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "samples_ms": [
+        10.82679443359375,
+        10.807713317871094,
+        10.82477264404297,
+        10.81972427368164,
+        10.849609375
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.858116149902344,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "samples_ms": [
+        9.851179504394532,
+        9.879745483398438,
+        9.844129180908203,
+        9.858116149902344,
+        9.864977264404297
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.80806655883789,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "samples_ms": [
+        9.80806655883789,
+        9.79041748046875,
+        9.759361267089844,
+        9.871304321289063,
+        9.856460571289062
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.84886474609375,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "samples_ms": [
+        10.898486328125,
+        10.873190307617188,
+        10.830227661132813,
+        10.84886474609375,
+        10.843550109863282
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.781307220458984,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "samples_ms": [
+        9.790186309814453,
+        9.790125274658203,
+        9.764393615722657,
+        9.765946197509766,
+        9.781307220458984
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-bounded120-ep8-mode3-tiled2-direct16-parallel39",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-bounded120-ep8-multichunk-tiled2-direct16-parallel39",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-bounded120-ep8-mode3-tiled2-direct16-parallel156",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-bounded120-ep8-multichunk-tiled2-direct16-parallel156",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-bounded120-ep8-mode3-tiled2-direct16-serial156",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-bounded120-ep8-multichunk-tiled2-direct16-serial156",
+      "returncode": 0
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_sliced_input_schema_guard",
+      "rejected": [
+        [
+          "producer",
+          0
+        ],
+        [
+          "consumer",
+          0
+        ],
+        [
+          "producer",
+          3
+        ],
+        [
+          "consumer",
+          3
+        ],
+        [
+          "producer",
+          4
+        ],
+        [
+          "consumer",
+          4
+        ],
+        [
+          "producer",
+          32
+        ],
+        [
+          "consumer",
+          32
+        ]
+      ],
+      "valid_slices": [
+        1,
+        2
+      ],
+      "passed": true
+    },
+    {
+      "case": "fp8_co_resident_resource_guard",
+      "producer_blocks_per_cu": 7,
+      "consumer_minimum_blocks_per_cu": 2,
+      "unsafe_default_rejected_before_launch": true,
+      "producer_grid": 39,
+      "consumer_grid": 39,
+      "elastic_workers": true,
+      "invalid_layout_guard_and_retry": true,
+      "passed": true
+    },
+    {
+      "case": "fp8_elastic_budget_guard",
+      "maximum_producer_ctas": 156,
+      "rejected": [
+        [
+          "producer",
+          195
+        ],
+        [
+          "consumer",
+          195
+        ],
+        [
+          "producer",
+          312
+        ],
+        [
+          "consumer",
+          312
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 128,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 1,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 2,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 512,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 4,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 8,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 0,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 128,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 256,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "quantized_tile_publication_reference",
+      "width": 8192,
+      "capacity": 512,
+      "active": 512,
+      "input_slices": 16,
+      "graph": true,
+      "mutable_sources": true,
+      "every_element": true,
+      "gates": {
+        "cpu_bf16_bits": true,
+        "bf16_bits": true,
+        "q_bits": true,
+        "scale_bits": true,
+        "bf_guards": true,
+        "q_guards": true,
+        "sf_guards": true,
+        "ready": true,
+        "ready_guards": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        128,
+        256,
+        384,
+        512
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 118,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        0,
+        128,
+        512,
+        128
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 102,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        4,
+        512,
+        512,
+        2048
+      ],
+      "counts": [
+        512,
+        512,
+        512,
+        512
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 142,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.861887359619141,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "samples_ms": [
+        9.80489273071289,
+        9.940402221679687,
+        9.861887359619141,
+        9.838223266601563,
+        9.872051239013672
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 11.467810821533202,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "samples_ms": [
+        11.472894287109375,
+        11.467810821533202,
+        11.428542327880859,
+        11.496513366699219,
+        11.412525177001953
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.980452728271484,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 1,
+      "samples_ms": [
+        10.892412567138672,
+        11.006022644042968,
+        10.956275939941406,
+        11.156568145751953,
+        10.980452728271484
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.84784393310547,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "samples_ms": [
+        9.842996215820312,
+        9.84784393310547,
+        9.878312683105468,
+        9.842687225341797,
+        9.909356689453125
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 11.016551971435547,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "samples_ms": [
+        11.041683197021484,
+        11.016551971435547,
+        10.982066345214843,
+        11.01800765991211,
+        10.968158721923828
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.480239868164062,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 2,
+      "samples_ms": [
+        10.575472259521485,
+        10.419568634033203,
+        10.551103210449218,
+        10.480239868164062,
+        10.401628875732422
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.842691040039062,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "samples_ms": [
+        9.803334808349609,
+        9.842691040039062,
+        9.879953765869141,
+        9.84262466430664,
+        9.847533416748046
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.871739196777344,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "samples_ms": [
+        10.855238342285157,
+        10.871739196777344,
+        10.880287170410156,
+        10.85509033203125,
+        10.878633880615235
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.918878936767578,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 4,
+      "samples_ms": [
+        9.874944305419922,
+        9.878140258789063,
+        9.930589294433593,
+        9.918878936767578,
+        9.92435073852539
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.861579132080077,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "samples_ms": [
+        9.861579132080077,
+        9.903064727783203,
+        9.847978210449218,
+        9.817767333984374,
+        9.872254943847656
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.82477264404297,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "samples_ms": [
+        10.82679443359375,
+        10.807713317871094,
+        10.82477264404297,
+        10.81972427368164,
+        10.849609375
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.858116149902344,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 8,
+      "samples_ms": [
+        9.851179504394532,
+        9.879745483398438,
+        9.844129180908203,
+        9.858116149902344,
+        9.864977264404297
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "work_counter": 78,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_reference",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "counts": [
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560,
+        2560
+      ],
+      "graph": true,
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "work_counter": 10318,
+      "all_quantization_bytes": true,
+      "all_scales": true,
+      "bf16_dw_copy": true,
+      "inactive_canaries": true,
+      "serial_parallel_exact": true,
+      "errors": {
+        "serial": 0.0,
+        "parallel": 0.0
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "staged_bf16_native",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.80806655883789,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "samples_ms": [
+        9.80806655883789,
+        9.79041748046875,
+        9.759361267089844,
+        9.871304321289063,
+        9.856460571289062
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "serial",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 10.84886474609375,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "samples_ms": [
+        10.898486328125,
+        10.873190307617188,
+        10.830227661132813,
+        10.84886474609375,
+        10.843550109863282
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "fp8_peer_input_component_performance",
+      "mode": "parallel",
+      "shape": [
+        16,
+        4096,
+        8192,
+        65536
+      ],
+      "source_owners_local": true,
+      "producer_ctas": 156,
+      "producer_threads": 256,
+      "cache_scales": false,
+      "consumer_ctas": 39,
+      "source_quantization_in_timing": false,
+      "bf16_dw_copy": true,
+      "median_ms": 9.781307220458984,
+      "bf16_source": true,
+      "co_resident": true,
+      "elastic_workers": true,
+      "input_slices": 16,
+      "samples_ms": [
+        9.790186309814453,
+        9.790125274658203,
+        9.764393615722657,
+        9.765946197509766,
+        9.781307220458984
+      ],
+      "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3806213,
+          "start_ticks": "20580564"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Raw tail:
+```
+256, "cache_scales": false, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 8, "work_counter": 78, "all_quantization_bytes": true, "all_scales": true, "bf16_dw_copy": true, "inactive_canaries": true, "serial_parallel_exact": true, "errors": {"serial": 0.0, "parallel": 0.0}, "passed": true}
+{"case": "fp8_peer_input_component_reference", "shape": [16, 4096, 8192, 65536], "counts": [2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560], "graph": true, "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 8, "work_counter": 10318, "all_quantization_bytes": true, "all_scales": true, "bf16_dw_copy": true, "inactive_canaries": true, "serial_parallel_exact": true, "errors": {"serial": 0.0, "parallel": 0.0}, "passed": true}
+{"case": "fp8_peer_input_component_performance", "mode": "staged_bf16_native", "shape": [16, 4096, 8192, 65536], "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "consumer_ctas": 39, "source_quantization_in_timing": false, "bf16_dw_copy": true, "median_ms": 9.861579132080077, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 8, "samples_ms": [9.861579132080077, 9.903064727783203, 9.847978210449218, 9.817767333984374, 9.872254943847656], "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"}
+{"case": "fp8_peer_input_component_performance", "mode": "serial", "shape": [16, 4096, 8192, 65536], "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "consumer_ctas": 39, "source_quantization_in_timing": false, "bf16_dw_copy": true, "median_ms": 10.82477264404297, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 8, "samples_ms": [10.82679443359375, 10.807713317871094, 10.82477264404297, 10.81972427368164, 10.849609375], "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"}
+{"case": "fp8_peer_input_component_performance", "mode": "parallel", "shape": [16, 4096, 8192, 65536], "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "consumer_ctas": 39, "source_quantization_in_timing": false, "bf16_dw_copy": true, "median_ms": 9.858116149902344, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 8, "samples_ms": [9.851179504394532, 9.879745483398438, 9.844129180908203, 9.858116149902344, 9.864977264404297], "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"}
+{"case": "fp8_peer_input_component_reference", "shape": [16, 4096, 8192, 65536], "counts": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "graph": true, "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 16, "work_counter": 78, "all_quantization_bytes": true, "all_scales": true, "bf16_dw_copy": true, "inactive_canaries": true, "serial_parallel_exact": true, "errors": {"serial": 0.0, "parallel": 0.0}, "passed": true}
+{"case": "fp8_peer_input_component_reference", "shape": [16, 4096, 8192, 65536], "counts": [2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560, 2560], "graph": true, "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 16, "work_counter": 10318, "all_quantization_bytes": true, "all_scales": true, "bf16_dw_copy": true, "inactive_canaries": true, "serial_parallel_exact": true, "errors": {"serial": 0.0, "parallel": 0.0}, "passed": true}
+{"case": "fp8_peer_input_component_performance", "mode": "staged_bf16_native", "shape": [16, 4096, 8192, 65536], "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "consumer_ctas": 39, "source_quantization_in_timing": false, "bf16_dw_copy": true, "median_ms": 9.80806655883789, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 16, "samples_ms": [9.80806655883789, 9.79041748046875, 9.759361267089844, 9.871304321289063, 9.856460571289062], "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"}
+{"case": "fp8_peer_input_component_performance", "mode": "serial", "shape": [16, 4096, 8192, 65536], "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "consumer_ctas": 39, "source_quantization_in_timing": false, "bf16_dw_copy": true, "median_ms": 10.84886474609375, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 16, "samples_ms": [10.898486328125, 10.873190307617188, 10.830227661132813, 10.84886474609375, 10.843550109863282], "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"}
+{"case": "fp8_peer_input_component_performance", "mode": "parallel", "shape": [16, 4096, 8192, 65536], "source_owners_local": true, "producer_ctas": 156, "producer_threads": 256, "cache_scales": false, "consumer_ctas": 39, "source_quantization_in_timing": false, "bf16_dw_copy": true, "median_ms": 9.781307220458984, "bf16_source": true, "co_resident": true, "elastic_workers": true, "input_slices": 16, "samples_ms": [9.790186309814453, 9.790125274658203, 9.764393615722657, 9.765946197509766, 9.781307220458984], "scope": "input preparation + FC1 GEMM; local fake source owners; not complete step"}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3806213, "start_ticks": "20580564"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```
