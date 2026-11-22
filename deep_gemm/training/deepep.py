@@ -267,7 +267,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
             if self.fp8_weight_quantization:
                 operations.append((10, 29, 30)[self.fp8_weight_quantization])
             if self.fp8_active_quantization:
-                operations.extend((26, 27, 28))
+                operations.extend((34 if self.fp8_vector_row_quant else 26, 27, 28))
             if self.fp8_source_dispatch:
                 operations.append(31)
         if self.fast_weight_transpose:
@@ -294,7 +294,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
             quantized_a = self.quantized[a.shape[1]]
             if not prequantized:
                 if self.fp8_active_quantization:
-                    _launch(26, [a, quantized_a[0], self.quantized_scale_storage[a.shape[1]],
+                    _launch(34 if self.fp8_vector_row_quant else 26, [a, quantized_a[0], self.quantized_scale_storage[a.shape[1]],
                                  self.current_rows, self.status],
                             [self.rows, a.shape[1], int(self.fp8_mn_major_scales)])
                 else:
@@ -343,7 +343,7 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 # received token prefix once before expert/window expansion.
                 self.window_recv_x = rx
                 received = handle.psum_num_recv_tokens_per_scaleup_rank[-1:]
-                _launch(26, [rx, self.recv_qx, self.recv_qsf, received, self.status],
+                _launch(34 if self.fp8_vector_row_quant else 26, [rx, self.recv_qx, self.recv_qsf, received, self.status],
                         [self.recv_capacity, h, 0])
                 self.window_recv_q, self.window_recv_qsf = self.recv_qx, self.recv_qsf
             if (self.window_recv_qsf.dtype != torch.float32

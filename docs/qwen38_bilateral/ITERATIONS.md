@@ -18465,3 +18465,3672 @@ device_props.name:ZW-M890P
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2609705, "start_ticks": "18551592"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration100 — vectorized row FP8 quantization with identical scale recipe
+
+99 closed0377aa0d43. All producer bytes/SF/CPU/native/canary/graph gates
+passed. Including GPU quantization+transpose DW1 regressed9.5951->
+12.9213ms (preparation4.5377), DW2 5.0656->8.0618ms (preparation4.0050).
+Not integrated into production plans. Native99dd890b9206b399a8ff10378a3e38cbe2ae9d60f1d41b016a5bc76485245aff43.
+
+Exact frozen90 graph profiles: FP8 input quantization5.6376ms, combined
+weight quantization+quantized transpose4.3184ms, BF16 DW15.8494ms.
+Graphspan70.4777vsBF1664.4131ms; do not substitute this for unprofiled
+maxrank timing. FP8 quantization+layout total13.6257ms19.33%.
+
+Add optional DG_MOE_FP8_VECTOR_ROW_QUANT=1: GPU16-lane segments,16B
+BF16 loads and8B FP8 stores, integer BF16 magnitude max, same128
+element scale/division/rounding. Preserve both SF layouts, active
+GPU rows, dynamic capture, empty rows and invalid metadata. Existing
+26 arithmetic and default paths remain. EP ranks agree in native
+recipe. Gate every output bit against26 incl Inf/NaN/subnormals and
+canaries. Measure only after gates, no recipe/convergence change.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 0,
+      "active": 40960,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_performance",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 0,
+      "active": 40960,
+      "before_ms": 2.2943399429321287,
+      "after_ms": 1.6480989456176758,
+      "speedup": 1.3921129851049412,
+      "scope": "Row quantization only, unchanged arithmetic",
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 1,
+      "active": 40960,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_performance",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 1,
+      "active": 40960,
+      "before_ms": 2.6361820220947267,
+      "after_ms": 1.8106039047241211,
+      "speedup": 1.455968373434165,
+      "scope": "Row quantization only, unchanged arithmetic",
+      "passed": true
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 0,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 128,
+      "layout": 1,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 0,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 256,
+      "layout": 1,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 0,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "zero",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "special",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 0,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 1,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 129,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 513,
+      "width": 8192,
+      "layout": 1,
+      "active": 513,
+      "pattern": "updated",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 0,
+      "active": 40960,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_performance",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 0,
+      "active": 40960,
+      "before_ms": 2.2943399429321287,
+      "after_ms": 1.6480989456176758,
+      "speedup": 1.3921129851049412,
+      "scope": "Row quantization only, unchanged arithmetic",
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_reference",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 1,
+      "active": 40960,
+      "pattern": "random",
+      "gates": {
+        "q_bits": true,
+        "scale_bits": true,
+        "q_guard": true,
+        "sf_guard": true,
+        "status": true
+      },
+      "graph": true,
+      "every_element": true,
+      "passed": true
+    },
+    {
+      "case": "vector_row_quantization_performance",
+      "capacity": 65536,
+      "width": 8192,
+      "layout": 1,
+      "active": 40960,
+      "before_ms": 2.6361820220947267,
+      "after_ms": 1.8106039047241211,
+      "speedup": 1.455968373434165,
+      "scope": "Row quantization only, unchanged arithmetic",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0002",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 2722956,
+          "start_ticks": "18594925"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Rawfailuretail:
+```
+ssed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 0, "active": 0, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 0, "active": 1, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 0, "active": 129, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 0, "active": 513, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 0, "pattern": "random", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 1, "pattern": "random", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 129, "pattern": "random", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 513, "pattern": "random", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 0, "pattern": "zero", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 1, "pattern": "zero", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 129, "pattern": "zero", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 513, "pattern": "zero", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 0, "pattern": "special", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 1, "pattern": "special", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 129, "pattern": "special", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 513, "pattern": "special", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 0, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 1, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 129, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 513, "width": 8192, "layout": 1, "active": 513, "pattern": "updated", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 65536, "width": 8192, "layout": 0, "active": 40960, "pattern": "random", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_performance", "capacity": 65536, "width": 8192, "layout": 0, "active": 40960, "before_ms": 2.2943399429321287, "after_ms": 1.6480989456176758, "speedup": 1.3921129851049412, "scope": "Row quantization only, unchanged arithmetic", "passed": true}
+{"case": "vector_row_quantization_reference", "capacity": 65536, "width": 8192, "layout": 1, "active": 40960, "pattern": "random", "gates": {"q_bits": true, "scale_bits": true, "q_guard": true, "sf_guard": true, "status": true}, "graph": true, "every_element": true, "passed": true}
+{"case": "vector_row_quantization_performance", "capacity": 65536, "width": 8192, "layout": 1, "active": 40960, "before_ms": 2.6361820220947267, "after_ms": 1.8106039047241211, "speedup": 1.455968373434165, "scope": "Row quantization only, unchanged arithmetic", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2722956, "start_ticks": "18594925"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

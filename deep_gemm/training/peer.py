@@ -599,7 +599,7 @@ class PeerMoEPlan(NativeMoEPlan):
     def _prepare_pointwise(self):
         super()._prepare_pointwise()
         if self.fp8_peer_compute:
-            dg._C._moe_training_precompile(self.device.index, [9, 26, 27, 28, (10, 29, 30)[self.fp8_weight_quantization]])
+            dg._C._moe_training_precompile(self.device.index, [9, 34 if self.fp8_vector_row_quant else 26, 27, 28, (10, 29, 30)[self.fp8_weight_quantization]])
 
     def _barrier(self, tag, compile_only=False):
         _peer(5, [self.pointer_tables["barrier_state"], self.barrier_state, self.status],
@@ -635,7 +635,7 @@ class PeerMoEPlan(NativeMoEPlan):
                     config=self.gemm_configs.get(role, ()),
                     input_control=[self.fp8_input_ready, self.status], reserved_input_ctas=self.fp8_input_ctas)
             if self._fp8_prequantized_input != a.data_ptr():
-                _launch(26, [a, quantized_a[0], self.quantized_scale_storage[width], self.current_rows, self.status],
+                _launch(34 if self.fp8_vector_row_quant else 26, [a, quantized_a[0], self.quantized_scale_storage[width], self.current_rows, self.status],
                         [self.rows, width, 1])
             self._fp8_prequantized_input = None
             config = self.gemm_configs.get(role)

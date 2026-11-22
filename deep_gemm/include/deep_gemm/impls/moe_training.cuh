@@ -39,6 +39,44 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
     const int warp = thread >> 5;
     const int64_t index = block_index * blockDim.x + thread;
 
+    if constexpr (Op == Operation::QuantizeRowsVectorDeviceRows) {
+        const int rows=__ldg(pointer<int32_t>(p,3));
+        if(rows<0 || int64_t(rows)>p.dim[0]) {
+            if(thread==0 && blockIdx.x==0)atomicOr(pointer<int32_t>(p,4),2);
+            return;
+        }
+        const int within=thread&15;
+        const unsigned mask=0xffffu<<((thread&31)>=16?16:0);
+        const int64_t segments=p.dim[1]/128,groups=int64_t(rows)*segments;
+        for(int64_t group=block_index*16+thread/16;group<groups;group+=int64_t(gridDim.x)*16) {
+            const int64_t base=group*128;
+            const uint4 cached=*reinterpret_cast<const uint4*>(pointer<Bf16>(p,0)+base+within*8);
+            const unsigned words[4]={cached.x,cached.y,cached.z,cached.w};
+            unsigned maximum=0;
+            #pragma unroll
+            for(int j=0;j<4;++j) {
+                const unsigned lo=words[j]&0x7fffu,hi=(words[j]>>16)&0x7fffu;
+                if(lo<=0x7f80u)maximum=max(maximum,lo);
+                if(hi<=0x7f80u)maximum=max(maximum,hi);
+            }
+            #pragma unroll
+            for(int delta=8;delta>0;delta>>=1)
+                maximum=max(maximum,__shfl_down_sync(mask,maximum,delta,16));
+            maximum=__shfl_sync(mask,maximum,0,16);
+            const float scale=fmaxf(__uint_as_float(maximum<<16),1e-4f)/448.f;
+            if(within==0) {
+                const int64_t at=MnMajorScales?(group%segments)*p.dim[0]+group/segments:group;
+                pointer<float>(p,2)[at]=scale;
+            }
+            unsigned packed[4];
+            #pragma unroll
+            for(int j=0;j<4;++j)packed[j]=epilogue::quant::fp8_pair(
+                __uint_as_float(words[j]<<16)/scale,__uint_as_float(words[j]&0xffff0000u)/scale);
+            *reinterpret_cast<uint2*>(pointer<uint8_t>(p,1)+base+within*8)=
+                make_uint2(packed[0]|(packed[1]<<16),packed[2]|(packed[3]<<16));
+        }
+        return;
+    }
     if constexpr (Op == Operation::PackFp8WeightGradients) {
         // Per-expert feature scales over actual token K. First pass reduces
         // coalesced token-major BF16 reads. Second pass transposes through

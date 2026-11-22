@@ -61,6 +61,12 @@ class NativeMoEPlan:
         if fp8_transpose_quantized_weights and (compute != 'fp8' or getattr(self, 'fp8_async_weight_quantization', False)):
             raise ValueError('quantized weight transpose requires synchronous FP8 weight preparation')
         self.fp8_transpose_quantized_weights = fp8_transpose_quantized_weights
+        row_quant = os.environ.get('DG_MOE_FP8_VECTOR_ROW_QUANT', '0')
+        if row_quant not in ('0','1'):
+            raise ValueError('DG_MOE_FP8_VECTOR_ROW_QUANT must be0or1')
+        self.fp8_vector_row_quant = row_quant == '1'
+        if self.fp8_vector_row_quant and compute != 'fp8':
+            raise ValueError('vectorized FP8 row quantization requires FP8 compute')
         self.wgrad_overlap = wgrad_overlap
         if not isinstance(overlap_expert_dy, bool):
             raise TypeError("overlap_expert_dy must be bool")
@@ -131,7 +137,7 @@ class NativeMoEPlan:
                 recipe += ":vectorized_routes"
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout,
-                           wgrad_overlap, overlap_expert_dy, fp8_transpose_quantized_weights)
+                           wgrad_overlap, overlap_expert_dy, fp8_transpose_quantized_weights, self.fp8_vector_row_quant)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):

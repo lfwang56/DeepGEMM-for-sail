@@ -22,7 +22,8 @@ public:
 
     static bool active_quantization(const int operation) {
         return operation >= int(Operation::QuantizeRowsDeviceRows) &&
-               operation <= int(Operation::ActivationBackwardQuantizeDeviceRows);
+               operation <= int(Operation::ActivationBackwardQuantizeDeviceRows) ||
+               operation == int(Operation::QuantizeRowsVectorDeviceRows);
     }
 
     static std::string kernel_name(const Args& args) {
@@ -52,7 +53,7 @@ __global__ void {}(const deep_gemm::training::Params params) {{
 // metadata, so warmed calls are legal during graph capture.
 static void launch(const int operation, const std::vector<torch::Tensor>& tensors,
                    const std::vector<int64_t>& dims) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::PackFp8WeightGradients));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::QuantizeRowsVectorDeviceRows));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -190,10 +191,12 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             blocks = (m * (width / 128) + 7) / 8;
             break;
         }
+        case Operation::QuantizeRowsVectorDeviceRows:
         case Operation::QuantizeRowsDeviceRows:
         case Operation::ActivationQuantizeDeviceRows:
         case Operation::ActivationBackwardQuantizeDeviceRows: {
-            const bool row = static_cast<Operation>(operation) == Operation::QuantizeRowsDeviceRows;
+            const bool row = static_cast<Operation>(operation) == Operation::QuantizeRowsDeviceRows ||
+                             static_cast<Operation>(operation) == Operation::QuantizeRowsVectorDeviceRows;
             const bool backward = static_cast<Operation>(operation) == Operation::ActivationBackwardQuantizeDeviceRows;
             const size_t count_index = row ? 3 : backward ? 5 : 4;
             schema(count_index + 2, 3);
@@ -203,6 +206,10 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             if (!row) expect(1, m * width, bf);
             if (backward) expect(2, m * 2 * width, bf);
             const auto output_width = backward ? 2 * width : width;
+            if(static_cast<Operation>(operation)==Operation::QuantizeRowsVectorDeviceRows) {
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[0].data_ptr())%16==0);
+                DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[1].data_ptr())%8==0);
+            }
             expect(row ? 1 : backward ? 3 : 2, m * output_width, f8);
             expect(row ? 2 : backward ? 4 : 3, m * (output_width / 128), fp);
             expect(count_index, 1, i32); expect(count_index + 1, 1, i32);
@@ -349,7 +356,7 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
 static void precompile(const int device, const std::vector<int>& operations) {
     const c10::cuda::CUDAGuard guard(device);
     for (const auto operation : operations) {
-        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::TransposeQuantizedWeights));
+        DG_HOST_ASSERT(operation >= 0 && operation <= int(Operation::QuantizeRowsVectorDeviceRows));
         const int variants = Runtime::active_quantization(operation) ? 2 : 1;
         for (int layout = 0; layout < variants; ++layout) {
             Runtime::Args args{operation, {dim3(1), dim3(256), 0}, Params{}};
