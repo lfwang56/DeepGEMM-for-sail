@@ -21,11 +21,12 @@ public:
         bool copy_only;
         int copy_threads;
         int return_store_bytes;
+        bool activation_backward;
     };
     static auto compile_key(const Args& args) {
         return std::make_tuple(FP8GemmRuntime::compile_key(
             {args.launch_info, args.launch_args, args.kernel_params}), args.keep_local, args.input_mode, args.output_mode, args.copy_only,
-            args.copy_only ? args.copy_threads : 0, args.return_store_bytes,
+            args.copy_only ? args.copy_threads : 0, args.return_store_bytes, args.activation_backward,
             args.copy_only || args.return_store_bytes==16 ? args.peers.destination_rows_per_rank : 0);
     }
     static std::string generate_impl(const Args& args) {
@@ -51,8 +52,8 @@ public:
         }
         replace("typename GemmKernel::Params params", "typename GemmKernel::Params params, const deep_gemm::training::PeerGemmParams peers, const deep_gemm::training::PeerDispatchPipeline input, const deep_gemm::training::PeerDispatchPipeline output");
         replace("op(params, smem);", "op(params, peers, input, output, smem);");
-        return fmt::format("#define DG_TRAINING_FP8_PEER_KEEP_LOCAL {}\n#define DG_TRAINING_FP8_PEER_INPUT {}\n#define DG_TRAINING_FP8_RETURN_PIPELINE {}\n#define DG_TRAINING_FP8_RETURN_STRIDE {}\n#define DG_TRAINING_FP8_RETURN_STORE_BYTES {}\n",
-                           int(args.keep_local), int(args.input_mode), int(args.output_mode), args.peers.destination_rows_per_rank, args.return_store_bytes) + source;
+        return fmt::format("#define DG_TRAINING_FP8_PEER_KEEP_LOCAL {}\n#define DG_TRAINING_FP8_PEER_INPUT {}\n#define DG_TRAINING_FP8_RETURN_PIPELINE {}\n#define DG_TRAINING_FP8_RETURN_STRIDE {}\n#define DG_TRAINING_FP8_RETURN_STORE_BYTES {}\n#define DG_TRAINING_FP8_ACTIVATION_BACKWARD {}\n",
+                           int(args.keep_local), int(args.input_mode), int(args.output_mode), args.peers.destination_rows_per_rank, args.return_store_bytes, int(args.activation_backward)) + source;
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
         DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.peers, args.input, args.output));
@@ -69,7 +70,7 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
                            const std::vector<int>& config,
                            const std::vector<torch::Tensor>& input_control, int reserved_input_ctas,
                            const std::vector<torch::Tensor>& return_control, int reserved_return_ctas, bool copy_only, int copy_threads,
-                           int return_store_bytes) {
+                           int return_store_bytes, const std::optional<torch::Tensor>& activation_gate_up) {
     const auto& a = lhs.first;
     const auto& b = rhs.first;
     const auto& sa = lhs.second;
@@ -103,6 +104,14 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     DG_HOST_ASSERT(!(input_mode && output_mode) && (!copy_only || output_mode));
     DG_HOST_ASSERT(return_store_bytes==4 || return_store_bytes==16);
     DG_HOST_ASSERT(return_store_bytes==4 || (!input_mode && !output_mode));
+    const bool activation_backward=activation_gate_up.has_value();
+    if(activation_backward) {
+        const auto& gu=*activation_gate_up;
+        DG_HOST_ASSERT(!input_mode && !output_mode && !copy_only && !keep_local && return_store_bytes==4);
+        DG_HOST_ASSERT(gu.is_cuda() && gu.device()==a.device() && gu.is_contiguous() &&
+                       gu.scalar_type()==torch::kBFloat16 && gu.dim()==2 && gu.size(0)==m && gu.size(1)==2*n);
+        DG_HOST_ASSERT(gu.numel()<=INT32_MAX);
+    }
     DG_HOST_ASSERT(copy_threads==256 || copy_threads==512 || copy_threads==1024);
     if (input_mode) {
         TORCH_CHECK(input_control.size() == 2 && keep_local,
@@ -175,7 +184,8 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
     peers.destination_peers = reinterpret_cast<const uint64_t*>(destinations.data_ptr<int64_t>());
     peers.destination_rows_per_rank = destination_rows_per_rank;
     peers.num_ranks = destinations.numel();
-    const std::string name = return_store_bytes==16 ? "fp8_training_peer_return_wide16" : copy_only ? "fp8_training_peer_return_copy" : output_mode ? "fp8_training_peer_return_pipeline" : input_mode ? "fp8_training_peer_input" :
+    if(activation_backward)peers.activation_gate_up=activation_gate_up->data_ptr();
+    const std::string name = activation_backward ? "fp8_training_dhidden_activation" : return_store_bytes==16 ? "fp8_training_peer_return_wide16" : copy_only ? "fp8_training_peer_return_copy" : output_mode ? "fp8_training_peer_return_pipeline" : input_mode ? "fp8_training_peer_input" :
         keep_local ? "fp8_training_peer_return_keep" : "fp8_training_peer_return_discard";
     auto args = PeerFp8ReturnRuntime::Args{
         .launch_info = {bm, bn, bk, wm, wn, int(groups), stages, "MGroupedNoPad", "Default", name, false},
@@ -183,7 +193,7 @@ static int peer_fp8_return(const std::pair<torch::Tensor, torch::Tensor>& lhs,
         .kernel_params = FP8GemmRuntime::to_underlying_arguments_rtc(gemm, nullptr),
         .peers = peers, .keep_local = keep_local, .input = input, .input_mode = input_mode,
         .output = output, .output_mode = output_mode, .copy_only = copy_only, .copy_threads = copy_threads,
-        .return_store_bytes = return_store_bytes};
+        .return_store_bytes = return_store_bytes, .activation_backward = activation_backward};
     if(return_store_bytes==16) {
         args.launch_args.smem_size=std::max<size_t>(args.launch_args.smem_size,size_t(bm)*(bn+16)*sizeof(cutlass::bfloat16_t));
         DG_HOST_ASSERT(args.launch_args.smem_size+size_t(bm)*sizeof(uint64_t)+8<=256*1024);
@@ -215,7 +225,8 @@ static void register_peer_fp8_apis(pybind11::module_& m) {
           py::arg("return_control") = std::vector<torch::Tensor>{},
           py::arg("reserved_return_ctas") = 0,
           py::arg("copy_only") = false, py::arg("copy_threads") = 512,
-          py::arg("return_store_bytes") = 4);
+          py::arg("return_store_bytes") = 4,
+          py::arg("activation_gate_up") = std::nullopt);
 }
 
 } // namespace deep_gemm::training

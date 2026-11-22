@@ -61,6 +61,12 @@ class NativeMoEPlan:
         if fp8_transpose_quantized_weights and (compute != 'fp8' or getattr(self, 'fp8_async_weight_quantization', False)):
             raise ValueError('quantized weight transpose requires synchronous FP8 weight preparation')
         self.fp8_transpose_quantized_weights = fp8_transpose_quantized_weights
+        fused_dhidden=os.environ.get('DG_MOE_FP8_FUSE_DHIDDEN_ACTIVATION','0')
+        if fused_dhidden not in ('0','1'):
+            raise ValueError('DG_MOE_FP8_FUSE_DHIDDEN_ACTIVATION must be0or1')
+        self.fp8_fuse_dhidden_activation=fused_dhidden=='1'
+        if self.fp8_fuse_dhidden_activation and (compute!='fp8' or not fuse_activation_quant or m_schedule!='nopad'):
+            raise ValueError('fused dHidden/activation requires FP8 no-pad GEMM and activation quantization')
         fused_prep=os.environ.get('DG_MOE_FP8_FUSED_WEIGHT_PREPARE','0')
         if fused_prep not in ('0','1'):
             raise ValueError('DG_MOE_FP8_FUSED_WEIGHT_PREPARE must be0or1')
@@ -153,7 +159,7 @@ class NativeMoEPlan:
             description = (hidden, intermediate, local_experts, topk, max_tokens, chunk_tokens,
                            recipe, self.transport, m_schedule, self.rows, block_m, gate_up_layout,
                            wgrad_overlap, overlap_expert_dy, fp8_transpose_quantized_weights, self.fp8_vector_row_quant, self.fp8_transpose_swizzle,
-                           self.fp8_fused_weight_prepare,self.fp8_weight_prep_ctas)
+                           self.fp8_fused_weight_prepare,self.fp8_weight_prep_ctas,self.fp8_fuse_dhidden_activation)
             descriptions = [None] * self.size
             dist.all_gather_object(descriptions, description, group=group)
             if any(other != description for other in descriptions):
@@ -195,6 +201,8 @@ class NativeMoEPlan:
         self.route_experts = allocate("route_experts", (r,), torch.int32)
         self.route_rows = allocate("route_rows", (r,), torch.int32)
         self.status = allocate("status", (1,), torch.int32).zero_()
+        if self.fp8_fuse_dhidden_activation:
+            self._fp8_activation_destinations=allocate('fp8_local_activation_dummy',(1,),torch.int64).zero_()
         self.packed_x = allocate("packed_x", (m, h))
         self.gate_up = allocate("gate_up", (m, 2 * i))
         self.hidden = allocate("hidden", (m, i))
@@ -404,6 +412,10 @@ class NativeMoEPlan:
             quantized_a = self.quantized[a.shape[1]]
             if not prequantized:
                 _launch(9, [a, *quantized_a], list(a.shape))
+            if name=='w2_t' and self.fp8_fuse_dhidden_activation:
+                return dg._C._moe_training_peer_fp8_gemm(
+                    quantized_a,self.quantized[name],output,self.lengths,self.permutation,
+                    self._fp8_activation_destinations,self.rows,keep_local=False,activation_gate_up=self.gate_up)
             if self.m_schedule == "nopad":
                 dg.m_grouped_fp8_gemm_nt_nopad(
                     quantized_a, self.quantized[name], output, self.group_ids,
@@ -470,6 +482,9 @@ class NativeMoEPlan:
     def _activation(self, backward=False, hidden=None):
         hidden = self.hidden if hidden is None else hidden
         fused = self.compute == "fp8" and self.fuse_activation_quant
+        if backward and self.fp8_fuse_dhidden_activation:
+            _launch(9,[self.gate_up,*self.quantized[2*self.i]],list(self.gate_up.shape))
+            return True
         if fused:
             tensors = [self.gate_up, hidden] + ([self.gate_up] if backward else [])
             tensors += list(self.quantized[2 * self.i if backward else self.i])

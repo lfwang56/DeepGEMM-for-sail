@@ -45946,3 +45946,915 @@ Raw tail:
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3491144, "start_ticks": "218489724"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
 
 ```
+
+
+## Iteration115 — FP8 dHidden GEMM with SwiGLU backward epilogue
+
+114closed5a97cfd2f6 with25componentand6EP8gatesclean. Common forward
+and backward weight preparation decreases4.0531→3.7904ms at8CTAs/CU;
+this is a component result. Frozen114 realEP32 two-arm preparation
+controls and three-seed full small-LM validation run independently.
+
+New private FP8 GEMM option activation_gate_up selects the established
+split-layout SwiGLU backward epilogue. Preserve the BF16 dHidden rounding
+boundary but avoid writing and rereading its full intermediate tensor.
+Round dGate/dUp to BF16 in-place, then use the existing row quantizer on
+the same stream. This retains the safe kernel boundary before overwriting
+a quantized dY buffer when H==2I. No tile readiness or copy stream added.
+Default API/flags unchanged; input and return pipeline controls cannot be
+combined with this local activation epilogue in one primitive invocation.
+
+DG_MOE_FP8_FUSE_DHIDDEN_ACTIVATION=1 is available to Native/DeepEP and
+peer compute, with rank agreement and FP8/no-pad/quantization guards.
+Shared local computation optimization is thus offered to the baseline
+as well; choose matched whole-layer controls before claiming gains.
+
+Component tests compare every BF16 gradient, active FP8 byte, scale bit,
+guard and untouched dHidden buffer against native GEMM+Op28, with CPU
+SwiGLU checks, mutable counts, skew/empty and the H==2I alias case.
+Require17references+one Qwen timing and6EP8 phases, including DeepEP.
+Both component timing arms include the same gate/up restoration copy;
+input and weight quantization are excluded. No whole-layer speedup claim
+from the component test alone.
+
+{
+  "clean": true,
+  "passed": true,
+  "metrics": [
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "balanced",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "mixed",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "empty",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "skew",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "updated",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "balanced",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "mixed",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "empty",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "skew",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "updated",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "balanced",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "mixed",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "empty",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "skew",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "updated",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 16,
+      "n": 2048,
+      "k": 8192,
+      "capacity": 65536,
+      "pattern": "balanced",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 16,
+      "n": 2048,
+      "k": 8192,
+      "capacity": 65536,
+      "pattern": "updated",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dhidden_activation_performance",
+      "groups": 16,
+      "n": 2048,
+      "k": 8192,
+      "capacity": 65536,
+      "before_ms": 5.229201889038086,
+      "after_ms": 6.946209716796875,
+      "speedup": 0.7528137073652078,
+      "before_samples": [
+        5.229550552368164,
+        5.2236896514892575,
+        5.222885513305664,
+        5.231309127807617,
+        5.229201889038086
+      ],
+      "after_samples": [
+        6.9476768493652346,
+        6.946209716796875,
+        6.9478507995605465,
+        6.9433540344238285,
+        6.9430091857910154
+      ],
+      "scope": "dHidden GEMM + SwiGLU backward + row quantization; both arms include the same gate/up restoration copy; weight/input quantization excluded; not a full-layer result",
+      "passed": true
+    }
+  ],
+  "integration": [
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-dhidden115-ep8-mode3-tiled2-direct16",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-dhidden115-ep8-multichunk-tiled2-direct16",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-dhidden115-ep8-mode3-tiled2-direct16-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-dhidden115-ep8-multichunk-tiled2-direct16-input32",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-dhidden115-ep8-mode3-tiled2-deepep",
+      "returncode": 0
+    },
+    {
+      "case": "distributed_matrix_phase",
+      "name": "qwen38-r2-dhidden115-ep8-multichunk-tiled2-deepep",
+      "returncode": 0
+    }
+  ],
+  "records": [
+    {
+      "case": "idle_node_gate",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "selected_gpus": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "allowed": true,
+      "processes": []
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "balanced",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "mixed",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "empty",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "skew",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 128,
+      "k": 256,
+      "capacity": 1024,
+      "pattern": "updated",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "balanced",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "mixed",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "empty",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "skew",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 256,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "updated",
+      "input_output_quantization_alias": true,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "balanced",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "mixed",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "empty",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "skew",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 3,
+      "n": 384,
+      "k": 512,
+      "capacity": 1024,
+      "pattern": "updated",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": 0.0,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true,
+        "independent_cpu_swiglu": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 16,
+      "n": 2048,
+      "k": 8192,
+      "capacity": 65536,
+      "pattern": "balanced",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "fp8_dhidden_activation_reference",
+      "groups": 16,
+      "n": 2048,
+      "k": 8192,
+      "capacity": 65536,
+      "pattern": "updated",
+      "input_output_quantization_alias": false,
+      "graph": true,
+      "every_element": true,
+      "cpu_relative_error": null,
+      "gates": {
+        "bf16_gradient_bits": true,
+        "fp8_gradient_bits": true,
+        "scale_bits": true,
+        "original_dhidden_buffer_untouched": true,
+        "canaries": true,
+        "status": true
+      },
+      "passed": true
+    },
+    {
+      "case": "qwen_fp8_dhidden_activation_performance",
+      "groups": 16,
+      "n": 2048,
+      "k": 8192,
+      "capacity": 65536,
+      "before_ms": 5.229201889038086,
+      "after_ms": 6.946209716796875,
+      "speedup": 0.7528137073652078,
+      "before_samples": [
+        5.229550552368164,
+        5.2236896514892575,
+        5.222885513305664,
+        5.231309127807617,
+        5.229201889038086
+      ],
+      "after_samples": [
+        6.9476768493652346,
+        6.946209716796875,
+        6.9478507995605465,
+        6.9433540344238285,
+        6.9430091857910154
+      ],
+      "scope": "dHidden GEMM + SwiGLU backward + row quantization; both arms include the same gate/up restoration copy; weight/input quantization excluded; not a full-layer result",
+      "passed": true
+    },
+    {
+      "case": "idle_node_postflight",
+      "host": "e01-cn-9yq4xwro401-a0004",
+      "allowed": true,
+      "processes": [],
+      "observed_foreign_during_command": [],
+      "verified_owned_processes": [
+        {
+          "pid": 3763767,
+          "start_ticks": "218595958"
+        }
+      ],
+      "monitoring_errors": [],
+      "monitor_interval_seconds": 2,
+      "command_returncode": 0
+    }
+  ]
+}
+
+Raw tail:
+```
+vation_reference", "groups": 3, "n": 256, "k": 512, "capacity": 1024, "pattern": "balanced", "input_output_quantization_alias": true, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 256, "k": 512, "capacity": 1024, "pattern": "mixed", "input_output_quantization_alias": true, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 256, "k": 512, "capacity": 1024, "pattern": "empty", "input_output_quantization_alias": true, "graph": true, "every_element": true, "cpu_relative_error": null, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 256, "k": 512, "capacity": 1024, "pattern": "skew", "input_output_quantization_alias": true, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 256, "k": 512, "capacity": 1024, "pattern": "updated", "input_output_quantization_alias": true, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 384, "k": 512, "capacity": 1024, "pattern": "balanced", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 384, "k": 512, "capacity": 1024, "pattern": "mixed", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 384, "k": 512, "capacity": 1024, "pattern": "empty", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": null, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 384, "k": 512, "capacity": 1024, "pattern": "skew", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 3, "n": 384, "k": 512, "capacity": 1024, "pattern": "updated", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": 0.0, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true, "independent_cpu_swiglu": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 16, "n": 2048, "k": 8192, "capacity": 65536, "pattern": "balanced", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": null, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true}, "passed": true}
+{"case": "fp8_dhidden_activation_reference", "groups": 16, "n": 2048, "k": 8192, "capacity": 65536, "pattern": "updated", "input_output_quantization_alias": false, "graph": true, "every_element": true, "cpu_relative_error": null, "gates": {"bf16_gradient_bits": true, "fp8_gradient_bits": true, "scale_bits": true, "original_dhidden_buffer_untouched": true, "canaries": true, "status": true}, "passed": true}
+{"case": "qwen_fp8_dhidden_activation_performance", "groups": 16, "n": 2048, "k": 8192, "capacity": 65536, "before_ms": 5.229201889038086, "after_ms": 6.946209716796875, "speedup": 0.7528137073652078, "before_samples": [5.229550552368164, 5.2236896514892575, 5.222885513305664, 5.231309127807617, 5.229201889038086], "after_samples": [6.9476768493652346, 6.946209716796875, 6.9478507995605465, 6.9433540344238285, 6.9430091857910154], "scope": "dHidden GEMM + SwiGLU backward + row quantization; both arms include the same gate/up restoration copy; weight/input quantization excluded; not a full-layer result", "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0004", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 3763767, "start_ticks": "218595958"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
+
+```

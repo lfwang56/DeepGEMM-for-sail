@@ -253,6 +253,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
             return super()._activation(backward=backward, hidden=hidden)
         hidden = self.hidden if hidden is None else hidden
         width = 2 * self.i if backward else self.i
+        if backward and self.fp8_fuse_dhidden_activation:
+            _launch(34 if self.fp8_vector_row_quant else 26,
+                    [self.gate_up,self.quantized[width][0],self.quantized_scale_storage[width],
+                     self.current_rows,self.status],[self.rows,width,int(self.fp8_mn_major_scales)])
+            return True
         tensors = [self.gate_up, hidden] + ([self.gate_up] if backward else [])
         tensors.extend((self.quantized[width][0], self.quantized_scale_storage[width],
                         self.current_rows, self.status))
@@ -300,6 +305,11 @@ class DeepEPMoEPlan(NativeMoEPlan):
                 else:
                     _launch(9, [a, *quantized_a], list(a.shape))
             self._wait_for_weight(name)
+            if name=='w2_t' and self.fp8_fuse_dhidden_activation:
+                return dg._C._moe_training_peer_fp8_gemm(
+                    quantized_a,self.quantized[name],output,self.lengths,self.permutation,
+                    self._fp8_activation_destinations,self.rows,keep_local=False,
+                    config=() if config is None else config,activation_gate_up=self.gate_up)
             dg.m_grouped_fp8_gemm_nt_nopad(
                 quantized_a, self.quantized[name], output, self.group_ids,
                 m_rows=self.lengths, disable_ue8m0_cast=True, **options)

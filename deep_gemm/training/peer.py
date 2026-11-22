@@ -411,7 +411,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -692,6 +692,12 @@ class PeerMoEPlan(NativeMoEPlan):
                         [self.rows, width, 1])
             self._fp8_prequantized_input = None
             config = self.gemm_configs.get(role)
+            if role == 'dhidden' and self.fp8_fuse_dhidden_activation:
+                return dg._C._moe_training_peer_fp8_gemm(
+                    quantized_a,self.quantized[name],output,self.lengths,self.permutation,
+                    self.pointer_tables[destination],self.chunk_tokens*self.k,keep_local=False,
+                    compile_only=compile_only,config=() if config is None else config,
+                    activation_gate_up=self.gate_up)
             if write:
                 if self.fp8_return_pipeline:
                     return self._fp8_return_tiles(quantized_a, self.quantized[name], output, destination,
@@ -1165,6 +1171,12 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fp8_peer_compute:
             if not compile_only:
                 width = 2 * self.i if backward else self.i
+                if backward and self.fp8_fuse_dhidden_activation:
+                    _launch(34 if self.fp8_vector_row_quant else 26,
+                            [self.gate_up,self.quantized[width][0],self.quantized_scale_storage[width],
+                             self.current_rows,self.status],[self.rows,width,1])
+                    self._fp8_prequantized_input=self.gate_up.data_ptr()
+                    return
                 tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
                 tensors.extend((self.quantized[width][0], self.quantized_scale_storage[width],
                                 self.current_rows, self.status))

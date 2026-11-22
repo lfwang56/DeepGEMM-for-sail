@@ -191,7 +191,14 @@ public:
       const auto coordinates = thread_mma.partition_C(make_identity_tensor(take<0, 2>(blk_shape)));
       const uint32_t row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
       const uint32_t valid_rows = uint32_t(cute::min(int(size<0>(TileShape{})), int(M) - int(m_coord) * int(size<0>(TileShape{}))));
-#if !DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_RETURN_PIPELINE
+#if DG_TRAINING_FP8_ACTIVATION_BACKWARD
+      // Reuse the BF16 dHidden boundary and established split-layout SwiGLU
+      // derivative. Quantization follows on the same stream, so its output
+      // can safely alias a consumed dY quantization buffer.
+      training::activation_backward_epilogue<TileScheduler::SHAPE_N,false>(
+          accumulators,coordinates,peers,row_base,valid_rows,uint32_t(n_coord)*size<1>(TileShape{}));
+#endif
+#if !DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_RETURN_PIPELINE && !DG_TRAINING_FP8_ACTIVATION_BACKWARD
 #if DG_TRAINING_FP8_RETURN_STORE_BYTES == 16
       // The Tensor Cell mainloop is finished. Reuse its TSM for one rounded
       // BF16 tile, then issue contiguous local/peer 128-bit stores. No extra
@@ -246,7 +253,7 @@ public:
           uint32_t(n_coord) * size<1>(TileShape{}));
 #endif
 #endif
-#if DG_TRAINING_FP8_PEER_KEEP_LOCAL && DG_TRAINING_FP8_RETURN_STORE_BYTES != 16
+#if DG_TRAINING_FP8_PEER_KEEP_LOCAL && DG_TRAINING_FP8_RETURN_STORE_BYTES != 16 && !DG_TRAINING_FP8_ACTIVATION_BACKWARD
       // update params.epilogue for ptrC and ptrD
       auto params_epilogue_local = params.epilogue;
       params_epilogue_local.ptr_D += deep_scheduler.curr_offset_c(cute::get<2>(params_epilogue_local.dD));
