@@ -62,7 +62,7 @@ def fixture(groups, n, k, capacity):
 
     metadata('balanced');quantize();native()
     graphs={}
-    for keep in (False,True):
+    for keep in (True,False):
         fused(keep)
         graph=torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph,stream=torch.cuda.current_stream()):
@@ -80,7 +80,19 @@ def fixture(groups, n, k, capacity):
             print(json.dumps(dict(case='peer_fp8_gemm_reference',shape=[groups,n,k],capacity=capacity,
                                   pattern=pattern,keep_local=keep,graph=True,every_element=True,
                                   gates=gates,passed=all(gates.values()))),flush=True)
-            if not all(gates.values()):raise AssertionError(gates)
+            if not all(gates.values()):
+                differences=[]
+                for owner,(got,expected) in enumerate(zip(actual_dest,reference_dest)):
+                    changed=(got!=expected).nonzero()
+                    positions=changed[:12].cpu().tolist()
+                    differences.append(dict(owner=owner,mismatched_elements=len(changed),
+                        pair_swap_matches=torch.equal(got.reshape(-1,2).flip(1),expected.reshape(-1,2)),
+                        samples=[dict(row=r,column=c,got=float(got[r,c]),expected=float(expected[r,c])) for r,c in positions]))
+                changed=(actual!=reference).nonzero() if keep else torch.empty(0,2)
+                print(json.dumps(dict(case='peer_fp8_gemm_mismatch_diagnostic',shape=[groups,n,k],
+                    keep_local=keep,local_mismatches=len(changed),local_samples=changed[:12].cpu().tolist(),
+                    owners=differences)),flush=True)
+                raise AssertionError(gates)
     if capacity>=1000:
         metadata('balanced');quantize()
         for label,call in [('native_plus_scatter',native),('fused_return_discard',lambda:fused(False)),

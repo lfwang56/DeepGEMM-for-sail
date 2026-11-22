@@ -10675,3 +10675,64 @@ Traceback (most recent call last):
     raise CalledProcessError(retcode, process.args,
 subprocess.CalledProcessError: Command '['/usr/local/bin/python', 'tests/test_moe_peer_fp8_gemm.py']' returned non-zero exit status 1.
 {"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1472933, "start_ticks": "16590949"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
+
+
+## Iteration71 — diagnose local versus peer FP8 output mismatch
+
+70 compiled native a908186949466b390193a80f75077feae17a65649ab88a92f0c98ce65739b442
+and JIT kernels, but first small balanced discard-local graph peer output
+failed byte equality. No timing accepted. Retain the arithmetic gates and
+run keep-local first, reporting local mismatch count, destination mismatch
+coordinates/values and pair-order ablation before the same strict assertion.
+No device/host kernel implementation changes in71.
+
+69 passed actual EP8 mutable input/weight/route/zero-capacity gates,
+actual EP32 Qwen FP32 full-gradient and fullC4096 skew gates.
+Same-host complete routedFWD+rematBWD+FP32DW: FP8legacy121.898889ms,
+cachedfloat104.171484, cachedinteger101.986591, integerasync102.989990,
+BF16split/M128104.793848. Cachedinteger/serial is best FP8 baseline.
+69 is quantizer optimization, not FP8 peer fusion. Strongest prior
+BF16G8/M256 and exact three-graph profiles are independent diagnostics.
+
+Add an isolated FP8 return primitive using the native blockwise E4M3
+MGroupedNoPad mainloop and scheduler. Preserve group-specific weight and
+scale addressing and native FP32 accumulation. Direct BF16x2 register
+stores use the existing peer route permutation/address helper; optionally
+retain the same local BF16 output for rematerialized dScore/DW consumers.
+Pass PeerGemmParams as a separate kernel argument, preserving old native
+FP8/peer parameter ABIs. JIT specialization includes keep/discard behavior,
+with exact native declaration replacement checks and occupied-grid checks.
+GPU lengths remain mutable; host rejects unsupported group counts and
+invalid dtypes/shapes before launch. This primitive requires already
+packed and quantized local input; no input-communication fusion claim.
+
+Compare every local/route output byte and unused canaries to native
+FP8 GEMM followed by the existing scatter. Test balanced/masked/skew/
+empty/reversed/changed weights/input metadata in captured graphs, small
+and actual Qwen FC2/DX shapes. Four local fake owners on one GPU only;
+actual EP integration/quality and complete-step gains remain subsequent gates.
+
+{
+  "clean": false,
+  "reference_count": 1,
+  "every_reference_passed": false,
+  "measurements": [],
+  "scope": "isolated FP8 GEMM/return using four local fake owners; no actual EP or full-step speedup"
+}
+
+Failure tail:
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0002", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+device_props.name:ZW-M890P
+{"case": "peer_fp8_gemm_provenance", "device": "ZW-M890P", "cus": 39, "extension_sha256": "a908186949466b390193a80f75077feae17a65649ab88a92f0c98ce65739b442", "recipe": "E4M3 activation row128/W128x128 FP32 scales; BF16 peer return; local packed input"}
+{"case": "peer_fp8_gemm_reference", "shape": [3, 256, 256], "capacity": 768, "pattern": "balanced", "keep_local": true, "graph": true, "every_element": true, "gates": {"peer_bits": false, "local_bits": true, "status": true}, "passed": false}
+{"case": "peer_fp8_gemm_mismatch_diagnostic", "shape": [3, 256, 256], "keep_local": true, "local_mismatches": 0, "local_samples": [], "owners": [{"owner": 0, "mismatched_elements": 49152, "pair_swap_matches": false, "samples": [{"row": 0, "column": 0, "got": -0.01177978515625, "expected": -9.0}, {"row": 0, "column": 1, "got": -0.0185546875, "expected": -9.0}, {"row": 0, "column": 2, "got": -0.02685546875, "expected": -9.0}, {"row": 0, "column": 3, "got": -0.00139617919921875, "expected": -9.0}, {"row": 0, "column": 4, "got": -0.09130859375, "expected": -9.0}, {"row": 0, "column": 5, "got": -0.0147705078125, "expected": -9.0}, {"row": 0, "column": 6, "got": 0.1279296875, "expected": -9.0}, {"row": 0, "column": 7, "got": -0.022216796875, "expected": -9.0}, {"row": 0, "column": 8, "got": -0.0615234375, "expected": -9.0}, {"row": 0, "column": 9, "got": -0.0272216796875, "expected": -9.0}, {"row": 0, "column": 10, "got": -0.009521484375, "expected": -9.0}, {"row": 0, "column": 11, "got": -0.0615234375, "expected": -9.0}]}, {"owner": 1, "mismatched_elements": 49152, "pair_swap_matches": false, "samples": [{"row": 0, "column": 0, "got": -0.0189208984375, "expected": -9.0}, {"row": 0, "column": 1, "got": -0.010009765625, "expected": -9.0}, {"row": 0, "column": 2, "got": -0.02880859375, "expected": -9.0}, {"row": 0, "column": 3, "got": 0.00099945068359375, "expected": -9.0}, {"row": 0, "column": 4, "got": 0.027099609375, "expected": -9.0}, {"row": 0, "column": 5, "got": -0.005859375, "expected": -9.0}, {"row": 0, "column": 6, "got": -0.09130859375, "expected": -9.0}, {"row": 0, "column": 7, "got": -0.0074462890625, "expected": -9.0}, {"row": 0, "column": 8, "got": 0.005889892578125, "expected": -9.0}, {"row": 0, "column": 9, "got": -0.00142669677734375, "expected": -9.0}, {"row": 0, "column": 10, "got": 0.0294189453125, "expected": -9.0}, {"row": 0, "column": 11, "got": 0.0079345703125, "expected": -9.0}]}, {"owner": 2, "mismatched_elements": 32768, "pair_swap_matches": false, "samples": [{"row": 0, "column": 0, "got": -0.11328125, "expected": -9.0}, {"row": 0, "column": 1, "got": 0.040771484375, "expected": -9.0}, {"row": 0, "column": 2, "got": 0.0615234375, "expected": -9.0}, {"row": 0, "column": 3, "got": 0.0341796875, "expected": -9.0}, {"row": 0, "column": 4, "got": 0.037353515625, "expected": -9.0}, {"row": 0, "column": 5, "got": 0.000461578369140625, "expected": -9.0}, {"row": 0, "column": 6, "got": 0.08935546875, "expected": -9.0}, {"row": 0, "column": 7, "got": -0.111328125, "expected": -9.0}, {"row": 0, "column": 8, "got": 0.053466796875, "expected": -9.0}, {"row": 0, "column": 9, "got": -0.052734375, "expected": -9.0}, {"row": 0, "column": 10, "got": 0.0125732421875, "expected": -9.0}, {"row": 0, "column": 11, "got": -0.051025390625, "expected": -9.0}]}, {"owner": 3, "mismatched_elements": 0, "pair_swap_matches": true, "samples": []}]}
+Traceback (most recent call last):
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_gemm.py", line 126, in <module>
+    if __name__=='__main__':main()
+                            ^^^^^^
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_gemm.py", line 122, in main
+    fixture(*args)
+  File "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/tests/test_moe_peer_fp8_gemm.py", line 95, in fixture
+    raise AssertionError(gates)
+AssertionError: {'peer_bits': False, 'local_bits': True, 'status': True}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0002", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 1509603, "start_ticks": "16605589"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 1}
