@@ -10,7 +10,7 @@ from deep_gemm.training.native import _launch
 
 
 def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, threads=128, cache_scales=False,
-            bf16_source=False,co_resident=False,config=None):
+            bf16_source=False,co_resident=False,config=None,elastic_workers=False):
     world=4
     source=(torch.randn(world*tokens,k,device='cuda')*.2).bfloat16()
     qs=torch.empty_like(source,dtype=torch.float8_e4m3fn)
@@ -29,6 +29,8 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
     blocks=torch.zeros(1,device='cuda',dtype=torch.int32)
     count=torch.zeros_like(blocks);status=torch.zeros_like(blocks)
     ready=torch.zeros(capacity//128,device='cuda',dtype=torch.int32)
+    counterraw=torch.full((33,),173,device='cuda',dtype=torch.int32)
+    counter=counterraw[16:17]
     q=torch.empty(capacity,k,device='cuda',dtype=torch.float8_e4m3fn)
     sf=torch.empty(k//128,capacity,device='cuda')
     bf=torch.empty(capacity,k,device='cuda',dtype=torch.bfloat16)
@@ -41,14 +43,14 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
         if bf16_source:
             assert copy_bf
             dg._C._moe_training_peer_launch(25,[btables,permutation,bf,status,blocks,q,sf,ready],
-                [capacity,k,tokens,1,world,128,ctas,int(co_resident)],compile_only)
+                [capacity,k,tokens,1,world,128,ctas,2 if elastic_workers else int(co_resident)],compile_only)
             return
         dg._C._moe_training_peer_launch(19,[qtables,stables,btables,rows,q,sf,bf,blocks,ready,status],
             [capacity,k,tokens,world,ctas,int(copy_bf),threads,int(cache_scales)],compile_only)
 
     def consumer(output,compile_only=False):
         dg._C._moe_training_peer_fp8_gemm((q,sf.t()),(qw,sw),output,lengths,rows,btables,tokens,
-            keep_local=True,compile_only=compile_only,input_control=[ready,status],reserved_input_ctas=ctas,
+            keep_local=True,compile_only=compile_only,input_control=[ready,status]+([counter] if elastic_workers else []),reserved_input_ctas=ctas,
             config=() if config is None else config,co_resident_input=co_resident)
 
     def native():
@@ -59,6 +61,19 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
     def step(output, overlap, copy_bf=True):
         if not bf16_source:_launch(9,[source,qs,ss],[world*tokens,k])
         ready.zero_()
+        if elastic_workers:
+            counter.zero_()
+            main=torch.cuda.current_stream()
+            if overlap:
+                aux.wait_stream(main)
+                with torch.cuda.stream(aux):producer(copy_bf);consumer(output)
+            else:
+                producer(copy_bf)
+                aux.wait_stream(main)
+                with torch.cuda.stream(aux):consumer(output)
+            consumer(output)
+            main.wait_stream(aux)
+            return
         if overlap:
             main=torch.cuda.current_stream()
             aux.wait_stream(main)
@@ -122,8 +137,12 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
             assert errors[mode]<.003,(mode,errors)
             assert torch.all(out[active:]==-23)
         assert torch.equal(serial,parallel)
+        if elastic_workers:
+            tasks=active//128*((n+config[0]-1)//config[0])
+            assert counter.item()==tasks+2*dg.get_num_sms(),(int(counter),tasks)
+            assert torch.all(counterraw[:16]==173) and torch.all(counterraw[17:]==173)
         print(json.dumps(dict(case='fp8_peer_input_component_reference',shape=[groups,n,k,capacity],counts=counts,
-              graph=True,source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,bf16_source=bf16_source,co_resident=co_resident,all_quantization_bytes=True,all_scales=True,
+              graph=True,source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,bf16_source=bf16_source,co_resident=co_resident,elastic_workers=elastic_workers,work_counter=int(counter) if elastic_workers else None,all_quantization_bytes=True,all_scales=True,
               bf16_dw_copy=True,inactive_canaries=True,serial_parallel_exact=True,errors=errors,passed=True)),flush=True)
     # Copy omission must preserve BF16 scratch, without changing quantization.
     if not bf16_source:
@@ -142,7 +161,7 @@ def fixture(groups, n, k, capacity, tokens, cases, benchmark=False, ctas=2, thre
             print(json.dumps(dict(case='fp8_peer_input_component_performance',mode=mode,shape=[groups,n,k,capacity],
                   source_owners_local=True,producer_ctas=ctas,producer_threads=threads,cache_scales=cache_scales,consumer_ctas=dg.get_num_sms() if co_resident else dg.get_num_sms()-ctas,
                   source_quantization_in_timing=not bf16_source and mode!='staged_bf16_native',bf16_dw_copy=True,median_ms=statistics.median(samples),
-                  bf16_source=bf16_source,co_resident=co_resident,
+                  bf16_source=bf16_source,co_resident=co_resident,elastic_workers=elastic_workers,
                   samples_ms=samples,scope='input preparation + FC1 GEMM; local fake source owners; not complete step')),
                   flush=True)
     del graphs

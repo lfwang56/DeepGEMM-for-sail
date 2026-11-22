@@ -98,7 +98,9 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             break;
         case PeerOperation::PackQuantizedInputTiles:
             DG_HOST_ASSERT(tensors.size()==8 && (dims.size()==7 || dims.size()==8));
-            DG_HOST_ASSERT(dims.size()==7 || (dims[7]<=1 && (!dims[7] || dims[6]==get_num_sms())));
+            DG_HOST_ASSERT(dims.size()==7 || (dims[7]<=2 &&
+                (dims[7]!=1 || dims[6]==get_num_sms()) &&
+                (dims[7]!=2 || (dims[6]>=get_num_sms() && dims[6]%get_num_sms()==0))));
             DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192 &&
                            dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 &&
                            dims[4]<=64 && dims[5]==128 && dims[6]>0 && dims[6]<=8*get_num_sms());

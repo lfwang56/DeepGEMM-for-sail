@@ -5,6 +5,41 @@
 
 namespace deep_gemm {
 
+// Native expert-major/two-M swizzle with a shared atomic work ordinal. Two
+// independently launched worker grids can join/leave without losing tiles.
+template<class NativeScheduler>
+struct TrainingFp8InputWorkScheduler : NativeScheduler {
+    uint32_t* counter;
+    CUTLASS_DEVICE explicit TrainingFp8InputWorkScheduler(typename NativeScheduler::Params const& params,
+                                                         uint32_t* work_counter)
+        : NativeScheduler(params),counter(work_counter) {}
+    CUTLASS_DEVICE bool fetch_next_work(uint32_t& mi,uint32_t& ni) {
+        static_assert(NativeScheduler::GEMM_TYPE==GemmType::MGroupedNoPad &&
+                      !NativeScheduler::kIsNoPadPreprocessLayout);
+        constexpr uint32_t columns=(NativeScheduler::SHAPE_N+NativeScheduler::BLOCK_N-1)/NativeScheduler::BLOCK_N;
+        __shared__ uint32_t ordinal;
+        __syncthreads();
+        if(threadIdx.x==0)ordinal=atomicAdd(counter,1u);
+        __syncthreads();
+        const uint32_t work=ordinal;
+        uint32_t mblocks=0;
+        while(this->curr_group_idx<NativeScheduler::kNumGroups) {
+            this->curr_group_m=uint32_t(__ldg(this->params.grouped_layout+this->curr_group_idx));
+            mblocks=(this->curr_group_m+NativeScheduler::BLOCK_M-1)/NativeScheduler::BLOCK_M;
+            const uint32_t end=this->curr_cumsum+mblocks;
+            if(work<end*columns) {
+                this->get_swizzled_block_idx(mblocks,work-this->curr_cumsum*columns,mi,ni);
+                return true;
+            }
+            ++this->curr_group_idx;
+            this->curr_cumsum=end;
+            this->curr_cumsum_m+=this->curr_group_m;
+        }
+        mi=0;ni=columns;
+        return false;
+    }
+};
+
 // Native blockwise FP8 mainloop and scheduler, with direct BF16 peer stores.
 // Input is already locally packed/quantized; this primitive fuses the return.
 template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilogue_, class TileScheduler_,
@@ -38,7 +73,8 @@ public:
     static constexpr int MinBlocksPerMultiprocessor = Base::MinBlocksPerMultiprocessor;
     CUTLASS_DEVICE void
   operator()(Params const& params, const training::PeerGemmParams& peers,
-             const training::PeerDispatchPipeline& input, const training::PeerDispatchPipeline& output, char* smem_buf) {
+             const training::PeerDispatchPipeline& input, const training::PeerDispatchPipeline& output,
+             uint32_t* input_work_counter,char* smem_buf) {
     using namespace cute;
     using X = Underscore;
     int warp_idx = cutlass::canonical_warp_idx_sync();
@@ -52,7 +88,7 @@ public:
       }
     }
 
-#if DG_TRAINING_FP8_RETURN_PIPELINE
+#if DG_TRAINING_FP8_RETURN_PIPELINE || DG_TRAINING_FP8_INPUT_DYNAMIC
     __shared__ int return_layout_bad;
     if(threadIdx.x==0) {
       return_layout_bad=0;int64_t total_rows=0;
@@ -62,11 +98,15 @@ public:
         total_rows+=rows;
       }
       if(total_rows>params.scheduler.shape_m)return_layout_bad=1;
-      if(return_layout_bad)atomicOr(output.status,2u);
+      if(return_layout_bad)atomicOr(DG_TRAINING_FP8_INPUT_DYNAMIC ? input.status : output.status,2u);
     }
     __syncthreads();if(return_layout_bad)return;
 #endif
+#if DG_TRAINING_FP8_INPUT_DYNAMIC
+    TrainingFp8InputWorkScheduler<TileScheduler> deep_scheduler{params.scheduler,input_work_counter};
+#else
     TileScheduler deep_scheduler{params.scheduler};
+#endif
 
     // Preconditions
     CUTE_STATIC_ASSERT(is_static<TileShape>::value);
@@ -307,7 +347,7 @@ public:
     static constexpr int SharedStorageSize=0; // Dynamic TSM; row addresses are static shared.
     static constexpr int MinBlocksPerMultiprocessor=1;
     CUTLASS_DEVICE void operator()(Params const& params,const training::PeerGemmParams& peers,
-        const training::PeerDispatchPipeline&,const training::PeerDispatchPipeline& output,char*) {
+        const training::PeerDispatchPipeline&,const training::PeerDispatchPipeline& output,uint32_t*,char*) {
         static_assert(TileScheduler::BLOCK_M==128 && TileScheduler::BLOCK_N==256);
         static_assert(TileScheduler::GEMM_TYPE==GemmType::MGroupedNoPad);
         constexpr uint32_t width=TileScheduler::SHAPE_N,stride=DG_TRAINING_FP8_RETURN_STRIDE;

@@ -197,6 +197,9 @@ class PeerMoEPlan(NativeMoEPlan):
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
         self.fp8_bf16_input_pipeline = fp8_flag(None, "DG_MOE_FP8_BF16_INPUT_PIPELINE")
         self.fp8_input_co_resident = fp8_flag(None, "DG_MOE_FP8_INPUT_CO_RESIDENT")
+        self.fp8_input_elastic_workers = fp8_flag(None, "DG_MOE_FP8_INPUT_ELASTIC_WORKERS")
+        if self.fp8_input_elastic_workers and not self.fp8_input_co_resident:
+            raise ValueError("elastic input workers require co-resident input")
         self.fp8_return_pipeline = fp8_flag(None, "DG_MOE_FP8_RETURN_PIPELINE")
         self.fp8_return_ctas = helper_value(None, "DG_MOE_FP8_RETURN_CTAS", 4)
         self.fp8_return_threads = helper_value(None, "DG_MOE_FP8_RETURN_THREADS", 512)
@@ -386,12 +389,13 @@ class PeerMoEPlan(NativeMoEPlan):
                 raise ValueError("BF16 quantized input pipeline supports hidden<=8192")
             if self.fp8_input_cache_scales and self.h > 8192:
                 raise ValueError("cached FP8 input scales support hidden<=8192")
-            producer_limit = (dg.get_num_sms() if self.fp8_input_co_resident else
+            producer_limit = (8*dg.get_num_sms() if self.fp8_input_elastic_workers else dg.get_num_sms() if self.fp8_input_co_resident else
                               8 * dg.get_num_sms() if self.fp8_bf16_input_pipeline and self.fp8_serial_full_grid
                               else dg.get_num_sms() - 1)
             if not 0 < self.fp8_input_ctas <= producer_limit:
                 raise ValueError("FP8 producer CTA budget exceeds its serialized or concurrent limit")
-            if self.fp8_input_co_resident and self.fp8_input_ctas!=dg.get_num_sms():
+            if self.fp8_input_co_resident and (self.fp8_input_ctas%dg.get_num_sms() or
+                    (not self.fp8_input_elastic_workers and self.fp8_input_ctas!=dg.get_num_sms())):
                 raise ValueError("co-resident input requires one producer CTA per CU")
             self._fp8_input_stream = torch.cuda.Stream(device=self.device)
             self._fp8_bf_input_stream = torch.cuda.Stream(device=self.device)
@@ -417,7 +421,7 @@ class PeerMoEPlan(NativeMoEPlan):
                       self.input_helper_threads, self.input_helper_block_m, self.input_helper_block_n,
                       self.fp8_weight_quantization, self.fp8_input_pipeline,
                       self.fp8_input_ctas, self.fp8_input_serialize, self.fp8_input_threads,
-                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation, self.fp8_input_co_resident)
+                      self.fp8_input_cache_scales, self.reuse_forward_context, self.fp8_serial_full_grid, self.fp8_fused_stage_quant, self.fp8_tiled_gradient_quant, self.fp8_tiled_gradient_cache, self.fp8_bf16_input_pipeline, self.fp8_return_pipeline, self.fp8_return_ctas, self.fp8_return_threads, self.fp8_return_store_bytes, self.fp8_fuse_dhidden_activation, self.fp8_input_co_resident,self.fp8_input_elastic_workers)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -588,6 +592,9 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fp8_input_pipeline or self.fp8_bf16_input_pipeline:
             self.fp8_input_ready = torch.zeros(self.rows // 128, device=self.device, dtype=torch.int32)
             self.buffers["fp8_input_ready"] = self.fp8_input_ready
+            if self.fp8_input_elastic_workers:
+                self.fp8_input_work_counter=torch.zeros(1,device=self.device,dtype=torch.int32)
+                self.buffers['fp8_input_work_counter']=self.fp8_input_work_counter
         if self.fp8_return_pipeline:
             self.fp8_return_ready = torch.zeros((self.rows // 128) * (self.h // 256), device=self.device, dtype=torch.int32)
             self.buffers['fp8_return_ready'] = self.fp8_return_ready
@@ -694,7 +701,7 @@ class PeerMoEPlan(NativeMoEPlan):
                     self.pointer_tables[destination], self.chunk_tokens * self.k,
                     keep_local=True, compile_only=compile_only,
                     config=self.gemm_configs.get(role, ()),
-                    input_control=[self.fp8_input_ready, self.status], reserved_input_ctas=self.fp8_input_ctas,
+                    input_control=[self.fp8_input_ready, self.status]+([self.fp8_input_work_counter] if self.fp8_input_elastic_workers else []), reserved_input_ctas=self.fp8_input_ctas,
                     co_resident_input=self.fp8_input_co_resident)
             if self._fp8_prequantized_input != a.data_ptr():
                 _launch(34 if self.fp8_vector_row_quant else 26, [a, quantized_a[0], self.quantized_scale_storage[width], self.current_rows, self.status],
@@ -787,6 +794,7 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._fp8_stage_bf16_input(compile_only=True)
             else:
                 self.fp8_input_ready.zero_()
+                if self.fp8_input_elastic_workers:self.fp8_input_work_counter.zero_()
                 self._fp8_input_stream.wait_stream(main)
                 with torch.cuda.stream(self._fp8_input_stream):
                     for tensor in (self.permutation, self.num_blocks, self.fp8_input_ready, self.status,
@@ -794,10 +802,17 @@ class PeerMoEPlan(NativeMoEPlan):
                                    self.packed_x, self.pointer_tables['local_x']):
                         tensor.record_stream(self._fp8_input_stream)
                     self._fp8_stage_bf16_input()
+                    if self.fp8_input_elastic_workers and not self.fp8_input_serialize:
+                        self._fp8_elastic_input_worker()
                 if self.fp8_input_serialize:
                     main.wait_stream(self._fp8_input_stream)
+                    if self.fp8_input_elastic_workers:
+                        self._fp8_input_stream.wait_stream(main)
+                        with torch.cuda.stream(self._fp8_input_stream):self._fp8_elastic_input_worker()
             self._peer_gemm(self.packed_x, w1, self.gate_up, self.identity_rows, role='fc1',
                             compile_only=compile_only)
+            if not compile_only and self.fp8_input_elastic_workers:
+                main.wait_stream(self._fp8_input_stream)
             if not compile_only:
                 # Preserve the original BF16 X for DW and context reuse, and
                 # join every producer before reusing quantization scratch.
@@ -1142,7 +1157,18 @@ class PeerMoEPlan(NativeMoEPlan):
                    self.status, self.num_blocks, self.quantized[self.h][0],
                    self.quantized_scale_storage[self.h], self.fp8_input_ready],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size, 128, self.fp8_input_ctas,
-               int(self.fp8_input_co_resident)], compile_only)
+               2 if self.fp8_input_elastic_workers else int(self.fp8_input_co_resident)], compile_only)
+
+    def _fp8_elastic_input_worker(self):
+        stream=torch.cuda.current_stream(self.device)
+        for tensor in (self.gate_up,self.lengths,self.permutation,self.pointer_tables['local_values'],
+                       *self.quantized[self.h],*self.quantized['w1'],self.fp8_input_ready,
+                       self.status,self.fp8_input_work_counter):tensor.record_stream(stream)
+        return dg._C._moe_training_peer_fp8_gemm(
+            self.quantized[self.h],self.quantized['w1'],self.gate_up,self.lengths,self.permutation,
+            self.pointer_tables['local_values'],self.chunk_tokens*self.k,keep_local=True,
+            config=self.gemm_configs['fc1'],input_control=[self.fp8_input_ready,self.status,self.fp8_input_work_counter],
+            reserved_input_ctas=self.fp8_input_ctas,co_resident_input=True)
 
     def _fp8_stage_quantized_input(self, compile_only=False):
         _peer(19, [self.pointer_tables['local_qx'], self.pointer_tables['local_qx_scales'],
