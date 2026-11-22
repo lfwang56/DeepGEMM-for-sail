@@ -53,3 +53,27 @@ Use this existing container for primary DeepEP/peer comparisons; record its
 Torch2.11 runtime separately from the nativeTorch2.10 extension build. The
 installed DeepEP2.2.0 Buffer path is functional and must be tuned as a real
 baseline; the initial8-CU setting is superseded by the measured38-CU setting.
+
+
+## Resumed optimization, 2026-11-22
+
+The user explicitly requests continued bilateral fusion optimization, a causal
+investigation of DW kernel spans rising16.6->37.8ms, chunk pipelines and resource
+allocation, and a2–3x complete Qwen3.8 FWD+BWD target. Compare MoK training and
+DeepGEMM inference scopes/implementations and quantify compute/communication.
+The user granted an additional24hours on2026-11-22 09:17Asia/Shanghai. Use a
+conservative deadline2026-11-23 09:17Asia/Shanghai (01:17UTC). Preserve the
+previous fa124e6359 delivery as an immutable reference.
+
+Do not attribute the entire16.6->37.8 change to concurrency: the latter used
+WG16/dGrad23 CTA budgets while the former used full grids. First compare
+identical CTA/tile/stream-independent workloads in serial and parallel, then
+use isolated replay and Asight counters to distinguish capacity reductions,
+execution stalls, scheduling spans, memory traffic and waits. Grid budgets
+are CTA limits, not hardware CU affinity.
+
+Continue using only idle authorized whole hosts in wlf_sgl_2.2; switch after
+interference, reuse recovered idle hosts as authorized. Keep independent full
+FP32 and graph/lifecycle gates. Preserve complete gradients and all failed
+variants; no reduced numerical thresholds or weaker baseline to create gains.
+No AI/tool attribution or tracking in commits.
