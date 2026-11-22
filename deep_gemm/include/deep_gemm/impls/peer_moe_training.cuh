@@ -177,6 +177,41 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             if (valid && lane == 0)
                 reinterpret_cast<float*>(peer_pointer<uint64_t>(p, 3)[route / stride])[route % stride] = dot;
         }
+    } else if constexpr (Op == PeerOperation::StageRawWeightedDy) {
+        // Keep both unweighted DY (dHidden/score derivative) and weighted DY
+        // (DW2). No division by a route score, including valid zero scores.
+        const int64_t rows = int64_t(peer_pointer<int32_t>(p, 6)[0]) * p.dim[5];
+        if (rows < 0 || rows > p.dim[0]) {
+            if (index == 0) atomicOr(peer_pointer<int32_t>(p, 7), 2);
+            return;
+        }
+        const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+        const int warps = blockDim.x / 32;
+        const int64_t stride = p.dim[2] * p.dim[3], width = p.dim[1] / 8;
+        for (int64_t row = block_index * warps + warp; row < rows;
+             row += int64_t(gridDim.x) * warps) {
+            const int route = peer_pointer<int32_t>(p, 2)[row];
+            const bool valid = route >= 0 && route < p.dim[4] * stride;
+            if (route >= p.dim[4] * stride && lane == 0)
+                atomicOr(peer_pointer<int32_t>(p, 7), 2);
+            const int owner = valid ? route / stride : 0;
+            const int64_t local = valid ? route % stride : 0;
+            const uint4* source = valid ? reinterpret_cast<const uint4*>(peer_pointer<uint64_t>(p, 0)[owner])
+                + (local / p.dim[3]) * width : nullptr;
+            const float score = valid ? reinterpret_cast<const float*>(peer_pointer<uint64_t>(p, 1)[owner])[local] : 0.f;
+            if (lane == 0) peer_pointer<float>(p, 5)[row] = score;
+            for (int64_t column = lane; column < width; column += 32) {
+                const uint4 raw = valid ? source[column] : uint4{};
+                const auto* input = reinterpret_cast<const __ppu_bfloat16*>(&raw);
+                uint4 scaled{};
+                auto* output = reinterpret_cast<__ppu_bfloat16*>(&scaled);
+                #pragma unroll
+                for (int j = 0; j < 8; ++j)
+                    output[j] = __float2bfloat16(__bfloat162float(input[j]) * score);
+                peer_pointer<uint4>(p, 3)[row * width + column] = raw;
+                peer_pointer<uint4>(p, 4)[row * width + column] = scaled;
+            }
+        }
     } else if constexpr (Op == PeerOperation::ExpertLocalGradients) {
         // Keep replayed Y at its expert. Pull raw source DY and scores once
         // here, produce the mandatory BF16 packed DY and return one FP32

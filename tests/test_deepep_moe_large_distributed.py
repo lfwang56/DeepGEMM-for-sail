@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--dgrad-compute-cus", type=int, default=0)
     parser.add_argument("--fuse-replay-gradients", action="store_true")
+    parser.add_argument("--fuse-dhidden-scores", action="store_true")
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--hidden", type=int, default=8192)
     parser.add_argument("--intermediate", type=int, default=2048)
@@ -100,6 +101,7 @@ def main():
                          dispatch_external=args.dispatch_external, dispatch_external_serial=args.serialize_external_dispatch,
                          dgrad_compute_cus=args.dgrad_compute_cus,
                          fuse_replay_gradients=args.fuse_replay_gradients,
+                         fuse_dhidden_scores=args.fuse_dhidden_scores,
                          producer_input_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas),
                          producer_local_aiu=not (args.dag_fusion or args.input_inline or args.dispatch_assist_ctas)))
     plan = (DeepEPMoEPlan if args.backend == "deepep" else PeerMoEPlan)(h, i, e, k, t, chunk_tokens=args.chunk_tokens,

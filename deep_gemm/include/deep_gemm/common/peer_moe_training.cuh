@@ -24,6 +24,7 @@ enum class PeerOperation : int {
     PrefetchRawDy,
     AssistInputTiles,
     ReduceScorePartials,
+    StageRawWeightedDy,
 };
 
 struct PeerGemmParams {
@@ -60,6 +61,14 @@ struct PeerReplayGradients {
     uint32_t source_tokens = 0;
     uint32_t topk = 0;
     uint32_t num_ranks = 0;
+    uint32_t num_n_tiles = 0;
+};
+
+// Optional dHidden epilogue argument, separate from existing GPU ABI structs.
+struct PeerDHiddenScores {
+    const void* hidden = nullptr;
+    const float* row_scores = nullptr;
+    float* score_partials = nullptr;
     uint32_t num_n_tiles = 0;
 };
 

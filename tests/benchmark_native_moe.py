@@ -145,6 +145,7 @@ def main():
     parser.add_argument("--wgrad-overlap", choices=("none", "dw1", "both"), default="none")
     parser.add_argument("--dgrad-compute-cus", type=int, default=0)
     parser.add_argument("--fuse-replay-gradients", action="store_true")
+    parser.add_argument("--fuse-dhidden-scores", action="store_true")
     parser.add_argument("--overlap-expert-dy", action="store_true")
     parser.add_argument("--gate-up-layout", choices=("split", "g8"), default="split")
     parser.add_argument("--fuse-fc1-activation", action="store_true")
@@ -275,6 +276,7 @@ def main():
                 options["dispatch_external_serial"] = args.serialize_external_dispatch
                 options["dgrad_compute_cus"] = args.dgrad_compute_cus
                 options["fuse_replay_gradients"] = args.fuse_replay_gradients
+                options["fuse_dhidden_scores"] = args.fuse_dhidden_scores
                 options["producer_local_aiu"] = args.producer_local_aiu
                 options["producer_input_aiu"] = args.producer_input_aiu
                 options["dispatch_pipeline"] = args.dispatch_pipeline
@@ -461,6 +463,7 @@ def main():
                     "wgrad_overlap": plan.wgrad_overlap,
                     "dgrad_compute_cus": getattr(plan, "dgrad_compute_cus", None),
                     "fuse_replay_gradients": getattr(plan, "fuse_replay_gradients", None),
+                    "fuse_dhidden_scores": getattr(plan, "fuse_dhidden_scores", None),
                     "replay_gradient_warp_reduction": os.environ.get("DG_REPLAY_GRAD_WARP_REDUCTION", "0"),
                     "wgrad_compute_cus": os.environ.get("DG_BF16_WGRAD_COMPUTE_CUS", "0"),
                     "overlap_expert_dy": plan.overlap_expert_dy,

@@ -441,6 +441,72 @@ __device__ __forceinline__ void activation_backward_epilogue(
     }
 }
 
+// dScore = dot(hidden, rawDY @ W2), before route-score scaling. This
+// eliminates FC2 replay and is defined for zero, tiny and negative scores.
+// BF16 scaling is reassociated from DY to dHidden; independent FP32 and
+// training-quality checks are required before enabling this optional path.
+template <uint32_t Width, uint32_t BlockM, class Accum, class Coordinates>
+__device__ __forceinline__ void dhidden_score_epilogue(
+        const Accum& accum, const Coordinates& coordinates, const PeerGemmParams& params,
+        const PeerDHiddenScores& scores, uint32_t row_base, uint32_t valid_rows,
+        uint32_t column_base, uint32_t n_tile) {
+    __shared__ __align__(16) float row_dots[BlockM];
+    for (uint32_t row = threadIdx.x; row < BlockM; row += blockDim.x)
+        row_dots[row] = 0.f;
+    __syncthreads();
+    auto* gate_up = reinterpret_cast<__ppu_bfloat16*>(params.activation_gate_up);
+    const auto* hidden = reinterpret_cast<const __ppu_bfloat16*>(scores.hidden);
+    CUTLASS_PRAGMA_UNROLL
+    for (int wm = 0; wm < cute::size<1>(coordinates); ++wm) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int mm = 0; mm < cute::size<0, 1>(coordinates); ++mm) {
+            const uint32_t row = cute::get<0>(coordinates(cute::make_coord(cute::_0{}, mm, cute::_0{}), wm, cute::_0{}));
+            float dot = 0.f;
+            const float scale = row < valid_rows ? scores.row_scores[row_base + row] : 0.f;
+            CUTLASS_PRAGMA_UNROLL
+            for (int wn = 0; wn < cute::size<2>(coordinates); ++wn) {
+                CUTLASS_PRAGMA_UNROLL
+                for (int mn = 0; mn < cute::size<0, 2>(coordinates); ++mn) {
+                    const uint32_t column = column_base + cute::get<1>(coordinates(cute::make_coord(cute::_0{}, mm, mn), wm, wn));
+                    if (row >= valid_rows || column >= Width) continue;
+                    const auto* values = cute::raw_pointer_cast(accum(cute::make_coord(cute::_, mm, mn), wm, wn).data());
+                    float dg[2], du[2];
+                    CUTLASS_PRAGMA_UNROLL
+                    for (int element = 0; element < 2; ++element) {
+                        const uint32_t feature = column + element;
+                        dot += values[element] * __bfloat162float(hidden[uint64_t(row_base + row) * Width + feature]);
+                        const uint64_t offset = uint64_t(row_base + row) * 2 * Width + feature / 8 * 16 + feature % 8;
+                        const float gate = __bfloat162float(gate_up[offset]);
+                        const float up = __bfloat162float(gate_up[offset + 8]);
+                        const float dh = __bfloat162float(__float2bfloat16(values[element] * scale));
+                        const float sigmoid = 1.f / (1.f + expf(-gate));
+                        dg[element] = dh * up * sigmoid * (1.f + gate * (1.f - sigmoid));
+                        du[element] = dh * (gate * sigmoid);
+                    }
+                    const uint64_t base = uint64_t(row_base + row) * 2 * Width + column / 8 * 16 + column % 8;
+                    *reinterpret_cast<uint32_t*>(gate_up + base) = tix::cvt_rte_bf16x2_f32(dg[1], dg[0]);
+                    *reinterpret_cast<uint32_t*>(gate_up + base + 8) = tix::cvt_rte_bf16x2_f32(du[1], du[0]);
+                }
+            }
+            // All lanes participate, including ragged rows. Same tc02 row
+            // lane-group reduction as the independently checked replay path.
+            uint32_t leader = threadIdx.x & 31;
+            #pragma unroll
+            for (int delta = 1; delta < 32; delta <<= 1) {
+                const auto other_row = __shfl_xor_sync(0xffffffffu, row, delta);
+                const auto other_dot = __shfl_xor_sync(0xffffffffu, dot, delta);
+                const auto other_leader = __shfl_xor_sync(0xffffffffu, leader, delta);
+                if (other_row == row) { dot += other_dot; leader = min(leader, other_leader); }
+            }
+            if (row < valid_rows && (threadIdx.x & 31) == leader)
+                atomicAdd(row_dots + row, dot);
+        }
+    }
+    __syncthreads();
+    for (uint32_t row = threadIdx.x; row < valid_rows; row += blockDim.x)
+        scores.score_partials[uint64_t(row_base + row) * scores.num_n_tiles + n_tile] = row_dots[row];
+}
+
 // G=8 interleaving puts each thread's gate/up pair in consecutive tc02 MMA_N
 // fragments. Match the BF16 training boundary before applying SwiGLU.
 template <uint32_t Width, bool KeepGateUp, class Accum, class Coordinates>
@@ -590,13 +656,14 @@ template <class _SrcT, GemmType kGemmType,
           uint32_t ReturnVectorBytes = 4, bool GateUpG8 = false,
           bool Fc1Activation = false, bool KeepGateUp = true, uint32_t InputCopyILP = 1,
           bool ExternalInput = false, uint32_t PollYieldEvery = 0, uint32_t PollPauseCycles = 0,
-          bool ReplayGradients = false, bool ReplayWarpReduction = false>
+          bool ReplayGradients = false, bool ReplayWarpReduction = false, bool DHiddenScores = false>
 __device__ __forceinline__ void
 training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
                            const training::PeerDispatchPipeline pipeline = {},
                            const uint32_t selected_m_tile = 0,
                            const uint32_t selected_n_tile = ~0u,
-                           const training::PeerReplayGradients gradients = {}) {
+                           const training::PeerReplayGradients gradients = {},
+                           const training::PeerDHiddenScores dhidden_scores = {}) {
     const uint64_t pipeline_begin = DispatchPipeline ? clock64() : 0;
     static_assert(!InlineDispatch || (DispatchPipeline && !PeerRead && !PeerWrite));
     static_assert(!ExternalInput || (DispatchPipeline && !InlineDispatch && !PeerRead && !PeerWrite));
@@ -621,6 +688,8 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
             }
         }
     }
+    static_assert(!DHiddenScores || (ActivationBackward && GateUpG8 && !ReplayGradients
+                                    && !PeerRead && !PeerWrite && !DispatchPipeline));
     const auto& args = params.gemm;
     constexpr uint32_t STRIDE_AM = SHAPE_K;
     constexpr uint32_t STRIDE_BE = SHAPE_N * SHAPE_K;
@@ -1027,6 +1096,10 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
       } else if constexpr (Fc1Activation) {
           training::fc1_swiglu_epilogue<SHAPE_N, KeepGateUp>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);
+      } else if constexpr (DHiddenScores) {
+          training::dhidden_score_epilogue<SHAPE_N, BLOCK_M>(accum, tCcC, params, dhidden_scores,
+              deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block,
+              blk_n_offset, blk_n_offset / BLOCK_N);
       } else if constexpr (ActivationBackward) {
           training::activation_backward_epilogue<SHAPE_N, GateUpG8>(accum, tCcC, params,
               deep_scheduler.curr_block_m_offset, deep_scheduler.valid_m_in_block, blk_n_offset);

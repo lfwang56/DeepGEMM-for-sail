@@ -45,7 +45,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ReduceScorePartials));
+    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::StageRawWeightedDy));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -102,6 +102,17 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
                            && dims[4] > 0 && dims[4] <= 64 && (dims[5] == 128 || dims[5] == 256));
             expect(0, dims[0] * dims[1], torch::kFloat32); expect(1, dims[0], i32);
             expect(2, 1, i32); expect(3, dims[4], i64); expect(4, 1, i32);
+            blocks = int64_t(get_num_sms()) * 2;
+            break;
+        case PeerOperation::StageRawWeightedDy:
+            schema(8, 6);
+            DG_HOST_ASSERT(dims[0] > 0 && dims[1] > 0 && dims[1] % 8 == 0
+                           && dims[2] > 0 && dims[3] > 0 && dims[4] > 0 && dims[4] <= 64
+                           && (dims[5] == 128 || dims[5] == 256) && dims[0] % dims[5] == 0);
+            expect(0, dims[4], i64); expect(1, dims[4], i64); expect(2, dims[0], i32);
+            expect(3, dims[0] * dims[1], bf); expect(4, dims[0] * dims[1], bf);
+            expect(5, dims[0], torch::kFloat32); expect(6, 1, i32); expect(7, 1, i32);
+            DG_HOST_ASSERT(!tensors[3].is_alias_of(tensors[4]));
             blocks = int64_t(get_num_sms()) * 2;
             break;
         case PeerOperation::ExpertLocalGradients:
@@ -246,6 +257,8 @@ public:
         bool replay_gradients = false;
         bool replay_warp_reduce = false;
         PeerReplayGradients gradients{};
+        bool dhidden_scores = false;
+        PeerDHiddenScores scores{};
     };
     static std::string name(const Args& args) {
         auto name = fmt::format("bf16_peer_r{}_w{}_n{}_k{}_bn{}_bk{}_wm{}_wn{}_s{}",
@@ -266,6 +279,7 @@ public:
         if (args.poll_yield_every) name += fmt::format("_yield{}", args.poll_yield_every);
         if (args.poll_pause_cycles) name += fmt::format("_pause{}", args.poll_pause_cycles);
         if (args.replay_gradients) name += "_replay_grad";
+        if (args.dhidden_scores) name += "_dhidden_scores";
         if (args.replay_warp_reduce) name += "_warp_reduce";
         if (args.pipeline.ready && !args.write_peer && args.pipeline.communication_ctas == 0)
             name += args.external_input ? "_external_dispatch" : "_owned_dispatch";
@@ -289,7 +303,8 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
 }}
 )", args.threads, name(args),
        args.pipeline.ready ? ", const deep_gemm::training::PeerDispatchPipeline pipeline"
-                           : args.replay_gradients ? ", const deep_gemm::training::PeerReplayGradients gradients" : "",
+                           : args.replay_gradients ? ", const deep_gemm::training::PeerReplayGradients gradients"
+                           : args.dhidden_scores ? ", const deep_gemm::training::PeerDHiddenScores scores" : "",
        args.n, args.k, args.groups, args.block_m, args.block_n, args.block_k,
        args.warp_m, args.warp_n, args.threads, args.stages,
        args.read_peer ? "true" : "false", args.write_peer ? "true" : "false",
@@ -304,12 +319,16 @@ __global__ void {}(const deep_gemm::training::PeerGemmParams params{}) {{
        args.interleaved_gate_up ? "true" : "false",
        args.fc1_activation ? "true" : "false", args.keep_gate_up ? "true" : "false",
        args.input_copy_ilp, args.external_input ? "true" : "false", args.poll_yield_every, args.poll_pause_cycles,
-       args.replay_gradients ? (args.replay_warp_reduce ? ", true, true" : ", true") : "",
+       args.dhidden_scores ? ", false, false, true"
+                           : args.replay_gradients ? (args.replay_warp_reduce ? ", true, true" : ", true") : "",
        args.pipeline.ready ? ", pipeline"
-                           : args.replay_gradients ? ", deep_gemm::training::PeerDispatchPipeline{}, 0, ~0u, gradients" : "");
+                           : args.replay_gradients ? ", deep_gemm::training::PeerDispatchPipeline{}, 0, ~0u, gradients"
+                           : args.dhidden_scores ? ", deep_gemm::training::PeerDispatchPipeline{}, 0, ~0u, deep_gemm::training::PeerReplayGradients{}, scores" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        if (args.replay_gradients)
+        if (args.dhidden_scores)
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params, args.scores));
+        else if (args.replay_gradients)
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params, args.gradients));
         else if (args.pipeline.ready)
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.params, args.pipeline));
@@ -336,7 +355,8 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
                       int block_m = 128, int return_vector_bytes = 4,
                       bool interleaved_gate_up = false, bool fc1_activation = false, bool keep_gate_up = true,
                       int input_copy_ilp = 1, bool external_input = false, int compute_cus = 0,
-                      const std::vector<torch::Tensor>& replay_gradient_tensors = {}) {
+                      const std::vector<torch::Tensor>& replay_gradient_tensors = {},
+                      const std::vector<torch::Tensor>& dhidden_score_tensors = {}) {
     DG_HOST_ASSERT(!external_input || (pipeline_ready.has_value() && pipeline_comm_ctas == 0 && !read_peer && !write_peer));
     DG_HOST_ASSERT(input_copy_ilp == 1 || input_copy_ilp == 2 || input_copy_ilp == 4 || input_copy_ilp == 8);
     DG_HOST_ASSERT(input_copy_ilp == 1 || producer_input_aiu
@@ -456,6 +476,26 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.keep_gate_up = keep_gate_up;
     args.input_copy_ilp = input_copy_ilp;
     args.external_input = external_input;
+    if (!dhidden_score_tensors.empty()) {
+        const auto& g = dhidden_score_tensors;
+        DG_HOST_ASSERT(g.size() == 3 && replay_gradient_tensors.empty()
+                       && args.activation_backward && interleaved_gate_up && !read_peer && !write_peer
+                       && !pipeline_ready.has_value() && !dispatch_cache_n && !pack_input
+                       && !local_input_aiu && !producer_input_aiu && !first_n_tile
+                       && !num_n_tiles && !staged_return && !fc1_activation);
+        for (const auto& tensor : g)
+            DG_HOST_ASSERT(tensor.device() == a.device() && tensor.is_contiguous());
+        const uint32_t ntiles = (n + bn - 1) / bn;
+        DG_HOST_ASSERT(g[0].scalar_type() == torch::kBFloat16 && g[0].sizes() == out.sizes());
+        DG_HOST_ASSERT(g[1].scalar_type() == torch::kFloat32 && g[1].sizes() == at::IntArrayRef({m}));
+        DG_HOST_ASSERT(g[2].scalar_type() == torch::kFloat32
+                       && g[2].sizes() == at::IntArrayRef({m, int64_t(ntiles)}));
+        // out aliases the retained hidden tensor by design: this epilogue
+        // writes gate/up gradients and score partials, never out/hidden.
+        DG_HOST_ASSERT(!a.is_alias_of(g[0]) && !g[2].is_alias_of(g[1]));
+        args.dhidden_scores = true;
+        args.scores = {g[0].data_ptr(), g[1].data_ptr<float>(), g[2].data_ptr<float>(), ntiles};
+    }
     if (!replay_gradient_tensors.empty()) {
         const auto& g = replay_gradient_tensors;
         DG_HOST_ASSERT(g.size() == 5 && !read_peer && !write_peer && !activation_gate_up.has_value()
@@ -596,7 +636,8 @@ static void register_peer_apis(pybind11::module_& m) {
           py::arg("interleaved_gate_up") = false, py::arg("fc1_activation") = false,
           py::arg("keep_gate_up") = true, py::arg("input_copy_ilp") = 1,
           py::arg("external_input") = false, py::arg("compute_cus") = 0,
-          py::arg("replay_gradient_tensors") = std::vector<torch::Tensor>{});
+          py::arg("replay_gradient_tensors") = std::vector<torch::Tensor>{},
+          py::arg("dhidden_score_tensors") = std::vector<torch::Tensor>{});
 }
 
 }  // namespace deep_gemm::training

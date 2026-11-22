@@ -37,7 +37,19 @@ class PeerMoEPlan(NativeMoEPlan):
                  dag_serialize=False, dag_trace=False, dag_shared_pool=False, dag_input_prefetch=False,
                  dag_backward=False, dag_direct_return=False,
                  input_copy_ilp=1, dispatch_assist_ctas=0, dispatch_external=False, dispatch_external_serial=False,
-                 fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, **kwargs):
+                 fuse_fc1_activation=False, dgrad_compute_cus=0, fuse_replay_gradients=False, fuse_dhidden_scores=False, **kwargs):
+        if not isinstance(fuse_dhidden_scores, bool):
+            raise TypeError("fuse_dhidden_scores must be bool")
+        if fuse_dhidden_scores and (not expert_local_grad or not reuse_packed_dy
+                or not fuse_dispatch or not fuse_return or not fuse_activation_backward
+                or not fuse_fc1_activation or kwargs.get('gate_up_layout', 'split') != 'g8'
+                or ring_rows is None or dag_fusion or dag_backward or ffn_fusion
+                or dispatch_pipeline or return_pipeline or staged_return or fuse_replay_gradients
+                or kwargs.get('overlap_expert_dy', False) or dispatch_cache_n):
+            raise ValueError("dHidden scores require G8 bilateral routed expert gradients with fused activations")
+        if fuse_dhidden_scores and (gemm_configs is None or not gemm_configs.get('dhidden')):
+            raise ValueError("dHidden scores require an explicit dHidden GEMM configuration")
+        self.fuse_dhidden_scores = fuse_dhidden_scores
         if not isinstance(fuse_replay_gradients, bool):
             raise TypeError("fuse_replay_gradients must be bool")
         if fuse_replay_gradients and (not expert_local_grad or not reuse_packed_dy
@@ -237,7 +249,8 @@ class PeerMoEPlan(NativeMoEPlan):
             recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
                       self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
-                      self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial)
+                      self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial,
+                      self.fuse_dhidden_scores)
             recipes = [None] * self.size
             dist.all_gather_object(recipes, recipe, group=self.group)
             if any(other != recipe for other in recipes):
@@ -367,12 +380,16 @@ class PeerMoEPlan(NativeMoEPlan):
             self.dispatch_scratch = torch.empty((cus * self.dispatch_cache_ctas * 128, self.h),
                                                 device=self.device, dtype=torch.bfloat16)
             self.buffers["dispatch_scratch"] = self.dispatch_scratch
-        if self.fuse_replay_gradients:
-            bn = self.gemm_configs['fc2'][0]
-            self.score_partial_columns = (self.h + bn - 1) // bn
+        if self.fuse_replay_gradients or self.fuse_dhidden_scores:
+            bn = self.gemm_configs['dhidden' if self.fuse_dhidden_scores else 'fc2'][0]
+            width = self.i if self.fuse_dhidden_scores else self.h
+            self.score_partial_columns = (width + bn - 1) // bn
             self.score_partials = torch.empty((self.rows, self.score_partial_columns),
                                              device=self.device, dtype=torch.float32)
             self.buffers['score_partials'] = self.score_partials
+            if self.fuse_dhidden_scores:
+                self.packed_row_scores = torch.empty(self.rows, device=self.device, dtype=torch.float32)
+                self.buffers['packed_row_scores'] = self.packed_row_scores
         self.gate_up.zero_()
         self.hidden.zero_()
         self._prepared = False
@@ -422,6 +439,8 @@ class PeerMoEPlan(NativeMoEPlan):
             self.dgrad_compute_cus if role in ("dhidden", "dx") else 0,
             *([[self.pointer_tables['raw_dy'], self.pointer_tables['raw_scores'],
                 self.packed_dy, self.score_partials, self.status]] if replay_gradients else []),
+            *([[], [self.hidden, self.packed_row_scores, self.score_partials]]
+              if self.fuse_dhidden_scores and role == 'dhidden' else []),
         )
         if compile_only and (dispatch_pipeline or return_pipeline):
             grid_name = "return_pipeline_ctas" if return_pipeline else "dispatch_pipeline_ctas"
@@ -548,8 +567,11 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fuse_replay_gradients:
             self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                             compile_only=True, replay_gradients=True)
+        if self.fuse_dhidden_scores:
+            self._expert_gradients(compile_only=True)
+            self._reduce_score_partials(compile_only=True)
         read_dy = self.fuse_dispatch and not self.reuse_packed_dy
-        self._peer_gemm(self.packed_dy, self.w2_t, self.hidden,
+        self._peer_gemm(self.packed_output if self.fuse_dhidden_scores else self.packed_dy, self.w2_t, self.hidden,
                         self.permutation if read_dy else self.identity_rows,
                         read=read_dy, source="local_dy", compile_only=True, role="dhidden")
         self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
@@ -617,6 +639,8 @@ class PeerMoEPlan(NativeMoEPlan):
         self._fc1(w1, pack_input=pack_input, keep_gate_up=not return_output, prefetch_dy=prefetch_dy)
         if not self.fuse_fc1_activation:
             self._activation()
+        if self.fuse_dhidden_scores and not return_output:
+            return
         self._peer_gemm(self.hidden, w2, self.packed_output, self.identity_rows,
                         write=self.fuse_return and return_output,
                         replay_gradients=self.fuse_replay_gradients and not return_output)
@@ -694,7 +718,19 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(10, [self.local_values, dy, scores, dscores, self.local_dy],
               [self.chunk_tokens, self.h, self.k, dy.shape[0], start], compile_only)
 
+    def _reduce_score_partials(self, compile_only=False):
+        _peer(17, [self.score_partials, self.permutation, self.num_blocks,
+                   self.pointer_tables['local_dscores'], self.status],
+              [self.rows, self.score_partial_columns, self.chunk_tokens,
+               self.k, self.size, self.block_m], compile_only)
+
     def _expert_gradients(self, compile_only=False):
+        if self.fuse_dhidden_scores:
+            _peer(18, [self.pointer_tables['raw_dy'], self.pointer_tables['raw_scores'],
+                       self.permutation, self.packed_output, self.packed_dy,
+                       self.packed_row_scores, self.num_blocks, self.status],
+                  [self.rows, self.h, self.chunk_tokens, self.k, self.size, self.block_m], compile_only)
+            return
         if self.fuse_replay_gradients:
             _peer(17, [self.score_partials, self.permutation, self.num_blocks,
                        self.pointer_tables['local_dscores'], self.status],
@@ -748,7 +784,10 @@ class PeerMoEPlan(NativeMoEPlan):
                 self._expert_gradients()
                 self._wgrad(self.packed_dy, self.hidden, dw2,
                             asynchronous=self.wgrad_overlap == "both")
-                self._peer_gemm(self.packed_dy, self.w2_t, self.hidden, self.identity_rows, role="dhidden")
+                self._peer_gemm(self.packed_output if self.fuse_dhidden_scores else self.packed_dy,
+                                self.w2_t, self.hidden, self.identity_rows, role="dhidden")
+                if self.fuse_dhidden_scores:
+                    self._reduce_score_partials()
                 if not self.fuse_activation_backward:
                     self._activation(backward=True)
                 self._wgrad(self.gate_up, self.packed_x, dw1,

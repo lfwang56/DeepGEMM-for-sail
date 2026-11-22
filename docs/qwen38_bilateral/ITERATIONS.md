@@ -3651,3 +3651,52 @@ CTAclockaggregates(toalignwithAsyslastgraphnext;notactiveMMAcycles):
     "clean": true
   }
 ]
+
+
+## Iteration46 — optional dHidden score fusion removes replay FC2
+
+Compute dScore from original BF16 hidden and unweighted FP32 dHidden accumulators.
+Stage raw DY into the former packed-output buffer and BF16 weighted DY into the
+existing packed-DY buffer for DW2, retaining full gradients. The dHidden
+epilogue scales raw accumulators by each route score, rounds to BF16, applies
+activation backward, and reduces score partials. No division, preserving
+valid-zero, tiny and negative-score derivatives. Retained hidden is not
+overwritten, supporting concurrent DW2. This deliberately reassociates BF16
+scaling from DY to dHidden and must pass independent unchanged FP32 limits
+and new training-quality validation before any production adoption.
+
+The flag defaults false, uses a separate optional GPU sidecar and kernel
+name, and preserves PeerGemmParams / PeerReplayGradients ABIs. Reject unsupported
+path combinations. Existing full-reference tolerances and benchmark work are
+unchanged; new dynamic graph test changes inputs/weights/routes and exercises
+backward-only replay. Whole-host audit gates every performance result.
+
+Timing records (partial and rejected phases retained in provenance):
+[
+  {
+    "phase": "qwen38-r2-dhidden46-control",
+    "clean": true,
+    "backend": "peer",
+    "ms": 83.21393432617188
+  },
+  {
+    "phase": "qwen38-r2-dhidden46-elastic-early",
+    "clean": true,
+    "backend": "elastic",
+    "ms": 105.7523193359375
+  },
+  {
+    "phase": "qwen38-r2-dhidden46-fused",
+    "clean": true,
+    "backend": "peer",
+    "ms": 79.90184326171875
+  },
+  {
+    "phase": "qwen38-r2-dhidden46-fused-overlap",
+    "clean": true,
+    "backend": "peer",
+    "ms": 84.60529174804688
+  }
+]
+
+Preflights: native4df7f1fbd8f4 built clean218. Initial new harness bound the plan to a different stream (correctly rejected); fixed the harness to warm and capture on one stream. Initial full-shape preflight caught an incorrect score-partial width using H instead of I; corrected before timing. Unchanged production FP32 limits retained. Dedicated serial/both dynamic checks each passed all six patterns, including valid zero/tiny/negative scores, updated weights, and backward-only replay. FullH8192/I2048/E16/K10 single-device every-element references passed balanced+duplicate patterns, RMS0.0020–0.0038. Logs retained under work/qwen38-r2-dhidden46-*.log.
