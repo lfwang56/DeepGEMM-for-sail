@@ -1,0 +1,3221 @@
+{
+  "passed": true,
+  "phases": [
+    {
+      "name": "mok32-opt140-grad-ilp1",
+      "ilp": 1,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "grad139_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            2.435846519470215,
+            2.4389415740966798,
+            2.435581016540527,
+            2.442153549194336,
+            2.4334455490112306
+          ],
+          "median_max_rank_event_ms": 2.435846519470215,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.3637590408325195,
+            1.3623080253601074,
+            1.3615779876708984,
+            1.3619915008544923,
+            1.353868007659912
+          ],
+          "median_max_rank_event_ms": 1.3619915008544923,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.3469935417175294,
+            1.3340419769287108,
+            1.3536490440368651,
+            1.3358084678649902,
+            1.328552532196045
+          ],
+          "median_max_rank_event_ms": 1.3358084678649902,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.0996159553527831,
+            1.096590518951416,
+            1.1007225036621093,
+            1.0974860191345215,
+            1.0912405014038087
+          ],
+          "median_max_rank_event_ms": 1.0974860191345215,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt140-grad-ilp1/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 0,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 0,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 1,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 1,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 2,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 2,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 3,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 3,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 4,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 4,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 5,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 5,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 6,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 6,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp1/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 7,
+              "ilp": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 7,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt140-grad-ilp1-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                645216,
+                645217,
+                645218,
+                645219,
+                645220,
+                645221,
+                645222,
+                645223
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt140-grad-ilp1"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 645216,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645217,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645218,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645219,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645220,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645221,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645222,
+                  "start_ticks": "222634252"
+                },
+                {
+                  "pid": 645223,
+                  "start_ticks": "222634252"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mok32-opt140-grad-ilp2",
+      "ilp": 2,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "grad139_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.624648094177246,
+            1.6188545227050781,
+            1.619400978088379,
+            1.6236509323120116,
+            1.6221805572509767
+          ],
+          "median_max_rank_event_ms": 1.6221805572509767,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.1253604888916016,
+            1.1255550384521484,
+            1.125889492034912,
+            1.1276860237121582,
+            1.1149539947509766
+          ],
+          "median_max_rank_event_ms": 1.1255550384521484,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.0787935256958008,
+            1.0835695266723633,
+            1.076510524749756,
+            1.0754010200500488,
+            1.0757704734802247
+          ],
+          "median_max_rank_event_ms": 1.076510524749756,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.0936955451965331,
+            1.0929485321044923,
+            1.0942885398864746,
+            1.0974209785461426,
+            1.0899450302124023
+          ],
+          "median_max_rank_event_ms": 1.0936955451965331,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt140-grad-ilp2/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 0,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 0,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 1,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 1,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 2,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 2,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 3,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 3,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 4,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 4,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 5,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 5,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 6,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 6,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp2/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 7,
+              "ilp": 2,
+              "header_sha256": "94924a0ee6ab4e5c3cf268dbb1e5dd155a329279aec04d6a7e6597be42507196"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 7,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt140-grad-ilp2-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                649231,
+                649232,
+                649233,
+                649234,
+                649235,
+                649236,
+                649237,
+                649238
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt140-grad-ilp2"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 649231,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649232,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649233,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649234,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649235,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649236,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649237,
+                  "start_ticks": "222635333"
+                },
+                {
+                  "pid": 649238,
+                  "start_ticks": "222635333"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mok32-opt140-grad-ilp4",
+      "ilp": 4,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "grad139_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.9304689407348632,
+            1.927302932739258,
+            1.9318405151367188,
+            1.9320419311523438,
+            1.9321924209594727
+          ],
+          "median_max_rank_event_ms": 1.9318405151367188,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.8512704849243165,
+            1.8534780502319337,
+            1.8544960021972656,
+            1.851446533203125,
+            1.8498880386352539
+          ],
+          "median_max_rank_event_ms": 1.851446533203125,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.4479075431823731,
+            1.4495545387268067,
+            1.4504084587097168,
+            1.4460809707641602,
+            1.4443394660949707
+          ],
+          "median_max_rank_event_ms": 1.4479075431823731,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.4404669761657716,
+            1.439603042602539,
+            1.4390959739685059,
+            1.4397544860839844,
+            1.4367765426635741
+          ],
+          "median_max_rank_event_ms": 1.439603042602539,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt140-grad-ilp4/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 0,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 0,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 1,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 1,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 2,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 2,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 3,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 3,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 4,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 4,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 5,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 5,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 6,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 6,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp4/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 7,
+              "ilp": 4,
+              "header_sha256": "235f06e3a9900c1126419ae22625386fbd5deb7b68a7fb48be2ac53d75147ae5"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 7,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt140-grad-ilp4-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                654155,
+                654156,
+                654157,
+                654158,
+                654159,
+                654160,
+                654161,
+                654162
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt140-grad-ilp4"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 654155,
+                  "start_ticks": "222636536"
+                },
+                {
+                  "pid": 654156,
+                  "start_ticks": "222636536"
+                },
+                {
+                  "pid": 654157,
+                  "start_ticks": "222636536"
+                },
+                {
+                  "pid": 654158,
+                  "start_ticks": "222636536"
+                },
+                {
+                  "pid": 654159,
+                  "start_ticks": "222636536"
+                },
+                {
+                  "pid": 654160,
+                  "start_ticks": "222636537"
+                },
+                {
+                  "pid": 654161,
+                  "start_ticks": "222636537"
+                },
+                {
+                  "pid": 654162,
+                  "start_ticks": "222636537"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mok32-opt140-grad-ilp8",
+      "ilp": 8,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "grad139_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            2.094030570983887,
+            2.087898063659668,
+            2.092807960510254,
+            2.0920480728149413,
+            2.085457992553711
+          ],
+          "median_max_rank_event_ms": 2.0920480728149413,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            2.0957204818725588,
+            2.0972969055175783,
+            2.095317077636719,
+            2.0940439224243166,
+            2.0935779571533204
+          ],
+          "median_max_rank_event_ms": 2.095317077636719,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            2.166665458679199,
+            2.168401908874512,
+            2.1658424377441405,
+            2.162335014343262,
+            2.1604820251464845
+          ],
+          "median_max_rank_event_ms": 2.1658424377441405,
+          "passed": true
+        },
+        {
+          "case": "grad139_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "ExpertLocalGradientsQuantized only, not MoE step",
+          "samples_max_rank_event_ms": [
+            2.228111457824707,
+            2.2278310775756838,
+            2.2270015716552733,
+            2.229110527038574,
+            2.225687026977539
+          ],
+          "median_max_rank_event_ms": 2.2278310775756838,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt140-grad-ilp8/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 0,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723371654748917,
+              "torch_cast_bit_mismatches": 55592,
+              "dscore_relative_rms": 1.216505580714511e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 0,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 1,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571590431034565,
+              "torch_cast_bit_mismatches": 55566,
+              "dscore_relative_rms": 1.223479273448902e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 1,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 2,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025718556717038155,
+              "torch_cast_bit_mismatches": 54861,
+              "dscore_relative_rms": 1.215237261931179e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 2,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 3,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025720417499542236,
+              "torch_cast_bit_mismatches": 55197,
+              "dscore_relative_rms": 1.2172129970622336e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 3,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 4,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.02571926638484001,
+              "torch_cast_bit_mismatches": 56299,
+              "dscore_relative_rms": 1.233333080108423e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 4,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 5,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025725984945893288,
+              "torch_cast_bit_mismatches": 56483,
+              "dscore_relative_rms": 1.2298123408527317e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 5,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 6,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025714490562677383,
+              "torch_cast_bit_mismatches": 54383,
+              "dscore_relative_rms": 1.229314250394964e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 6,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt140-grad-ilp8/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "grad139_source",
+              "rank": 7,
+              "ilp": 8,
+              "header_sha256": "711eb10739e400a3f58215894c23dd9e197e08cf1a05a4e0e9052a0c633f0a72"
+            }
+          ],
+          "references": [
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            },
+            {
+              "case": "grad139_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "weighted_and_native_fp8_bitwise": true,
+              "independent_fp8_dequantization_rms": 0.025723598897457123,
+              "torch_cast_bit_mismatches": 55226,
+              "dscore_relative_rms": 1.2155602746588556e-07,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "grad139_finished",
+              "rank": 7,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt140-grad-ilp8-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                659080,
+                659081,
+                659082,
+                659083,
+                659084,
+                659085,
+                659086,
+                659087
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt140-grad-ilp8"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 659080,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659081,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659082,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659083,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659084,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659085,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659086,
+                  "start_ticks": "222637759"
+                },
+                {
+                  "pid": 659087,
+                  "start_ticks": "222637759"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
