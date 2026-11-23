@@ -1,0 +1,74 @@
+[
+  {
+    "variant": 0,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:196608, vreg:216, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 1,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:98304, vreg:144, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 2,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:98304, vreg:160, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 3,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:1024"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:131072, vreg:128, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 4,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:1024"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:131072, vreg:128, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 5,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:196608, vreg:144, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 6,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:196608, vreg:160, local_size_bytes:0"
+    ]
+  },
+  {
+    "variant": 7,
+    "launch": [
+      "num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512"
+    ],
+    "resources": [
+      "dynamic_smem_bytes:196608, vreg:144, local_size_bytes:0"
+    ]
+  }
+]
