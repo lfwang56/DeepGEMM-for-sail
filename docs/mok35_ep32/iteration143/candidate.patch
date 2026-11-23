@@ -1,0 +1,151 @@
+--- a/deep_gemm/include/deep_gemm/impls/peer_moe_training.cuh
++++ b/deep_gemm/include/deep_gemm/impls/peer_moe_training.cuh
+@@ -46,8 +46,9 @@
+ }
+ 
+ template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false,
+-          bool CacheFp8Scales = false, uint32_t InputTopk = 0, uint32_t InputSlices = 1>
++          bool CacheFp8Scales = false, uint32_t InputTopk = 0, uint32_t InputSlices = 1, uint32_t GradientCopyIlp = 1>
+ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
++    static_assert(GradientCopyIlp == 1 || GradientCopyIlp == 2 || GradientCopyIlp == 4 || GradientCopyIlp == 8);
+     if (block_index < 0) block_index = blockIdx.x;
+     const int64_t index = block_index * blockDim.x + threadIdx.x;
+     if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantizedTiles || Op == PeerOperation::ExpertLocalGradientsQuantizedTilesCached) {
+@@ -528,16 +529,32 @@
+                 + (local / p.dim[3]) * width : nullptr;
+             const float score = valid ? reinterpret_cast<const float*>(peer_pointer<uint64_t>(p, 1)[owner])[local] : 0.f;
+             if (lane == 0) peer_pointer<float>(p, 5)[row] = score;
+-            for (int64_t column = lane; column < width; column += 32) {
+-                const uint4 raw = valid ? source[column] : uint4{};
+-                const auto* input = reinterpret_cast<const __ppu_bfloat16*>(&raw);
+-                uint4 scaled{};
+-                auto* output = reinterpret_cast<__ppu_bfloat16*>(&scaled);
++            // Issue independent peer reads before consuming them. Keep the
++            // BF16 multiplication and the two destination layouts unchanged.
++            constexpr int copy_ilp = GradientCopyIlp;
++            #pragma clang loop unroll(disable)
++            for (int64_t base = lane; base < width; base += 32 * copy_ilp) {
++                uint4 values[copy_ilp];
+                 #pragma unroll
+-                for (int j = 0; j < 8; ++j)
+-                    output[j] = __float2bfloat16(__bfloat162float(input[j]) * score);
+-                peer_pointer<uint4>(p, 3)[row * width + column] = raw;
+-                peer_pointer<uint4>(p, 4)[row * width + column] = scaled;
++                for (int j = 0; j < copy_ilp; ++j) {
++                    const int64_t column = base + j * 32;
++                    values[j] = valid && column < width ? source[column] : uint4{};
++                }
++                #pragma unroll
++                for (int j = 0; j < copy_ilp; ++j) {
++                    const int64_t column = base + j * 32;
++                    if (column < width) {
++                        const uint4 raw = values[j];
++                        const auto* input = reinterpret_cast<const __ppu_bfloat16*>(&raw);
++                        uint4 scaled{};
++                        auto* output = reinterpret_cast<__ppu_bfloat16*>(&scaled);
++                        #pragma unroll
++                        for (int k = 0; k < 8; ++k)
++                            output[k] = __float2bfloat16(__bfloat162float(input[k]) * score);
++                        peer_pointer<uint4>(p, 3)[row * width + column] = raw;
++                        peer_pointer<uint4>(p, 4)[row * width + column] = scaled;
++                    }
++                }
+             }
+         }
+     } else if constexpr (Op == PeerOperation::ExpertLocalGradients || Op == PeerOperation::ExpertLocalGradientsQuantized) {
+@@ -565,25 +582,40 @@
+                     + (local_route / p.dim[3]) * width) : nullptr;
+             const float score = valid ? reinterpret_cast<const float*>(peer_pointer<uint64_t>(p, 1)[owner])[local_route] : 0.f;
+             float dot = 0.f;
+-            for (int64_t column = lane; column < width; column += 32) {
+-                const uint4 raw_dy = valid ? dy[column] : uint4{};
+-                const uint4 raw_y = valid ? peer_pointer<uint4>(p, 4)[row * width + column] : uint4{};
+-                const auto* d = reinterpret_cast<const __ppu_bfloat16*>(&raw_dy);
+-                const auto* y = reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+-                uint4 raw_weighted{};
+-                auto* weighted = reinterpret_cast<__ppu_bfloat16*>(&raw_weighted);
++            constexpr int gradient_ilp = GradientCopyIlp;
++            #pragma clang loop unroll(disable)
++            for (int64_t base = lane; base < width; base += 32 * gradient_ilp) {
++                uint4 dy_values[gradient_ilp], y_values[gradient_ilp];
+                 #pragma unroll
+-                for (int j = 0; j < 8; ++j) {
+-                    const float value = __bfloat162float(d[j]);
+-                    weighted[j] = __float2bfloat16(value * score);
+-                    dot += value * __bfloat162float(y[j]);
+-                }
+-                peer_pointer<uint4>(p, 5)[row * width + column] = raw_weighted;
+-                if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantized) {
+-                    float scale;
+-                    const uint2 packed=peer_quantize_eight(raw_weighted,scale);
+-                    peer_pointer<uint2>(p,8)[row*(p.dim[1]/8)+column]=packed;
+-                    if((lane&15)==0)peer_pointer<float>(p,9)[(column/16)*p.dim[0]+row]=scale;
++                for (int j = 0; j < gradient_ilp; ++j) {
++                    const int64_t column = base + j * 32;
++                    dy_values[j] = valid && column < width ? dy[column] : uint4{};
++                    y_values[j] = valid && column < width ? peer_pointer<uint4>(p, 4)[row * width + column] : uint4{};
++                }
++                #pragma unroll
++                for (int copy_j = 0; copy_j < gradient_ilp; ++copy_j) {
++                    const int64_t column = base + copy_j * 32;
++                    if (column < width) {
++                        const uint4 raw_dy = dy_values[copy_j];
++                        const uint4 raw_y = y_values[copy_j];
++                        const auto* d = reinterpret_cast<const __ppu_bfloat16*>(&raw_dy);
++                        const auto* y = reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
++                        uint4 raw_weighted{};
++                        auto* weighted = reinterpret_cast<__ppu_bfloat16*>(&raw_weighted);
++                        #pragma unroll
++                        for (int j = 0; j < 8; ++j) {
++                            const float value = __bfloat162float(d[j]);
++                            weighted[j] = __float2bfloat16(value * score);
++                            dot += value * __bfloat162float(y[j]);
++                        }
++                        peer_pointer<uint4>(p, 5)[row * width + column] = raw_weighted;
++                        if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantized) {
++                            float scale;
++                            const uint2 packed=peer_quantize_eight(raw_weighted,scale);
++                            peer_pointer<uint2>(p,8)[row*(p.dim[1]/8)+column]=packed;
++                            if((lane&15)==0)peer_pointer<float>(p,9)[(column/16)*p.dim[0]+row]=scale;
++                        }
++                    }
+                 }
+             }
+             #pragma unroll
+--- a/csrc/apis/peer_moe_training.hpp
++++ b/csrc/apis/peer_moe_training.hpp
+@@ -34,6 +34,11 @@
+         const bool fused_quant = input_tiles || args.operation == int(PeerOperation::ReturnGemmTiles) || args.operation == int(PeerOperation::PackActiveQuantized) ||
+                                  args.operation == int(PeerOperation::ExpertLocalGradientsQuantized) ||
+                                  tiled_quant;
++        const bool gradient_stage = args.operation == int(PeerOperation::StageRawWeightedDy);
++        const bool gradient_pack = args.operation == int(PeerOperation::ExpertLocalGradients) ||
++                                   args.operation == int(PeerOperation::ExpertLocalGradientsQuantized);
++        const int gradient_ilp = get_env<int>(gradient_stage ? "DG_MOE_DY_COPY_ILP" : "DG_MOE_GRADIENT_COPY_ILP", 1);
++        DG_HOST_ASSERT(gradient_ilp == 1 || gradient_ilp == 2 || gradient_ilp == 4 || gradient_ilp == 8);
+         const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
+         return fmt::format(R"(
+ #include <deep_gemm/impls/peer_moe_training.cuh>
+@@ -44,6 +49,7 @@
+ )", args.launch_args.block_dim.x, args.operation, args.operation,
+        fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : (tiled_quant || input_tiles) ? args.params.dim[2] : 0,
+        args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
++       gradient_stage || gradient_pack ? fmt::format(", false, 0, 1, {}", gradient_ilp) :
+        input_tiles ? fmt::format(", false, {}, {}",args.params.dim[3],args.params.dim[8] ? args.params.dim[8] : 1) :
+        tiled_quant ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
+     }
+--- a/csrc/jit/compiler.hpp
++++ b/csrc/jit/compiler.hpp
+@@ -157,7 +157,11 @@
+     }
+ 
+     static std::string bf16_gemm_rs_mma_reuse_flag(const std::string& name) {
+-        return get_ppu_arch() == AC_PPU0015 && name == "bf16_gemm_rs" ? "-ppu-pref-mma-reuse=true" : "";
++        const int peer_reuse = get_env<int>("DG_MOE_PEER_MMA_REUSE", 0);
++        DG_HOST_ASSERT(peer_reuse == 0 || peer_reuse == 1);
++        const bool peer = name.rfind("bf16_peer_", 0) == 0;
++        return get_ppu_arch() == AC_PPU0015 &&
++               (name == "bf16_gemm_rs" || (peer && peer_reuse)) ? "-ppu-pref-mma-reuse=true" : "";
+     }
+ 
+     std::shared_ptr<KernelRuntime> build(const std::string& name, const std::string& code) const {

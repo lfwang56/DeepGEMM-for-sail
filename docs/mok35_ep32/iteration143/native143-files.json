@@ -1,0 +1,8 @@
+{
+  "files": {
+    "candidate.patch": "8537284af003cacb1400a83c1c0c64fb01fd1cc60f061104ee6887fa9ac89d46",
+    "csrc/jit/compiler.hpp": "089774652f12fa5fbcbf6271562bff34a5b1b6caece571036ac1ad63971e2128",
+    "csrc/apis/peer_moe_training.hpp": "111bc4c6bcd1f677159d7ba37225c4be5e2f60a995dd43643408d9a423168272",
+    "deep_gemm/include/deep_gemm/impls/peer_moe_training.cuh": "1ab560638e493770809de3aad9a92a1c88b46479f3b09f85aa72a7513a07065f"
+  }
+}
