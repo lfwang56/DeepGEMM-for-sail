@@ -1,0 +1,3121 @@
+{
+  "phase": "mok32-opt137-dw-schedule",
+  "scope": "Isolated DW beta=1 only, not a MoE step",
+  "passed": true,
+  "ranks": [
+    {
+      "log": "mok32-opt137-dw-schedule/rank000.log",
+      "sha256": "fedc32ada86e60cd091d52dc5697413d9118a88bc422f8a5c920d1b2811c17cb",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 0,
+          "aiu_before_tsm": 0,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.7192514419555665,
+            1.7188474655151367,
+            1.7197889328002929,
+            1.7282060623168944,
+            1.7175764083862304
+          ],
+          "median_event_ms": 1.7192514419555665,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.6955564498901365,
+            2.699430465698242,
+            2.6977399826049804,
+            2.6912660598754883,
+            2.6911474227905274
+          ],
+          "median_event_ms": 2.6955564498901365,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.9146374702453614,
+            0.9136804580688477,
+            0.9132534980773925,
+            0.9181514739990234,
+            0.9169835090637207
+          ],
+          "median_event_ms": 0.9146374702453614,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 0,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.44212646484375,
+            1.4514300346374511,
+            1.4437655448913573,
+            1.4375934600830078,
+            1.4383600234985352
+          ],
+          "median_event_ms": 1.44212646484375,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 0,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank001.log",
+      "sha256": "383427ed746ddb6b4cc569fe7313d97e23a17e953f2540c559b2472151306e4d",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 1,
+          "aiu_before_tsm": 0,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.7169364929199218,
+            1.706277084350586,
+            1.710587501525879,
+            1.704622459411621,
+            1.7109855651855468
+          ],
+          "median_event_ms": 1.710587501525879,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.684133529663086,
+            2.6803094863891603,
+            2.6765314102172852,
+            2.6851425170898438,
+            2.676667594909668
+          ],
+          "median_event_ms": 2.6803094863891603,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.8923270225524902,
+            0.8896224975585938,
+            0.8887619972229004,
+            0.890323543548584,
+            0.8917300224304199
+          ],
+          "median_event_ms": 0.890323543548584,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 1,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.4105634689331055,
+            1.4131500244140625,
+            1.4073164939880372,
+            1.4077935218811035,
+            1.409673023223877
+          ],
+          "median_event_ms": 1.409673023223877,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 1,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank002.log",
+      "sha256": "7e4bc2b6a82cd2a3bcbd2b3800117a3b3d2a0cc1d6ebbb4332f5303aa0c5711c",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 2,
+          "aiu_before_tsm": 0,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.7385454177856445,
+            1.7251880645751954,
+            1.7310880661010741,
+            1.7305894851684571,
+            1.7351320266723633
+          ],
+          "median_event_ms": 1.7310880661010741,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.723500442504883,
+            2.719300079345703,
+            2.72119255065918,
+            2.7124345779418944,
+            2.7239604949951173
+          ],
+          "median_event_ms": 2.72119255065918,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.9023050308227539,
+            0.9022945404052735,
+            0.9033280372619629,
+            0.902154541015625,
+            0.9028929710388184
+          ],
+          "median_event_ms": 0.9023050308227539,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 2,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.4442020416259767,
+            1.4412164688110352,
+            1.4413260459899901,
+            1.4374654769897461,
+            1.439883041381836
+          ],
+          "median_event_ms": 1.4412164688110352,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 2,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank003.log",
+      "sha256": "56d2d7db9658b266cf925b211f5d6368867a8f60b58ffc7349e6f0c59212eadd",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 3,
+          "aiu_before_tsm": 0,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.69280948638916,
+            1.6854110717773438,
+            1.68416748046875,
+            1.6900144577026368,
+            1.6874889373779296
+          ],
+          "median_event_ms": 1.6874889373779296,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.6921789169311525,
+            2.7013084411621096,
+            2.696197509765625,
+            2.693450927734375,
+            2.6934429168701173
+          ],
+          "median_event_ms": 2.693450927734375,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.9090319633483886,
+            0.9047739982604981,
+            0.9029850006103516,
+            0.9055230140686035,
+            0.9013375282287598
+          ],
+          "median_event_ms": 0.9047739982604981,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 3,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.4315950393676757,
+            1.4313159942626954,
+            1.4402680397033691,
+            1.4345065116882325,
+            1.4361129760742188
+          ],
+          "median_event_ms": 1.4345065116882325,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 3,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank004.log",
+      "sha256": "98fc319adff74ca09bda3aa7f79d817765fc4ec45a4cc3efad79a6bede723340",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 0,
+          "aiu_before_tsm": 1,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.625189971923828,
+            1.6317125320434571,
+            1.6329389572143556,
+            1.6379159927368163,
+            1.6382400512695312
+          ],
+          "median_event_ms": 1.6329389572143556,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.502890968322754,
+            2.507859992980957,
+            2.4918384552001953,
+            2.4982690811157227,
+            2.494105911254883
+          ],
+          "median_event_ms": 2.4982690811157227,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.8543774604797363,
+            0.8556870460510254,
+            0.8546554565429687,
+            0.8581370353698731,
+            0.8533180236816407
+          ],
+          "median_event_ms": 0.8546554565429687,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 4,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.328129482269287,
+            1.3250840187072754,
+            1.3282964706420899,
+            1.3344059944152833,
+            1.327853012084961
+          ],
+          "median_event_ms": 1.328129482269287,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 4,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank005.log",
+      "sha256": "4f82ca106b2e8418bd51fa8de2f584687f525c3e6cbff173fb3642d99c6507e9",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 1,
+          "aiu_before_tsm": 1,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.6207365036010741,
+            1.6254209518432616,
+            1.6210100173950195,
+            1.6198465347290039,
+            1.6240999221801757
+          ],
+          "median_event_ms": 1.6210100173950195,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.479603958129883,
+            2.4845535278320314,
+            2.480880928039551,
+            2.475871467590332,
+            2.478749084472656
+          ],
+          "median_event_ms": 2.479603958129883,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.8511119842529297,
+            0.851321029663086,
+            0.8516739845275879,
+            0.8520094871520996,
+            0.8511284828186035
+          ],
+          "median_event_ms": 0.851321029663086,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 5,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.3093375205993651,
+            1.3107500076293945,
+            1.304527473449707,
+            1.3083765029907226,
+            1.3053894996643067
+          ],
+          "median_event_ms": 1.3083765029907226,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 5,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank006.log",
+      "sha256": "9458b59d7d53bfe2bafeb19e9e7730774a2405a2395e803e055d1b2fcae62a3a",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 2,
+          "aiu_before_tsm": 1,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.6402835845947266,
+            1.6459354400634765,
+            1.644849967956543,
+            1.6435264587402343,
+            1.643487548828125
+          ],
+          "median_event_ms": 1.6435264587402343,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.4970624923706053,
+            2.4892635345458984,
+            2.4952829360961912,
+            2.49053897857666,
+            2.491327476501465
+          ],
+          "median_event_ms": 2.491327476501465,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.8675274848937988,
+            0.8726490020751954,
+            0.8632710456848145,
+            0.8642894744873046,
+            0.8706814765930175
+          ],
+          "median_event_ms": 0.8675274848937988,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 6,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.319246482849121,
+            1.3249250411987306,
+            1.3235159873962403,
+            1.3251359939575196,
+            1.3196729660034179
+          ],
+          "median_event_ms": 1.3235159873962403,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 6,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "log": "mok32-opt137-dw-schedule/rank007.log",
+      "sha256": "e45aaeffc289659d736709d97324861d909cebd21f2d7785a718de6d60285f0f",
+      "clean": true,
+      "library": [
+        {
+          "case": "verified_isolated_library",
+          "library": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+          "torch": "2.11.0",
+          "extension": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1/deep_gemm/_C.cpython-312-x86_64-linux-gnu.so",
+          "extension_sha256": "6a67d3f81f30365ec1f95edb275ed81dca41ff9f24f2513544147ea1f7e1cd01",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "warp_map": 3,
+          "aiu_before_tsm": 1,
+          "lut_sha256": "2cef43d3172a0dd6b466afabf761c2cab55681ac60950bf0a7fbae9b473b8769"
+        }
+      ],
+      "references": [
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.2117356479611772e-07,
+            4.369017005956266e-07,
+            2.19567183989966e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.602515102509642e-06
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 0,
+          "lengths": [
+            128,
+            0,
+            256,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            2.208575011763969e-07,
+            4.3550269879233383e-07,
+            2.1970308239360747e-07
+          ],
+          "passed": true
+        },
+        {
+          "case": "mok_dw_independent_reference",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "pattern": 1,
+          "lengths": [
+            0,
+            2560,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "relative_rms": [
+            5.598711140919477e-06
+          ],
+          "passed": true
+        }
+      ],
+      "timings": [
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.6302724838256837,
+            1.6292905807495117,
+            1.6271184921264648,
+            1.633378028869629,
+            1.6267629623413087
+          ],
+          "median_event_ms": 1.6292905807495117,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw1",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 2048,
+          "n": 4096,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            2.504075050354004,
+            2.5098474502563475,
+            2.495980453491211,
+            2.4999984741210937,
+            2.5007549285888673
+          ],
+          "median_event_ms": 2.5007549285888673,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 2048,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536,
+            1280,
+            1280,
+            1536
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            0.8593654632568359,
+            0.869017505645752,
+            0.8618920326232911,
+            0.8595675468444824,
+            0.8651354789733887
+          ],
+          "median_event_ms": 0.8618920326232911,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        },
+        {
+          "case": "mok_dw_isolated_benchmark",
+          "variant": 7,
+          "tile": [
+            256,
+            256,
+            64,
+            64,
+            64,
+            3
+          ],
+          "role": "dw2",
+          "tokens_equivalent_per_rank": 4096,
+          "groups": 16,
+          "m": 4096,
+          "n": 1024,
+          "lengths": [
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816,
+            2560,
+            2560,
+            2816
+          ],
+          "capacity": 65536,
+          "samples_event_ms": [
+            1.3333684921264648,
+            1.3405035018920899,
+            1.3443129539489747,
+            1.335130500793457,
+            1.3417409896850585
+          ],
+          "median_event_ms": 1.3405035018920899,
+          "device": "ZW-M890P",
+          "torch": "2.11.0",
+          "scope": "One BF16-input FP32-output beta=1 DW; not a MoE step",
+          "passed": true
+        }
+      ],
+      "finished": [
+        {
+          "case": "mok_dw_trial_finished",
+          "variant": 7,
+          "passed": true
+        }
+      ]
+    }
+  ],
+  "audits": [
+    {
+      "log": "launch-mok32-opt137-dw-schedule-node80.log",
+      "clean": true,
+      "records": [
+        {
+          "case": "idle_node_gate",
+          "host": "e01-cn-9yq4xwro401-a0003",
+          "selected_gpus": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7
+          ],
+          "allowed": true,
+          "processes": []
+        },
+        {
+          "case": "local_ranks_started",
+          "node_rank": 0,
+          "pids": [
+            449670,
+            449671,
+            449672,
+            449673,
+            449674,
+            449675,
+            449676,
+            449677
+          ],
+          "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt137-dw-schedule"
+        },
+        {
+          "case": "local_ranks_finished",
+          "node_rank": 0,
+          "return_codes": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "passed": true
+        },
+        {
+          "case": "idle_node_postflight",
+          "host": "e01-cn-9yq4xwro401-a0003",
+          "allowed": true,
+          "processes": [],
+          "observed_foreign_during_command": [],
+          "verified_owned_processes": [
+            {
+              "pid": 449670,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449671,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449672,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449673,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449674,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449675,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449676,
+              "start_ticks": "222559832"
+            },
+            {
+              "pid": 449677,
+              "start_ticks": "222559832"
+            }
+          ],
+          "monitoring_errors": [],
+          "monitor_interval_seconds": 2,
+          "command_returncode": 0
+        }
+      ]
+    }
+  ]
+}
