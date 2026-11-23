@@ -135,3 +135,7 @@ Select only after same-cohort end-to-end confirmation; retain all rejected candi
 ## Iteration148: paired final DeepEP controls (initial cohort excluded)
 
 First reference phase was rejected by whole-host postflight/launch gates on215/216. No timing accepted. The controller canceled only verified tagged ranks. Preserve phase and replace215/216 with213/219, subject to fresh idle gates; final fusion timings must use the replacement cohort too.
+
+### Iteration148 replacement-cohort preflight excluded
+
+The replacement213/217/218/219 cohort returned75 before any accepted reference/timing. Preserve its controller record and reselect from a fresh whole-host census. No rejected timings enter comparison.
