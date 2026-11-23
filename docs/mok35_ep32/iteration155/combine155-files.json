@@ -1,0 +1,5 @@
+{
+  "combine155.patch": "111f4f9e70b7f7f98e4aea03fdd570371e7b6e88a6a2f8679d51a0afdbbe1819",
+  "csrc/apis/moe_training.hpp": "51e5591bdc3b41abacbda1ee4a13f6198eb5e2d271ad9900b20675b71bdda21e",
+  "deep_gemm/include/deep_gemm/impls/moe_training.cuh": "1916cc1c9047c445f7aee6074ea9dc74b5586d4ebb300e3bf38813b6d57eba4f"
+}
