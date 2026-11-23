@@ -188,6 +188,10 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             expect(0, dims[0] * dims[1] * dims[2], bf);
             expect(1, dims[3] * dims[2], fp); expect(2, dims[3] * dims[1], bf);
             work = dims[0] * dims[1];
+            if (dims[1] % 8 == 0 &&
+                    reinterpret_cast<uintptr_t>(tensors[0].data_ptr()) % 16 == 0 &&
+                    reinterpret_cast<uintptr_t>(tensors[2].data_ptr()) % 16 == 0)
+                work /= 8;
             break;
         case Operation::Activation:
         case Operation::ActivationBackward:
