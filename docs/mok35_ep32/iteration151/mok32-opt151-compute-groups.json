@@ -1,0 +1,10 @@
+[
+  "work/mok32-opt151-bf16-base-cases.json",
+  "work/mok32-opt151-bf16-k128s2-cases.json",
+  "work/mok32-opt151-bf16-m128k128s2-cases.json",
+  "work/mok32-opt151-bf16-n128k128s2-cases.json",
+  "work/mok32-opt151-fp8-base-cases.json",
+  "work/mok32-opt151-fp8-s2-cases.json",
+  "work/mok32-opt151-fp8-n128-cases.json",
+  "work/mok32-opt151-fp8-w32x32-cases.json"
+]
