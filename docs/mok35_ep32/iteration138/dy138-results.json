@@ -1,0 +1,2837 @@
+{
+  "passed": true,
+  "phases": [
+    {
+      "name": "mok32-opt138-dy-ilp1",
+      "ilp": 1,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "dy138_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.6397430419921875,
+            1.6382814407348634,
+            1.6376710891723634,
+            1.645466423034668,
+            1.6320369720458985
+          ],
+          "median_max_rank_event_ms": 1.6382814407348634,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.2005475044250489,
+            1.1989910125732421,
+            1.1979499816894532,
+            1.1984230041503907,
+            1.1914074897766114
+          ],
+          "median_max_rank_event_ms": 1.1984230041503907,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.2962929725646972,
+            1.2920425415039063,
+            1.2891850471496582,
+            1.296426486968994,
+            1.288138484954834
+          ],
+          "median_max_rank_event_ms": 1.2920425415039063,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 1,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            1.299344539642334,
+            1.2986080169677734,
+            1.3023489952087401,
+            1.2984729766845704,
+            1.2908430099487305
+          ],
+          "median_max_rank_event_ms": 1.2986080169677734,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt138-dy-ilp1/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 0,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 0,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 1,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 1,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 2,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 2,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 3,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 3,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 4,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 4,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 5,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 5,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 6,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 6,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp1/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 1,
+              "rank": 7,
+              "header_sha256": "aef04e7856a5126609368cba8a083405e700d7d5228fa649502cd3b296344905"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 1,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 7,
+              "ilp": 1,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt138-dy-ilp1-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                549122,
+                549123,
+                549124,
+                549125,
+                549127,
+                549129,
+                549132,
+                549133
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt138-dy-ilp1"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 549122,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549123,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549124,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549125,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549127,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549129,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549132,
+                  "start_ticks": "222597659"
+                },
+                {
+                  "pid": 549133,
+                  "start_ticks": "222597659"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mok32-opt138-dy-ilp2",
+      "ilp": 2,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "dy138_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9820895195007324,
+            0.9839030265808105,
+            0.9855449676513672,
+            0.9860380172729493,
+            0.965762996673584
+          ],
+          "median_max_rank_event_ms": 0.9839030265808105,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9311505317687988,
+            0.9318314552307129,
+            0.9359334945678711,
+            0.9332534790039062,
+            0.9238900184631348
+          ],
+          "median_max_rank_event_ms": 0.9318314552307129,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9917485237121582,
+            0.998377513885498,
+            0.9936980247497559,
+            0.9916640281677246,
+            0.9801030158996582
+          ],
+          "median_max_rank_event_ms": 0.9917485237121582,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 2,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.971951961517334,
+            0.9896585464477539,
+            0.9882914543151855,
+            0.9904250144958496,
+            0.9761919975280762
+          ],
+          "median_max_rank_event_ms": 0.9882914543151855,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt138-dy-ilp2/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 0,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 0,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 1,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 1,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 2,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 2,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 3,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 3,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 4,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 4,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 5,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 5,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 6,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 6,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp2/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 2,
+              "rank": 7,
+              "header_sha256": "f7d4980e3689fbda3494a17a6836f5b0f50c25aee7f8e4270eb7a4c5a6dc440d"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 2,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 7,
+              "ilp": 2,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt138-dy-ilp2-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                552967,
+                552968,
+                552969,
+                552970,
+                552971,
+                552972,
+                552973,
+                552974
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt138-dy-ilp2"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 552967,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552968,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552969,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552970,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552971,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552972,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552973,
+                  "start_ticks": "222598783"
+                },
+                {
+                  "pid": 552974,
+                  "start_ticks": "222598783"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mok32-opt138-dy-ilp4",
+      "ilp": 4,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "dy138_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.8805214881896972,
+            0.8905559539794922,
+            0.8892720222473145,
+            0.8911444664001464,
+            0.8738650321960449
+          ],
+          "median_max_rank_event_ms": 0.8892720222473145,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.8861815452575683,
+            0.886299991607666,
+            0.8827939987182617,
+            0.8815984725952148,
+            0.8738064765930176
+          ],
+          "median_max_rank_event_ms": 0.8827939987182617,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9246395111083985,
+            0.9238499641418457,
+            0.9245565414428711,
+            0.9232254981994629,
+            0.9170555114746094
+          ],
+          "median_max_rank_event_ms": 0.9238499641418457,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 4,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9286564826965332,
+            0.917943000793457,
+            0.9192045211791993,
+            0.9182299613952637,
+            0.9118185043334961
+          ],
+          "median_max_rank_event_ms": 0.9182299613952637,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt138-dy-ilp4/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 0,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 0,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 1,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 1,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 2,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 2,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 3,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 3,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 4,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 4,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 5,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 5,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 6,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 6,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp4/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 4,
+              "rank": 7,
+              "header_sha256": "7f56da3d92ae42aed57fe8057e1f6ff2921d6423d68684b3a5c4bdfc7fed1ea0"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 4,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 7,
+              "ilp": 4,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt138-dy-ilp4-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                556469,
+                556470,
+                556471,
+                556472,
+                556473,
+                556474,
+                556475,
+                556476
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt138-dy-ilp4"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 556469,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556470,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556471,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556472,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556473,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556474,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556475,
+                  "start_ticks": "222599886"
+                },
+                {
+                  "pid": 556476,
+                  "start_ticks": "222599886"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mok32-opt138-dy-ilp8",
+      "ilp": 8,
+      "passed": true,
+      "scope": "Mover only; 8 GPUs on one host, not EP32 MoE timing",
+      "metrics": [
+        {
+          "case": "dy138_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 2,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.8788350105285645,
+            0.8831080436706543,
+            0.8808600425720214,
+            0.8846594810485839,
+            0.8663684844970703
+          ],
+          "median_max_rank_event_ms": 0.8808600425720214,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 4,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.8914864540100098,
+            0.8929684638977051,
+            0.8946595191955566,
+            0.889933967590332,
+            0.8779375076293945
+          ],
+          "median_max_rank_event_ms": 0.8914864540100098,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 8,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9429739952087403,
+            0.9426059722900391,
+            0.9394140243530273,
+            0.9363539695739747,
+            0.9281009674072266
+          ],
+          "median_max_rank_event_ms": 0.9394140243530273,
+          "passed": true
+        },
+        {
+          "case": "dy138_benchmark",
+          "ilp": 8,
+          "ctas_per_cu": 16,
+          "ep_size": 8,
+          "hidden": 4096,
+          "rows": 22016,
+          "scope": "StageRawWeightedDy only, not MoE step",
+          "samples_max_rank_event_ms": [
+            0.9425954818725586,
+            0.9449119567871094,
+            0.9433115005493165,
+            0.9419110298156739,
+            0.9340629577636719
+          ],
+          "median_max_rank_event_ms": 0.9425954818725586,
+          "passed": true
+        }
+      ],
+      "ranks": [
+        {
+          "file": "mok32-opt138-dy-ilp8/rank000.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 0,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 0,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 0,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank001.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 1,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 1,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 1,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank002.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 2,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 2,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 2,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank003.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 3,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 3,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 3,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank004.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 4,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 4,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 4,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank005.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 5,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 5,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 5,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank006.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 6,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 6,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 6,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        },
+        {
+          "file": "mok32-opt138-dy-ilp8/rank007.log",
+          "clean": true,
+          "source": [
+            {
+              "case": "dy138_source",
+              "ilp": 8,
+              "rank": 7,
+              "header_sha256": "8e2a6a1fe487c60f4f34c91002264e61f03347f87cd93612f6a870455e145457"
+            }
+          ],
+          "references": [
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 2,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 4,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 8,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            },
+            {
+              "case": "dy138_independent_reference",
+              "rank": 7,
+              "ilp": 8,
+              "ctas_per_cu": 16,
+              "zero_scores": true,
+              "padding": true,
+              "zero_rows_replay": true,
+              "bitwise": true,
+              "passed": true
+            }
+          ],
+          "finished": [
+            {
+              "case": "dy138_finished",
+              "rank": 7,
+              "ilp": 8,
+              "passed": true
+            }
+          ]
+        }
+      ],
+      "audits": [
+        {
+          "file": "launch-mok32-opt138-dy-ilp8-node80.log",
+          "clean": true,
+          "records": [
+            {
+              "case": "idle_node_gate",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "selected_gpus": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7
+              ],
+              "allowed": true,
+              "processes": []
+            },
+            {
+              "case": "local_ranks_started",
+              "node_rank": 0,
+              "pids": [
+                561047,
+                561048,
+                561049,
+                561050,
+                561051,
+                561052,
+                561053,
+                561054
+              ],
+              "log_directory": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/mok32-opt138-dy-ilp8"
+            },
+            {
+              "case": "local_ranks_finished",
+              "node_rank": 0,
+              "return_codes": [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+              ],
+              "passed": true
+            },
+            {
+              "case": "idle_node_postflight",
+              "host": "e01-cn-9yq4xwro401-a0003",
+              "allowed": true,
+              "processes": [],
+              "observed_foreign_during_command": [],
+              "verified_owned_processes": [
+                {
+                  "pid": 561047,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561048,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561049,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561050,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561051,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561052,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561053,
+                  "start_ticks": "222601011"
+                },
+                {
+                  "pid": 561054,
+                  "start_ticks": "222601011"
+                }
+              ],
+              "monitoring_errors": [],
+              "monitor_interval_seconds": 2,
+              "command_returncode": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
