@@ -1,0 +1,30 @@
+[
+  {
+    "name": "mok32-opt155r2-combine-baseline",
+    "script": "build/campaign/run-with-library.py",
+    "environment": {
+      "DG_JIT_CACHE_DIR": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/combine155-jit"
+    },
+    "arguments": [
+      "--library",
+      "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/qwen38-r2-pip-installed-7b0a4cdc0aab-7b0a4cdc0aab-cold-r1",
+      "build/campaign/benchmark-combine155.py",
+      "--label",
+      "baseline"
+    ]
+  },
+  {
+    "name": "mok32-opt155r2-combine-vector",
+    "script": "build/campaign/run-with-library.py",
+    "environment": {
+      "DG_JIT_CACHE_DIR": "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/combine155-jit"
+    },
+    "arguments": [
+      "--library",
+      "/root/lfwang/Projects/t-head/worktrees/DeepGEMM-for-sail-mok-bf16-training-20261120/build/campaign/combine155-library",
+      "build/campaign/benchmark-combine155.py",
+      "--label",
+      "vector"
+    ]
+  }
+]

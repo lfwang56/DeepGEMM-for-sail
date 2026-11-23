@@ -217,3 +217,34 @@ Any selected scheduling change requires EP32 full-step and full-capacity confirm
 ## Iteration155: aligned top-k combine vectorization (first cohort excluded)
 
 Implemented aligned eight-feature BF16 loads/stores with shared score/address work, preserving per-feature slot accumulation order. The native launcher reduces its grid by8 only when width and input/output alignment permit; other views and widths retain scalar behavior. Isolated native build succeeded (extension SHAef2ba328...). The initial baseline component phase on88 returned75 from the idle/foreign-work gate; accept no timing. Move both baseline and candidate to a fresh idle whole host. Differential hashes plus independent FP64/canary/mutable-graph checks must pass before a complete MoE test.
+
+## Iteration154: completed return154
+
+All8 phases passed whole-host audits. EP8 diagnostic, BF16 return stores/address caching; unchanged independent FP32 gold.
+
+- mok32-opt154-return-base-timing: 12.35641 ms
+- mok32-opt154-return-cache4-timing: 12.47421 ms
+- mok32-opt154-return-cache8-timing: 12.46018 ms
+- mok32-opt154-return-wide8-timing: 12.36326 ms
+
+## Iteration156: completed profile156
+
+All4 phases passed whole-host audits. Same final EP32 cohort225–228, both precisions and DeepEP/fused paths; R520192/stage3 DW, three instrumented graphs per phase. SQLite validates single PID/device0. Instrumented values are excluded from main performance.
+
+- mok32-opt156-profile-bf16-elastic: 19.08116 ms
+- mok32-opt156-profile-bf16-peer: 14.84038 ms
+- mok32-opt156-profile-fp8-elastic: 20.85772 ms
+- mok32-opt156-profile-fp8-peer: 16.68010 ms
+
+Profile156 exposed DeepEP-family intervals: BF16 2.1702 ms out of17.2641 ms, FP8 2.5212 out of16.8108. Perfectly hiding only those existing intervals gives1.144x/1.176x on rank0, not an overall algorithm/hardware upper bound. Mixed peer GEMMs must not be called pure communication.
+
+### Iteration155 completed matched local-combine gate
+
+Both component phases passed all8 ranks and whole-host audits on221.480 independent FP64 reference records, output guards, weighted/unweighted paths, NaN unused scores, unaligned views/nonmultiple widths, empty rows and mutable graph replays passed.400 baseline/candidate output SHA checks matched bitwise, including all measured large-shape outputs. Results are a local reduction only, not a MoE speedup:
+
+- {'tokens': 2048, 'weighted': False, 'baseline_median_max_rank_event_ms': 0.33115448951721194, 'vector_median_max_rank_event_ms': 0.085214501619339, 'speedup': 3.886128337598094}
+- {'tokens': 2048, 'weighted': True, 'baseline_median_max_rank_event_ms': 0.3337825059890747, 'vector_median_max_rank_event_ms': 0.09870449900627136, 'speedup': 3.3816341640908107}
+- {'tokens': 4096, 'weighted': False, 'baseline_median_max_rank_event_ms': 0.6551539897918701, 'vector_median_max_rank_event_ms': 0.15887199640274047, 'speedup': 4.123785214677198}
+- {'tokens': 4096, 'weighted': True, 'baseline_median_max_rank_event_ms': 0.6609189987182618, 'vector_median_max_rank_event_ms': 0.1843364953994751, 'speedup': 3.5853941851611424}
+
+Proceed to complete EP32 before selecting this candidate. Return154 store-width/address-cache variants did not beat its baseline, so retain the existing return path.
