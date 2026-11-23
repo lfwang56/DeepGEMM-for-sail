@@ -1,0 +1,5 @@
+{"case": "idle_node_gate", "host": "e01-cn-9yq4xwro401-a0003", "selected_gpus": [0, 1, 2, 3, 4, 5, 6, 7], "allowed": true, "processes": []}
+/usr/local/lib/python3.12/site-packages/torch/cuda/graphs.py:126: UserWarning: The CUDA Graph is empty. This usually means that the graph was attempted to be captured on wrong device or stream. (Triggered internally at /job_5972180/source/pytorch/aten/src/ATen/cuda/CUDAGraph.cpp:147.)
+  super().capture_end()
+{"case": "combine_vectorized_reference", "cases": 48, "graph_replays": 144, "independent_fp64": true, "passed": true}
+{"case": "idle_node_postflight", "host": "e01-cn-9yq4xwro401-a0003", "allowed": true, "processes": [], "observed_foreign_during_command": [], "verified_owned_processes": [{"pid": 2425650, "start_ticks": "223243242"}], "monitoring_errors": [], "monitor_interval_seconds": 2, "command_returncode": 0}
