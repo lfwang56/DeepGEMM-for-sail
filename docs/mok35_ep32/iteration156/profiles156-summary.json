@@ -1,0 +1,42 @@
+[
+  {
+    "phase": "mok32-opt156-profile-bf16-elastic",
+    "graph_span_ms": 17.264115,
+    "dw_union_ms": 2.529891666666667,
+    "deepep_overlap": {
+      "main_kernel_union_ms": 2.440175,
+      "backend_family_union_ms": 2.9620533333333334,
+      "covered_by_other_activity_ms": 0.7918273333333333,
+      "exposed_backend_family_ms": 2.170226,
+      "ideal_hide_existing_exposed_family_only": 1.1437817649248645
+    },
+    "breakdown": "mok32-opt156-profile-bf16-elastic-breakdown.json"
+  },
+  {
+    "phase": "mok32-opt156-profile-bf16-peer",
+    "graph_span_ms": 12.693446666666667,
+    "dw_union_ms": 2.4961256666666665,
+    "deepep_overlap": null,
+    "breakdown": "mok32-opt156-profile-bf16-peer-breakdown.json"
+  },
+  {
+    "phase": "mok32-opt156-profile-fp8-elastic",
+    "graph_span_ms": 16.810844,
+    "dw_union_ms": 2.3984253333333334,
+    "deepep_overlap": {
+      "main_kernel_union_ms": 2.6749406666666666,
+      "backend_family_union_ms": 3.3189813333333333,
+      "covered_by_other_activity_ms": 0.7977936666666666,
+      "exposed_backend_family_ms": 2.5211876666666666,
+      "ideal_hide_existing_exposed_family_only": 1.1764344507562101
+    },
+    "breakdown": "mok32-opt156-profile-fp8-elastic-breakdown.json"
+  },
+  {
+    "phase": "mok32-opt156-profile-fp8-peer",
+    "graph_span_ms": 12.961279,
+    "dw_union_ms": 2.417902333333333,
+    "deepep_overlap": null,
+    "breakdown": "mok32-opt156-profile-fp8-peer-breakdown.json"
+  }
+]
