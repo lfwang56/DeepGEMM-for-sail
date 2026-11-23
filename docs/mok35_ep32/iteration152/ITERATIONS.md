@@ -147,3 +147,69 @@ Both BF16 and FP8 completed clean EP32 gates on221–224 at H4096/I1024/E512/top
 ## Iteration152: source FP8 transport with fused gradient quantization (prerequisite failed)
 
 Created an isolated Python compatibility prototype allowing source-quantized X transport with fused DY quantization only (bit2); no native kernel/precision change. Baseline reference/timing passed, but the legacy source-pipeline prerequisite returned1 before candidate cases ran. All candidate performance remains unaccepted. Iteration153 cached-copy scheduling prototype was prepared in another isolated library, but its guarded runner refused to launch GPU work because152 did not complete all prerequisites. Preserve both prototypes and inspect the legacy failure before further testing.
+
+### FP8 active-path correction and152 prerequisite diagnosis
+
+The selected full-step FP8 recipe enables DG_MOE_FP8_TILED_GRAD_QUANT=2, so its active gradient mover is operation24 (cached tiled gradient quantization), not operation22. Iterations139/140 correctly measured operation22 in isolation, but142 FP8 new-header timings did not activate that changed kernel; those timings must be interpreted as CTA controls, not a tested Op22 speedup/regression. No Op22 gain is promoted. Legacy source transport in152 was rejected at construction because fused_stage_quant=0 retained tiled_grad_quant=2; this is an invalid parameter combination, not a numerical failure. Disable tiled mode only for that legacy prerequisite, retain mode2 with fused-gradient candidates, and rerun under new names.
+
+## Iteration151: completed compute151 matrix
+
+Accepted14 phases; excluded ['mok32-opt151-compute-bf16-k128s2-reference']. EP8 diagnostic only; deeper-K/warp alternatives did not outperform the original per-rank compute recipe.
+
+- mok32-opt151-compute-bf16-base-timing: 12.39257 ms
+- mok32-opt151-compute-bf16-m128k128s2-timing: 14.04436 ms
+- mok32-opt151-compute-bf16-n128k128s2-timing: 14.17416 ms
+- mok32-opt151-compute-fp8-base-timing: 12.98285 ms
+- mok32-opt151-compute-fp8-n128-timing: 13.23545 ms
+- mok32-opt151-compute-fp8-s2-timing: 15.03059 ms
+- mok32-opt151-compute-fp8-w32x32-timing: 13.57602 ms
+
+## Iteration148: completed final148 matrix
+
+Accepted10 phases; excluded []. EP32 paired cohort225–228, H4096/I1024/E512/top10. Both token sizes and R262144/520192; stage3 DW shared with the DeepEP denominator.
+
+- mok32-opt148r3-deepep-bf16-t2048-r262144: 17.32508 ms
+- mok32-opt148r3-deepep-bf16-t2048-r520192: 17.23014 ms
+- mok32-opt148r3-deepep-bf16-t4096-r262144: 31.09225 ms
+- mok32-opt148r3-deepep-bf16-t4096-r520192: 30.85978 ms
+- mok32-opt148r3-deepep-fp8-t2048-r262144: 16.94978 ms
+- mok32-opt148r3-deepep-fp8-t2048-r520192: 16.92348 ms
+- mok32-opt148r3-deepep-fp8-t4096-r262144: 30.17299 ms
+- mok32-opt148r3-deepep-fp8-t4096-r520192: 29.95861 ms
+
+## Iteration150: completed final150 matrix
+
+Accepted8 phases; excluded []. EP32 paired cohort225–228, H4096/I1024/E512/top10. Both token sizes and R262144/520192; stage3 DW shared with the DeepEP denominator.
+
+- mok32-opt150r3-fused-bf16-t2048-r262144: 12.73142 ms
+- mok32-opt150r3-fused-bf16-t2048-r520192: 12.70296 ms
+- mok32-opt150r3-fused-bf16-t4096-r262144: 22.91274 ms
+- mok32-opt150r3-fused-bf16-t4096-r520192: 22.80738 ms
+- mok32-opt150r3-fused-fp8-t2048-r262144: 12.95638 ms
+- mok32-opt150r3-fused-fp8-t2048-r520192: 12.88115 ms
+- mok32-opt150r3-fused-fp8-t4096-r262144: 22.83739 ms
+- mok32-opt150r3-fused-fp8-t4096-r520192: 22.65098 ms
+
+## Iteration152: completed source152r2 EP8 scheduling gate
+
+All10 phases passed unchanged independent FP32 references, graph replay and whole-host audits. EP8 is a per-rank H4096/I1024/E_local16 component cohort, not a target EP32 speedup claim. Tiled gradient quantization mode2 retained in the actual candidate, mode0 only in the unfused legacy prerequisite. Results:
+
+- mok32-opt152r2-sourceq-baseline-timing: 12.92376 ms
+- mok32-opt152r2-sourceq-legacy-source-timing: 14.34871 ms
+- mok32-opt152r2-sourceq-source-dy-four-timing: 16.14835 ms
+- mok32-opt152r2-sourceq-source-dy-parallel-timing: 14.24611 ms
+- mok32-opt152r2-sourceq-source-dy-serial-timing: 15.28804 ms
+
+Any selected scheduling change requires EP32 full-step and full-capacity confirmation before promotion.
+
+## Iteration153: completed cached153r2 EP8 scheduling gate
+
+All10 phases passed unchanged independent FP32 references, graph replay and whole-host audits. EP8 is a per-rank H4096/I1024/E_local16 component cohort, not a target EP32 speedup claim. Tiled gradient quantization mode2 retained in the actual candidate, mode0 only in the unfused legacy prerequisite. Results:
+
+- mok32-opt153r2-cached-defer1-timing: 15.56487 ms
+- mok32-opt153r2-cached-defer2-timing: 14.34643 ms
+- mok32-opt153r2-cached-defer4-timing: 14.48629 ms
+- mok32-opt153r2-cached-early1-timing: 15.99266 ms
+- mok32-opt153r2-cached-early4-timing: 14.29341 ms
+
+Any selected scheduling change requires EP32 full-step and full-capacity confirmation before promotion.
