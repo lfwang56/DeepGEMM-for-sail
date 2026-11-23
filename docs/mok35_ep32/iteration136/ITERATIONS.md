@@ -45,3 +45,64 @@ All20 reference/timing phases passed whole-host audits. Each configuration has i
 - mok32-opt136-geometry-s2-timing-peer: 13.99161 ms
 
 Keep original BM256/BN256/BK64/warp64x64/stage3. All four alternative geometries were slower for complete FWD+BWD. Reassessed existing profile and PPU source-backed guidance rather than extending a losing tile search; subsequent directions are peer gradient prefetch and controlled tc02 compiler issue reuse.
+
+## Iteration143: opt-in native prefetch and tc02 MMA-reuse issue policy
+
+Built isolated native runtime143 successfully (SHA5f47106c...), preserving baseline library. Added validated1/2/4/8 prefetch parameters and tested a process-stable optional tc02 peer-GEMM compiler reuse flag. All four EP8 diagnostic reference/timing phases passed. Same per-rank H4096/I1024/E_local16/top10/T2048 compute shape, global E128/EP8 rather than target E512/EP32: reuse0 12.27136 ms, reuse1 12.26493 ms, no meaningful improvement. Do not promote MMA policy or claim EP32 speedup from this diagnostic. Keep prototype source and reproducible gate; await complete EP32 gradient-path controls and ring search before selecting a final implementation.
+
+## Iteration142: complete EP32 gradient-path prototype evaluation
+
+All10 phases passed: BF16/FP8 independent32-rank FP32 references at full H4096/I1024/E512/top10, plus eight unprofiled full2048-token FWD+BWD timings on221–224. Candidate128-bit vector prefetch uses identical BF16 weights/operands and FP32 DW accumulation; no precision change. Results:
+
+- mok32-opt142-prototype-timing-bf16-new2: 13.20137 ms
+- mok32-opt142-prototype-timing-bf16-new4: 13.17517 ms
+- mok32-opt142-prototype-timing-bf16-old4: 12.93368 ms
+- mok32-opt142-prototype-timing-bf16-old8: 12.97655 ms
+- mok32-opt142-prototype-timing-fp8-new16: 13.15677 ms
+- mok32-opt142-prototype-timing-fp8-new8: 13.09093 ms
+- mok32-opt142-prototype-timing-fp8-old16: 13.15994 ms
+- mok32-opt142-prototype-timing-fp8-old4: 13.48318 ms
+
+BF16 prefetch lost against the tuned original mover despite winning the isolated component benchmark. Do not promote that kernel on isolated timing. Use the strongest original FP8 CTA control before attributing a gain to new prefetch. Any selected recipe still requires T4096 confirmation, same-cohort DeepEP control and full-step profile.
+
+## Iteration144: DW tile/resource interaction
+
+All eight variants passed independent FP32 DW role/pattern checks and whole-host audits. Tested stage2 smaller accumulator tiles intended to permit additional resident CTAs, two1024-thread alternatives and wider-K tiles. Control256x256x64/warp64x64/stage3 remains fastest: DW1 1.6246/2.4984 ms, DW2 0.8637/1.3202 ms at T2048/4096 equivalents. Every candidate was slower (DW1 T2048 1.96–2.98 ms). Runtime occupancy and function resources were queried by the existing native launcher, not inferred from shared-memory size:
+
+- variant0: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512']; ['dynamic_smem_bytes:196608, vreg:216, local_size_bytes:0']
+- variant1: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512']; ['dynamic_smem_bytes:98304, vreg:144, local_size_bytes:0']
+- variant2: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512']; ['dynamic_smem_bytes:98304, vreg:160, local_size_bytes:0']
+- variant3: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:1024']; ['dynamic_smem_bytes:131072, vreg:128, local_size_bytes:0']
+- variant4: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:1024']; ['dynamic_smem_bytes:131072, vreg:128, local_size_bytes:0']
+- variant5: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512']; ['dynamic_smem_bytes:196608, vreg:144, local_size_bytes:0']
+- variant6: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512']; ['dynamic_smem_bytes:196608, vreg:160, local_size_bytes:0']
+- variant7: ['num_sms:39, max_active_tb_num:1, threadblock_count:39, threads:512']; ['dynamic_smem_bytes:196608, vreg:144, local_size_bytes:0']
+
+Retain stage3 tile for complete-step verification. All variants still report one resident CTA per CU, including the smaller shared-memory cases. The1024-thread variants also lost. No claim that reducing TSM alone increases occupancy or useful overlap.
+
+## Iteration146: FC1 producer/compute interleaving (first gate failed)
+
+Prepared unchanged-precision BF16 producer1/2/4 and32/64-thread helper recipes. Extended only the existing independent FP32 reference CLI to pass producer_tiles; oracle inputs, comparison and gold math are unchanged. EP8 diagnostic baseline reference/timing completed, but producer2 failed its independent-reference phase, so its performance and subsequent variants are not accepted. Preserve logs and diagnose before continuing; no target EP32 gain claimed.
+
+### Iteration136 completed ring-capacity matrix
+
+All16 same-cohort EP32 precision/backend/capacity timing phases passed whole-host audits on215–218. BF16/FP8 both tested R65536/131072/262144/520192; same precision DeepEP dispatch/combine also received all four capacities. Full T2048 step results:
+
+- mok32-opt136-ring-r3-r131072-bf16-elastic: 17.57444 ms, workspace 6088311280 bytes
+- mok32-opt136-ring-r3-r131072-bf16-peer: 12.70555 ms, workspace 4578978560 bytes
+- mok32-opt136-ring-r3-r131072-fp8-elastic: 17.25404 ms, workspace 7745405424 bytes
+- mok32-opt136-ring-r3-r131072-fp8-peer: 12.81907 ms, workspace 6367415040 bytes
+- mok32-opt136-ring-r3-r262144-bf16-elastic: 17.36554 ms, workspace 10116415984 bytes
+- mok32-opt136-ring-r3-r262144-bf16-peer: 12.56177 ms, workspace 8610237184 bytes
+- mok32-opt136-ring-r3-r262144-fp8-elastic: 17.01120 ms, workspace 12742394352 bytes
+- mok32-opt136-ring-r3-r262144-fp8-peer: 12.61463 ms, workspace 11381721856 bytes
+- mok32-opt136-ring-r3-r520192-bf16-elastic: 17.29758 ms, workspace 18046747120 bytes
+- mok32-opt136-ring-r3-r520192-bf16-peer: 12.50676 ms, workspace 16546777600 bytes
+- mok32-opt136-ring-r3-r520192-fp8-elastic: 16.94144 ms, workspace 22580216304 bytes
+- mok32-opt136-ring-r3-r520192-fp8-peer: 12.55118 ms, workspace 21253638400 bytes
+- mok32-opt136-ring-r3-r65536-bf16-elastic: 17.89484 ms, workspace 4074258928 bytes
+- mok32-opt136-ring-r3-r65536-bf16-peer: 12.97947 ms, workspace 2563349248 bytes
+- mok32-opt136-ring-r3-r65536-fp8-elastic: 17.59144 ms, workspace 5246910960 bytes
+- mok32-opt136-ring-r3-r65536-fp8-peer: 13.15956 ms, workspace 3860261632 bytes
+
+Large-R winners are provisional until full-skew capacity gates and matched DeepEP+fusion stage3-DW/t4096 reruns pass. Increased workspace is a material tradeoff. Earlier SN2 foreign-job and launch-failure attempts remain excluded.
