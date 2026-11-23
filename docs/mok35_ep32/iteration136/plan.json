@@ -1,0 +1,99 @@
+{
+  "shape": {
+    "hidden": 4096,
+    "intermediate": 1024,
+    "experts": 512,
+    "topk": 10,
+    "ep": 32
+  },
+  "target": "Optimize the user-selected MoK/Qwen3.5 EP32 complete routed FWD+BWD, both BF16 and FP8. Preserve the same-precision strongest measured DeepEP denominator.",
+  "source_commit": "7b0a4cdc0aabb1615b7b433daa653d849141ac3a",
+  "geometry": [
+    [
+      "base",
+      256,
+      [
+        256,
+        64,
+        64,
+        64,
+        3
+      ]
+    ],
+    [
+      "s2",
+      256,
+      [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    ],
+    [
+      "m128n256s2",
+      128,
+      [
+        256,
+        64,
+        64,
+        64,
+        2
+      ]
+    ],
+    [
+      "m128n128w32x64s3",
+      128,
+      [
+        128,
+        64,
+        32,
+        64,
+        3
+      ]
+    ],
+    [
+      "m128n128w32x32s3",
+      128,
+      [
+        128,
+        64,
+        32,
+        32,
+        3
+      ]
+    ]
+  ],
+  "ring_rows": [
+    65536,
+    131072,
+    262144,
+    520192
+  ],
+  "nodes": {
+    "geometry": [
+      "172.17.0.215",
+      "172.17.0.216",
+      "172.17.0.217",
+      "172.17.0.218"
+    ],
+    "ring": [
+      "172.17.0.223",
+      "172.17.0.224",
+      "172.17.0.225",
+      "172.17.0.226"
+    ]
+  },
+  "timing": "Unprofiled graphs, warmup5,iterations20,repeats5,max-rank median; include current weight preparation and FP32 DW zero/accumulation.",
+  "scope": "Routed layer only; shared expert/router/optimizer excluded. DW BF16-input/FP32 accumulation for both precisions.",
+  "observations": {
+    "bf16_profile_step_ms": 13.064412,
+    "active_dw_two_calls_ms": 2.633678,
+    "empty_dw_20_calls_ms": 0.15745,
+    "dw_threads": 512,
+    "dw_registers_per_thread": 216,
+    "dw_tsm_bytes": 262144
+  },
+  "ep64_enabled": false
+}
