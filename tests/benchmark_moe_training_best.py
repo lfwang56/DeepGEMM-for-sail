@@ -1,4 +1,4 @@
-"""Reproduce the selected EP32 BF16/FP8 routed MoE layer recipes."""
+"""Reproduce the selected EP32/EP64 BF16/FP8 routed MoE layer recipes."""
 import argparse
 import hashlib
 import json
@@ -10,6 +10,7 @@ import sys
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--ep', type=int, choices=(32, 64), default=32, help='Devices in one physical supernode; default32')
     parser.add_argument('--model', choices=('mok', 'qwen'), required=True)
     parser.add_argument('--precision', choices=('bf16', 'fp8'), required=True)
     parser.add_argument('--dry-run', action='store_true', help='Print the exact environment and command without importing Torch')
@@ -20,7 +21,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     config = json.loads((root / 'docs/ppu_moe_training_recipes.json').read_text())
-    recipe = next(r for r in config['recipes'] if r['model'] == args.model and r['precision'] == args.precision)
+    recipe = next(r for r in config['recipes'] if r['ep'] == args.ep and r['model'] == args.model and r['precision'] == args.precision)
     lut = root / recipe['lut_directory']
     for filename, expected in recipe['lut_sha256'].items():
         if hashlib.sha256((lut / filename).read_bytes()).hexdigest() != expected:
@@ -40,12 +41,13 @@ def main():
     benchmark = root / 'tests/benchmark_native_moe.py'
     resolved = dict(case='selected_moe_training_recipe', recipe=recipe['id'], expected_world_size=recipe['ep'],
                     dw='BF16 operands with FP32 accumulation/output', communication='BF16 direct peer payloads',
+                    measurement=recipe['measurement'],
                     environment=environment, command=[sys.executable, str(benchmark), *arguments])
     if args.dry_run:
         print(json.dumps(resolved, indent=2))
         return
     if not args.validate_configuration and int(os.environ.get('WORLD_SIZE', '1')) != recipe['ep']:
-        parser.error('This recipe requires WORLD_SIZE=32. Launch it with torchrun on four eight-device hosts in one physical supernode.')
+        parser.error(f"This recipe requires WORLD_SIZE={recipe['ep']}. Launch it with torchrun on {recipe['ep'] // config['target']['devices_per_host']} eight-device hosts in one physical supernode.")
     os.environ.update(environment)
     if int(os.environ.get('RANK', '0')) == 0:
         print(json.dumps(resolved), flush=True)
