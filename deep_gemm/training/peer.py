@@ -43,6 +43,10 @@ class PeerMoEPlan(NativeMoEPlan):
                  fp8_weight_quantization=None, fp8_input_pipeline=None,
                  fp8_input_ctas=None, fp8_input_serialize=None, fp8_input_threads=None,
                  fp8_input_cache_scales=None, reuse_forward_context=None, deferred_dw_compute_cus=None, **kwargs):
+        self.training_fp8_mma_flags=int(os.environ.get('DG_JIT_FP8_TRAINING_MMA_FLAGS','0'))
+        self.training_bf16_mma_reuse=int(os.environ.get('DG_JIT_BF16_TRAINING_MMA_REUSE','0'))
+        if self.training_fp8_mma_flags not in (0,1)or self.training_bf16_mma_reuse not in (0,1):
+            raise ValueError('training native MMA policies must be0or1')
         self._shared_fp8_weights_ready=False
         self._pending_last_dw1=None
         self._defer_last_dw1_enabled=False
@@ -99,6 +103,27 @@ class PeerMoEPlan(NativeMoEPlan):
         if fuse_dhidden_scores and (gemm_configs is None or not gemm_configs.get('dhidden')):
             raise ValueError("dHidden scores require an explicit dHidden GEMM configuration")
         self.fuse_dhidden_scores = fuse_dhidden_scores
+        raw_grad_producer=os.environ.get('DG_MOE_BF16_GRAD_PRODUCER','0')
+        if raw_grad_producer not in ('0','1'):raise ValueError('BF16 gradient producer flag must be0or1')
+        self.bf16_grad_producer=raw_grad_producer=='1'
+        raw_first=os.environ.get('DG_MOE_WGRAD_FIRST_NONEMPTY','0')
+        if raw_first not in ('0','1'):raise ValueError('first nonempty DW must be0or1')
+        self.wgrad_first_nonempty=raw_first=='1'
+        self._fresh_first_dw_step=False
+        raw_overwrite=os.environ.get('DG_MOE_WGRAD_FIRST_OVERWRITE','0')
+        if raw_overwrite not in ('0','1'):raise ValueError('DW first overwrite must be0or1')
+        self.wgrad_first_overwrite=raw_overwrite=='1'
+        if self.wgrad_first_overwrite and (ring_rows is None or not expert_local_grad
+                or kwargs.get('wgrad_overlap','none')!='none' or dag_fusion or dag_backward or ffn_fusion):
+            raise ValueError('DW first overwrite requires bounded serial expert gradients without DAG/deferred DW')
+        if self.wgrad_first_nonempty and (ring_rows is None or not expert_local_grad
+                or kwargs.get('wgrad_overlap','none')!='none' or dag_fusion or dag_backward or ffn_fusion
+                or self.wgrad_first_overwrite):
+            raise ValueError('first nonempty DW requires bounded serial gradients and no other initialization policy')
+        self._first_dw_outputs=set()
+        if self.bf16_grad_producer and (kwargs.get('compute','bf16')!='bf16' or not fuse_dhidden_scores or
+                not transpose_free_dgrad or ring_rows is None or not expert_local_grad or not reuse_packed_dy):
+            raise ValueError('BF16 gradient producer requires bounded BF16 score/activation fusion and native transposed dGrad')
         if not isinstance(fuse_replay_gradients, bool):
             raise TypeError("fuse_replay_gradients must be bool")
         if fuse_replay_gradients and (not expert_local_grad or not reuse_packed_dy
@@ -202,6 +227,31 @@ class PeerMoEPlan(NativeMoEPlan):
             if type(value) is not bool:
                 raise TypeError(key + " must be bool")
             return value
+        self.fp8_async_weight_prepare=fp8_flag(None,'DG_MOE_FP8_ASYNC_WEIGHT_PREPARE')
+        self.fp8_weight_prepare_serialized=fp8_flag(None,'DG_MOE_FP8_WEIGHT_PREPARE_SERIALIZE')
+        self._fp8_weights_pending=False
+        self.wgrad_aggregate_windows=fp8_flag(None,'DG_MOE_WGRAD_AGGREGATE_WINDOWS')
+        self.wgrad_pair_source_overlap=fp8_flag(None,'DG_MOE_WGRAD_PAIR_SOURCE_OVERLAP')
+        self.wgrad_aggregate_tile=helper_value(None,'DG_MOE_WGRAD_AGGREGATE_TILE',0)
+        if self.wgrad_aggregate_tile not in (0,):raise ValueError('aggregate DW tile must be0or1')
+        self.wgrad_aggregate_last_segments=0
+        self._aggregate_step_enabled=self._aggregate_window_active=False
+        self._aggregate_dw_lists={}
+        batch_default=helper_value(None,'DG_MOE_FP8_EXPERT_BATCH',0)
+        self.fp8_expert_forward_batch=helper_value(None,'DG_MOE_FP8_EXPERT_FWD_BATCH',batch_default)
+        self.fp8_expert_gradient_batch=helper_value(None,'DG_MOE_FP8_EXPERT_GRAD_BATCH',batch_default)
+        self.fp8_expert_source_ctas=helper_value(None,'DG_MOE_FP8_EXPERT_SOURCE_CTAS',16*max_cus)
+        self.fp8_expert_forward_ctas=helper_value(None,'DG_MOE_FP8_EXPERT_FWD_CTAS',self.fp8_expert_source_ctas)
+        self.fp8_expert_gradient_ctas=helper_value(None,'DG_MOE_FP8_EXPERT_GRAD_CTAS',self.fp8_expert_source_ctas)
+        if not all(0<v<=16*max_cus for v in (self.fp8_expert_forward_ctas,self.fp8_expert_gradient_ctas)):
+            raise ValueError('expert source per-direction CTA count must fit hardware')
+        self.fp8_expert_source_rows=helper_value(None,'DG_MOE_FP8_EXPERT_SOURCE_ROWS',16)
+        self.fp8_expert_serialized=fp8_flag(None,'DG_MOE_FP8_EXPERT_SERIALIZE')
+        if any(not 0<=v<=64 for v in (self.fp8_expert_forward_batch,self.fp8_expert_gradient_batch)):
+            raise ValueError('expert batch sizes must be0..64')
+        self.fp8_expert_pipeline=bool(self.fp8_expert_forward_batch or self.fp8_expert_gradient_batch)
+        if not 0<self.fp8_expert_source_ctas<=16*max_cus or self.fp8_expert_source_rows not in (16,32,64,128):
+            raise ValueError('expert source requires1..16CTA/CU and16/32/64/128rows')
         self.fp8_input_pipeline = fp8_flag(fp8_input_pipeline, "DG_MOE_FP8_INPUT_PIPELINE")
         self.fp8_bf16_input_pipeline = fp8_flag(None, "DG_MOE_FP8_BF16_INPUT_PIPELINE")
         self.fp8_input_co_resident = fp8_flag(None, "DG_MOE_FP8_INPUT_CO_RESIDENT")
@@ -392,7 +442,42 @@ class PeerMoEPlan(NativeMoEPlan):
         if reuse_packed_dy and self.transport != "peer":
             raise ValueError("packed gradient reuse is a peer-plan option")
         self.reuse_packed_dy = reuse_packed_dy and (fuse_dispatch or self.fp8_peer_compute)
+        self.skip_masked_route_zero = fp8_flag(None, 'DG_MOE_SKIP_MASKED_ROUTE_ZERO')
+        if self.skip_masked_route_zero and (not fuse_return or ring_rows is None or not expert_local_grad
+                or dag_fusion or dag_backward or ffn_fusion or staged_return or return_pipeline):
+            raise ValueError('masked route zero elision requires direct fused return and expert-local routed windows')
         super().__init__(*args, packed_rows=ring_rows, **kwargs)
+        if self.fp8_expert_pipeline and (not self.fp8_peer_compute or ring_rows is None
+                or not expert_local_grad or self.fp8_input_pipeline or self.fp8_bf16_input_pipeline
+                or self.fp8_return_pipeline or self.fp8_fuse_dhidden_activation or self.fp8_fused_stage_quant!=3
+                or not self.fp8_tiled_gradient_quant or kwargs.get('overlap_expert_dy',False)
+                or kwargs.get('wgrad_overlap','none')!='none' or gemm_configs
+                or dag_fusion or dag_backward or ffn_fusion):
+            raise ValueError('expert pipeline requires bounded serial native-auto FP8 both-stage quantization without other input/gradient pipelines')
+        if self.bf16_grad_producer and self.i<=gemm_configs['dhidden'][0]:
+            raise ValueError('gradient producer needs at least two dHidden N tiles')
+        if self.fp8_async_weight_prepare and (not self.fp8_peer_compute or not self.fp8_fused_weight_prepare
+                or not self.fp8_transpose_quantized_weights or not self.reuse_forward_context
+                or ring_rows is None or not expert_local_grad or dag_fusion or dag_backward or ffn_fusion):
+            raise ValueError('async current weights require fused preparation and live FP8 routed contexts')
+        if self.wgrad_aggregate_windows and (ring_rows is None or not expert_local_grad
+                or not self.reuse_forward_context or self.wgrad_first_overwrite
+                or self.wgrad_overlap!='none' or self.overlap_expert_dy
+                or dag_fusion or dag_backward or ffn_fusion or not self.fuse_return
+                or (self.compute=='fp8' and not self.fp8_expert_gradient_batch)
+                or (self.compute=='bf16' and not (self.fuse_activation_backward and self.fuse_dhidden_scores))
+                or max(1,math.ceil(self.max_tokens/self.chunk_tokens))>8):
+            raise ValueError('aggregate DW requires <=8 live-context chunks, retained hidden, bounded serial expert gradients and direct return')
+        if self.wgrad_pair_source_overlap and (self.compute!='fp8' or not self.wgrad_aggregate_windows
+                or not self.fp8_expert_forward_batch or not self.fp8_expert_gradient_batch):
+            raise ValueError('DW source overlap requires bounded FP8 bilateral expert source batches and aggregate DW')
+        self.fp8_expert_configs={}
+        if self.fp8_expert_pipeline:
+            if max(self.fp8_expert_forward_batch,self.fp8_expert_gradient_batch)>self.e:
+                raise ValueError('expert batch cannot exceed local experts')
+            for role,width,batch in [('fc1',2*self.i,self.fp8_expert_forward_batch),('dhidden',self.i,self.fp8_expert_gradient_batch)]:
+                if batch:self.fp8_expert_configs[role]=tuple(dg._C._moe_training_peer_fp8_auto_config(self.device.index,self.rows,width,self.h,self.e))
+            self.fp8_input_mode='native_metadata_expert_batch_pipeline'
         if self.h % (128*self.fp8_input_slices):
             raise ValueError("hidden width must be divisible by128times FP8 input slices")
         if self.fp8_return_pipeline:
@@ -428,7 +513,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self.input_assisted_tiles = torch.zeros((), device=self.device, dtype=torch.int32)
             self.buffers["input_assisted_tiles"] = self.input_assisted_tiles
         if self.group is not None:
-            recipe = (self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
+            recipe = (self.wgrad_pair_source_overlap,self.wgrad_first_nonempty,self.wgrad_aggregate_windows,self.wgrad_aggregate_tile,self.fp8_expert_forward_ctas,self.fp8_expert_gradient_ctas,self.fp8_async_weight_prepare,self.fp8_weight_prepare_serialized,self.training_fp8_mma_flags,self.training_bf16_mma_reuse,self.fp8_expert_forward_batch,self.fp8_expert_gradient_batch,self.fp8_expert_source_ctas,self.fp8_expert_source_rows,self.fp8_expert_serialized,tuple(sorted(self.fp8_expert_configs.items())),self.wgrad_first_overwrite,self.bf16_grad_producer,self.skip_masked_route_zero, self.fuse_dispatch, self.fuse_return, self.ffn_fusion, self.expert_local_grad,
                       self.dag_fusion, self.dag_backward, self.dag_direct_return, self.dag_shared_pool,
                       self.dag_input_prefetch, self.dag_serialize, self.input_copy_ilp,
                       self.inline_dispatch, self.dispatch_assist_ctas, self.dispatch_external, self.dispatch_external_serial,
@@ -639,10 +724,50 @@ class PeerMoEPlan(NativeMoEPlan):
                 value = torch.zeros(shape, device=self.device, dtype=dtype)
                 setattr(self, name, value)
                 self.buffers[name] = value
+        self.fp8_expert_metadata={};self.fp8_expert_events={}
+        if self.fp8_expert_pipeline:
+            self._fp8_expert_stream=torch.cuda.Stream(device=self.device)
+            for role,batch in [('fc1',self.fp8_expert_forward_batch),('dhidden',self.fp8_expert_gradient_batch)]:
+                if not batch:continue
+                bm=self.fp8_expert_configs[role][0]
+                count=(self.e+batch-1)//batch;capacity=max(128,4*(1+(self.rows+bm-1)//bm+self.e))
+                values=[torch.empty(capacity,device=self.device,dtype=torch.int32)for _ in range(count)]
+                self.fp8_expert_metadata[role]=values
+                self.fp8_expert_events[role]=[torch.cuda.Event()for _ in values]
+                self.buffers.update({f'fp8_expert_meta_{role}_{idx}':v for idx,v in enumerate(values)})
+            if self.fp8_expert_gradient_batch:
+                self.fp8_expert_dhidden=torch.empty_like(self.hidden)
+                self.buffers['fp8_expert_dhidden']=self.fp8_expert_dhidden
+        if self.fp8_async_weight_prepare:
+            self._fp8_weight_stream=torch.cuda.Stream(device=self.device)
+            self._fp8_weight_event=torch.cuda.Event()
+        self._aggregate_cache=[]
+        if self.wgrad_aggregate_windows and (len(self.forward_context_slots)>1 or self.wgrad_pair_source_overlap):
+            for slot in range(max(1,math.ceil(self.max_tokens/self.chunk_tokens))):
+                cache=dict(dy=torch.empty_like(self.packed_dy),offsets=torch.empty(self.e+1,device=self.device,dtype=torch.int32))
+                self._aggregate_cache.append(cache)
+                self.buffers.update({f'aggregate_dw_{slot}_{name}':value for name,value in cache.items()})
+        if self.wgrad_first_nonempty:
+            self._wgrad_seen=torch.empty(self.e,device=self.device,dtype=torch.int32)
+            self._wgrad_first_flags=torch.empty_like(self._wgrad_seen)
+            self.buffers.update(wgrad_seen=self._wgrad_seen,wgrad_first_flags=self._wgrad_first_flags)
+            if self.wgrad_aggregate_windows:
+                pairs=(max(1,math.ceil(self.max_tokens/self.chunk_tokens))+1)//2
+                self._aggregate_first_flags=torch.empty((pairs,self.e),device=self.device,dtype=torch.int32)
+                self.buffers['aggregate_first_flags']=self._aggregate_first_flags
+        self._dw_source_pending=False
+        if self.wgrad_pair_source_overlap:
+            self._dw_source_stream=torch.cuda.Stream(device=self.device)
+            self._dw_source_done=torch.cuda.Event()
         self._prepared = False
         torch.cuda.synchronize(self.device)
         if self.group is not None:
             dist.barrier(group=self.group)
+
+    def _join_fp8_weight_prepare(self):
+        if self._fp8_weights_pending:
+            torch.cuda.current_stream(self.device).wait_event(self._fp8_weight_event)
+            self._fp8_weights_pending=False
 
     def _prepare_weights(self, w1, w2, backward=False):
         if self.fp8_peer_compute:
@@ -653,6 +778,21 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.transpose_free_dgrad:
             self.w1_t, self.w2_t = w1, w2
             return
+        if self.fp8_async_weight_prepare and not backward and self._prepared:
+            self._join_fp8_weight_prepare()
+            if self.fp8_weight_prepare_serialized:
+                return super()._prepare_weights(w1,w2,backward=False)
+            main=torch.cuda.current_stream(self.device)
+            self._fp8_weight_stream.wait_stream(main)
+            with torch.cuda.stream(self._fp8_weight_stream):
+                for value in [w1,w2,*self.quantized['w1'],*self.quantized['w2'],
+                              *self.quantized['w1_t'],*self.quantized['w2_t']]:
+                    value.record_stream(self._fp8_weight_stream)
+                super()._prepare_weights(w1,w2,backward=False)
+                self._fp8_weight_event.record()
+            self._fp8_weights_pending=True
+            return
+        self._join_fp8_weight_prepare()
         return super()._prepare_weights(w1, w2, backward=backward)
 
     @staticmethod
@@ -695,7 +835,9 @@ class PeerMoEPlan(NativeMoEPlan):
                    first_n_tile=0, num_n_tiles=0, local_input_aiu=False, producer_input_aiu=False,
                    dispatch_pipeline=False, keep_gate_up=True, replay_gradients=False,
                    fc1_helper_threads=0):
-        source_stride = self.chunk_tokens if source == "local_x" else self.chunk_tokens * self.k
+        if self.bf16_grad_producer and role=='dhidden' and not read:
+            first_n_tile=1;num_n_tiles=0;local_input_aiu=True
+        source_stride = self.chunk_tokens if source in ("local_x","raw_dy") else self.chunk_tokens * self.k
         if role is None:
             role = ("fc1" if source == "local_x" else "dhidden") if read else ("dx" if destination == "local_dx" else "fc2")
         if self.fp8_peer_compute:
@@ -758,7 +900,8 @@ class PeerMoEPlan(NativeMoEPlan):
         if self.fuse_dhidden_scores and role == 'dhidden':
             if not extra_arguments:
                 extra_arguments.append([])
-            extra_arguments.append([self.hidden, self.packed_row_scores, self.score_partials])
+            extra_arguments.append([self.hidden, self.packed_row_scores, self.score_partials]+
+                ([self.pointer_tables['raw_scores'],self.packed_dy,self.status] if self.bf16_grad_producer and read else []))
         if self.transpose_free_dgrad and role in ('dhidden', 'dx'):
             while len(extra_arguments) < 2:
                 extra_arguments.append([])
@@ -804,7 +947,80 @@ class PeerMoEPlan(NativeMoEPlan):
                     setattr(self, name, statistics)
                     self.buffers[name] = statistics
 
+    def _fp8_expert_input(self,*,gradient=False,compile_only=False):
+        role='dhidden'if gradient else'fc1'
+        batch=self.fp8_expert_gradient_batch if gradient else self.fp8_expert_forward_batch
+        if not batch:raise RuntimeError('expert input role is disabled')
+        bm=self.fp8_expert_configs[role][0]
+        main=torch.cuda.current_stream(self.device)
+        serial=self.fp8_expert_serialized or compile_only
+        if not serial:self._fp8_expert_stream.wait_stream(main)
+        try:
+            for idx,begin in enumerate(range(0,self.e,batch)):
+                end=min(self.e,begin+batch);meta=self.fp8_expert_metadata[role][idx]
+                tensors=([self.pointer_tables['raw_dy'],self.pointer_tables['raw_scores'],
+                    self.pointer_tables['local_dscores'],self.permutation,self.packed_output,self.packed_dy,
+                    self.lengths,self.status,self.quantized[self.h][0],self.quantized_scale_storage[self.h],self.fp8_dscore_partials]
+                    if gradient else[self.pointer_tables['local_x'],self.permutation,self.packed_x,self.status,
+                    self.lengths,self.quantized[self.h][0],self.quantized_scale_storage[self.h]])
+                def source():
+                    _peer(29 if gradient else 28,tensors+[meta],
+                        [self.rows,self.h,self.chunk_tokens,self.k,self.size,begin,end,
+                         self.fp8_expert_gradient_ctas if gradient else self.fp8_expert_forward_ctas,self.fp8_expert_source_rows,bm],compile_only)
+                if serial:source()
+                else:
+                    with torch.cuda.stream(self._fp8_expert_stream):
+                        for tensor in tensors+[meta,self.payload]:tensor.record_stream(self._fp8_expert_stream)
+                        source();self.fp8_expert_events[role][idx].record()
+                    main.wait_event(self.fp8_expert_events[role][idx])
+                if not compile_only:
+                    self._join_fp8_weight_prepare()
+                    self._join_dw_source_pair()
+                dg._C._moe_training_peer_fp8_gemm(self.quantized[self.h],
+                    self.quantized['w2_t'if gradient else'w1'],self.fp8_expert_dhidden if gradient else self.gate_up,
+                    self.lengths,self.permutation,self.pointer_tables['local_values'],self.chunk_tokens*self.k,
+                    keep_local=True,compile_only=compile_only,expert_metadata=meta,metadata_block_m=bm)
+        finally:
+            if not serial:main.wait_stream(self._fp8_expert_stream)
+        if not compile_only:self._fp8_prequantized_input=None
+
+    def _join_dw_source_pair(self):
+        if self._dw_source_pending:
+            torch.cuda.current_stream(self.device).wait_event(self._dw_source_done)
+            self._dw_source_pending=False
+
+    def _flush_dw_source_pairs(self,dw1,dw2,*,force=False):
+        if not self.wgrad_pair_source_overlap or not self._aggregate_step_enabled:return
+        first=self._aggregate_dw_lists[dw1.data_ptr()]
+        second=self._aggregate_dw_lists[dw2.data_ptr()]
+        if len(first)!=len(second):raise RuntimeError('DW early aggregate segment counts disagree')
+        available=len(first)-self._dw_source_flushed
+        while available>=2 or (force and available):
+            begin=self._dw_source_flushed;end=min(len(first),begin+2)
+            flags=None
+            if self._fresh_first_dw_step:
+                flags=self._aggregate_first_flags[begin//2]
+                _peer(44,[self._wgrad_seen,flags,*[part[2]for part in first[begin:end]]],
+                      [self.e,end-begin])
+            main=torch.cuda.current_stream(self.device)
+            self._dw_source_stream.wait_stream(main)
+            with torch.cuda.stream(self._dw_source_stream):
+                if flags is not None:flags.record_stream(self._dw_source_stream)
+                for output,parts in [(dw2,second),(dw1,first)]:
+                    selected=parts[begin:end]
+                    left,right,offsets=map(list,zip(*selected))
+                    for tensor in [output,*left,*right,*offsets]:tensor.record_stream(self._dw_source_stream)
+                    dg._C.k_grouped_bf16_gemm_tn_segments(left,right,output,offsets,self.rows,
+                        accumulate=True,max_continuous_k=10240,first_flags=flags)
+                self._dw_source_done.record()
+            self._dw_source_pending=True
+            self._dw_source_flushed=end;available=len(first)-end
+
     def _fc1(self, w1, *, pack_input=False, compile_only=False, keep_gate_up=True, prefetch_dy=False):
+        if self.fp8_expert_forward_batch:
+            self._fp8_expert_input(compile_only=compile_only)
+            return
+        if not compile_only:self._join_fp8_weight_prepare()
         if self.fp8_bf16_input_pipeline:
             main = torch.cuda.current_stream(self.device)
             if compile_only:
@@ -971,7 +1187,7 @@ class PeerMoEPlan(NativeMoEPlan):
         _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m], True)
         _peer(4, [self.pointer_tables["local_x"], self.permutation, self.packed_x, self.status],
               [self.rows, self.h, self.chunk_tokens, self.k, self.size], True)
-        if not self.fuse_dispatch:
+        if not self.fuse_dispatch and not self.fp8_expert_forward_batch:
             self._stage_input(compile_only=True)
         if self.active_rows:
             self._activation(compile_only=True)
@@ -1019,9 +1235,10 @@ class PeerMoEPlan(NativeMoEPlan):
                 [x.shape[0], self.chunk_tokens, self.h, self.k, start])
         if self.fp8_input_pipeline:
             _launch(9, [self.local_x, self.local_qx, self.local_qx_scales], [self.chunk_tokens, self.h])
-        if zero_values:
+        if zero_values and not self.skip_masked_route_zero:
             self.local_values.zero_()
-        self.local_dx.zero_()
+        if not self.skip_masked_route_zero:
+            self.local_dx.zero_()
         self._barrier(start * 4)
         self.counts.zero_()
         _peer(0, [self.pointer_tables["local_ids"], self.counts, self.route_experts, self.route_rows, self.status],
@@ -1052,7 +1269,9 @@ class PeerMoEPlan(NativeMoEPlan):
 
     def _set_window(self, start):
         set_route_window(self, start)
-        _peer(3, [self.offsets, self.lengths, self.work_info, self.num_blocks], [self.e, self.rows, self.block_m])
+        tensors=[self.offsets,self.lengths,self.work_info,self.num_blocks]
+        if self._fresh_first_dw_step and not self._aggregate_window_active:tensors.extend([self._wgrad_seen,self._wgrad_first_flags])
+        _peer(3,tensors,[self.e,self.rows,self.block_m])
 
     def _chunk_forward_single(self, w1, w2, pack_input=False, return_output=True, synchronize_output=True,
                               prefetch_dy=False, _context_masked=False):
@@ -1086,7 +1305,7 @@ class PeerMoEPlan(NativeMoEPlan):
             self._ffn(w1, w2)
             self._barrier(1)
             return
-        if not self.fuse_dispatch:
+        if not self.fuse_dispatch and not self.fp8_expert_forward_batch:
             self._stage_input()
         # A reused BF16 forward must retain expert-packed X for DW1 even
         # when FC1 directly reads peers without a separate producer.
@@ -1233,7 +1452,8 @@ class PeerMoEPlan(NativeMoEPlan):
                              self.current_rows,self.status],[self.rows,width,1])
                     self._fp8_prequantized_input=self.gate_up.data_ptr()
                     return
-                tensors = [self.gate_up, self.hidden] + ([self.gate_up] if backward else [])
+                hidden=self.fp8_expert_dhidden if backward and self.fp8_expert_gradient_batch else self.hidden
+                tensors = [self.gate_up, hidden] + ([self.gate_up] if backward else [])
                 tensors.extend((self.quantized[width][0], self.quantized_scale_storage[width],
                                 self.current_rows, self.status))
                 _launch(28 if backward else 27, tensors, [self.rows, self.i, 1])
@@ -1266,6 +1486,17 @@ class PeerMoEPlan(NativeMoEPlan):
                self.k, self.size, self.block_m], compile_only)
 
     def _expert_gradients(self, compile_only=False):
+        if self.fp8_expert_gradient_batch:
+            self._fp8_expert_input(gradient=True,compile_only=compile_only)
+            _peer(17,[self.fp8_dscore_partials,self.permutation,self.num_blocks,
+                      self.pointer_tables['local_dscores'],self.status],
+                  [self.rows,self.h//128,self.chunk_tokens,self.k,self.size,self.block_m],compile_only)
+            return
+        if self.bf16_grad_producer:
+            self._peer_gemm(self.packed_output,self.w2_t,self.hidden,self.source_rows,
+                read=True,pack_input=True,source='raw_dy',role='dhidden',compile_only=compile_only,
+                first_n_tile=0,num_n_tiles=1,producer_input_aiu=True)
+            return
         if self.fuse_dhidden_scores:
             _peer(18, [self.pointer_tables['raw_dy'], self.pointer_tables['raw_scores'],
                        self.permutation, self.packed_output, self.packed_dy,
@@ -1325,47 +1556,76 @@ class PeerMoEPlan(NativeMoEPlan):
     def _backward_windows(self, dy, scores, w1, w2, dw1, dw2, dx, dscores, start):
         windows = range(0, self.full_row_capacity, self.rows)
         for window in reversed(windows) if self._using_forward_context else windows:
-            self._set_window(window)
-            self._context_window_start = window
-            self._chunk_forward_single(w1, w2, pack_input=True, return_output=False,
-                                       prefetch_dy=self.overlap_expert_dy)
-            if self.dag_backward:
-                self._dag(self.w2_t, self.w1_t, backward=True)
-                # The fused dHidden epilogue writes only gate/up gradients,
-                # preserving forward hidden values for full DW2 accumulation.
-                dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
-                dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
-            else:
-                self._expert_gradients()
-                self._wgrad(self.packed_dy, self.hidden, dw2,
-                            asynchronous=self.wgrad_overlap == "both")
-                self._peer_gemm(self.packed_output if self.fuse_dhidden_scores else self.packed_dy,
-                                self.w2_t, self.hidden, self.identity_rows, role="dhidden")
-                if self.fuse_dhidden_scores:
-                    self._reduce_score_partials()
-                if not self.fuse_activation_backward:
-                    self._activation(backward=True)
-                self._join_fp8_bf_input()
-                if (self._defer_last_dw1_enabled and self._using_forward_context
-                        and start+self.chunk_tokens>=self.max_tokens and window==0):
-                    # dX only reads these operands. The final window/chunk has
-                    # no following metadata overwrite before the caller joins.
-                    self._pending_last_dw1=(self.gate_up,self.packed_x,dw1,self.lengths)
+            previous_dy=self.packed_dy
+            self._aggregate_window_active=self._aggregate_step_enabled and window==0
+            if self._aggregate_window_active:
+                cache=self._aggregate_cache[start//self.chunk_tokens]
+                self.packed_dy=cache['dy']
+                self._aggregate_current_offsets=cache['offsets']
+            try:
+                self._set_window(window)
+                if self._aggregate_window_active:
+                    self._aggregate_current_offsets.copy_(self.offsets)
+                self._context_window_start = window
+                self._chunk_forward_single(w1, w2, pack_input=True, return_output=False,
+                                           prefetch_dy=self.overlap_expert_dy)
+                if self.dag_backward:
+                    self._dag(self.w2_t, self.w1_t, backward=True)
+                    # The fused dHidden epilogue writes only gate/up gradients,
+                    # preserving forward hidden values for full DW2 accumulation.
+                    dg.k_grouped_bf16_gemm_tn_device(self.packed_dy, self.hidden, dw2, self.lengths, self.rows)
+                    dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                 else:
-                    self._wgrad(self.gate_up, self.packed_x, dw1,
-                                asynchronous=self.wgrad_overlap != "none")
-                self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
-                                write=self.fuse_return, destination="local_dx")
-                if not self.fuse_return:
-                    self._scatter_peer("local_dx")
-                # Both wgrads read window metadata/activations. Join before
-                # any next-window overwrite and before entering rank barriers.
-                self._join_wgrad()
+                    self._expert_gradients()
+                    self._wgrad(self.packed_dy, self.hidden, dw2,
+                                asynchronous=self.wgrad_overlap == "both")
+                    if not self.fp8_expert_gradient_batch:
+                        self._peer_gemm(self.packed_output if self.fuse_dhidden_scores else self.packed_dy,
+                                        self.w2_t, self.hidden, self.identity_rows, role="dhidden")
+                    if self.fuse_dhidden_scores:
+                        self._reduce_score_partials()
+                    if not self.fuse_activation_backward:
+                        self._activation(backward=True)
+                    self._join_fp8_bf_input()
+                    if (self._defer_last_dw1_enabled and self._using_forward_context
+                            and start+self.chunk_tokens>=self.max_tokens and window==0):
+                        # dX only reads these operands. The final window/chunk has
+                        # no following metadata overwrite before the caller joins.
+                        self._pending_last_dw1=(self.gate_up,self.packed_x,dw1,self.lengths)
+                    else:
+                        self._wgrad(self.gate_up, self.packed_x, dw1,
+                                    asynchronous=self.wgrad_overlap != "none")
+                    self._peer_gemm(self.gate_up, self.w1_t, self.packed_output, self.identity_rows,
+                                    write=self.fuse_return, destination="local_dx")
+                    if not self.fuse_return:
+                        self._scatter_peer("local_dx")
+                    # Both wgrads read window metadata/activations. Join before
+                    # any next-window overwrite and before entering rank barriers.
+                    self._join_wgrad()
+            finally:
+                self.packed_dy=previous_dy
+                self._aggregate_window_active=False
+        self._flush_dw_source_pairs(dw1,dw2,force=start+self.chunk_tokens>=self.max_tokens)
         self._barrier(start * 4 + 3)
-        _launch(6, [self.local_dx, scores, dx],
-                [self.chunk_tokens, self.h, self.k, dy.shape[0], start, 0])
+        self._combine_local_routes(self.local_dx, scores, dx, start, False)
         count = max(0, min(self.chunk_tokens, dy.shape[0] - start))
         dscores[start:start + count].copy_(self.local_dscores[:count])
+
+    def _wgrad(self,left,right,output,*,asynchronous=False):
+        if self._fresh_first_dw_step and not self._aggregate_window_active:
+            if asynchronous:raise RuntimeError('first nonempty DW must execute serially')
+            dg.k_grouped_bf16_gemm_tn_device(left,right,output,self.lengths,self.rows,first_flags=self._wgrad_first_flags)
+            return
+        if self._aggregate_window_active:
+            if asynchronous:raise RuntimeError('aggregate DW cannot defer an asynchronous output')
+            self._aggregate_dw_lists[output.data_ptr()].append((left,right,self._aggregate_current_offsets))
+            return
+        if self.wgrad_first_overwrite and output.data_ptr() in self._first_dw_outputs:
+            if asynchronous:raise RuntimeError('first DW overwrite requires serial compute')
+            dg.k_grouped_bf16_gemm_tn_device(left,right,output,self.lengths,self.rows,accumulate=False)
+            self._first_dw_outputs.remove(output.data_ptr())
+            return
+        super()._wgrad(left,right,output,asynchronous=asynchronous)
 
     @torch.no_grad()
     def _run_deferred_dw1(self):
@@ -1392,12 +1652,14 @@ class PeerMoEPlan(NativeMoEPlan):
         with self._execution():
             self._dag_slot = 0
             self._validate(x, ids, scores, w1, w2, valid_tokens)
+            self._fresh_first_dw_step=False
             self._begin_forward_context()
             self.prepare(w1, w2)
             if self.reuse_forward_context:
                 self.forward_context_reused_windows.zero_()
                 self.forward_context_reused_rows.zero_()
             output = super().forward(x, ids, scores, w1, w2, valid_tokens, _chunk_output_callback=_chunk_output_callback)
+            self._join_fp8_weight_prepare()
             if self.reuse_forward_context:
                 self._record_forward_context_generation()
                 self._forward_context_fingerprint = self._context_fingerprint(x, ids, scores, w1, w2, valid_tokens)
@@ -1409,6 +1671,10 @@ class PeerMoEPlan(NativeMoEPlan):
         if self._pending_last_dw1 is not None:
             raise RuntimeError('complete deferred DW1 before reusing this workspace')
         if type(_defer_last_dw1) is not bool:raise TypeError('_defer_last_dw1 must be bool')
+        if self.wgrad_aggregate_windows and (_defer_last_dw1 or _chunk_output_callback is not None):
+            raise ValueError('aggregate DW must finish before deferred-DW or chunk callbacks')
+        if _defer_last_dw1 and (self.wgrad_first_overwrite or self.wgrad_first_nonempty):
+            raise ValueError('complete first DW overwrite before any deferred DW schedule')
         if _chunk_output_callback is not None:
             if not callable(_chunk_output_callback):raise TypeError('chunk callback must be callable')
             if self.ring_rows is None or not self.expert_local_grad or self.wgrad_overlap!="none":
@@ -1431,8 +1697,21 @@ class PeerMoEPlan(NativeMoEPlan):
                 self.reset_errors()
             self._prepare_weights(w1, w2, backward=True)
             dx, dscores = torch.empty_like(x), torch.empty_like(scores)
-            dw1, dw2 = ((torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
-                        if accumulators is None else accumulators)
+            # Fresh gradients may overwrite on their first routed window.
+            # External accumulator buffers preserve their existing beta=1 contract.
+            fresh_overwrite=self.wgrad_first_overwrite and accumulators is None and self.max_tokens>0
+            self._fresh_first_dw_step=self.wgrad_first_nonempty and accumulators is None
+            if self._fresh_first_dw_step:self._wgrad_seen.zero_()
+            factory=torch.empty_like if fresh_overwrite or self._fresh_first_dw_step else torch.zeros_like
+            dw1,dw2=((factory(w1,dtype=torch.float32),factory(w2,dtype=torch.float32))
+                     if accumulators is None else accumulators)
+            self._first_dw_outputs={dw1.data_ptr(),dw2.data_ptr()}if fresh_overwrite else set()
+            self._aggregate_step_enabled=self.wgrad_aggregate_windows and self._using_forward_context and (len(self.forward_context_slots)>1 or self.wgrad_pair_source_overlap)
+            self._dw_source_flushed=0
+            self._aggregate_window_active=False
+            self._aggregate_dw_lists={dw1.data_ptr():[],dw2.data_ptr():[]}
+            self.wgrad_aggregate_last_segments=0
+
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 if self.expert_local_grad:
                     self._publish_gradient_chunk(dy, scores, start)
@@ -1442,7 +1721,8 @@ class PeerMoEPlan(NativeMoEPlan):
                             [x.shape[0], self.chunk_tokens, self.h, self.k, start])
                     if self.fp8_input_pipeline:
                         _launch(9, [self.local_x, self.local_qx, self.local_qx_scales], [self.chunk_tokens, self.h])
-                    self.local_dx.zero_()
+                    if not self.skip_masked_route_zero:
+                        self.local_dx.zero_()
                     self._barrier(start * 4)
                 else:
                     self._route_chunk(x, ids, valid_tokens, start, zero_values=not self.expert_local_grad)
@@ -1468,7 +1748,7 @@ class PeerMoEPlan(NativeMoEPlan):
                     self._ffn(self.w2_t, self.w1_t, backward=True)
                     dg.k_grouped_bf16_gemm_tn_device(self.gate_up, self.packed_x, dw1, self.lengths, self.rows)
                     self._barrier(start * 4 + 3)
-                    _launch(6, [self.local_dx, scores, dx], dims + [0])
+                    self._combine_local_routes(self.local_dx, scores, dx, start, False)
                     continue
                 # DW2 requires packed_dy above. Reuse that mandatory staging
                 # result instead of fetching the same peer gradients again.
@@ -1485,11 +1765,36 @@ class PeerMoEPlan(NativeMoEPlan):
                 if not self.fuse_return:
                     self._scatter_peer("local_dx")
                 self._barrier(start * 4 + 3)
-                _launch(6, [self.local_dx, scores, dx], dims + [0])
+                self._combine_local_routes(self.local_dx, scores, dx, start, False)
                 if self.expert_local_grad:
                     count = max(0, min(self.chunk_tokens, x.shape[0] - start))
                     dscores[start:start + count].copy_(self.local_dscores[:count])
             if self.check_errors and not torch.cuda.is_current_stream_capturing():
                 self.check()
+            if self._aggregate_step_enabled and not self.wgrad_pair_source_overlap:
+                first=self._aggregate_dw_lists[dw1.data_ptr()]
+                second=self._aggregate_dw_lists[dw2.data_ptr()]
+                if len(first)!=len(second):raise RuntimeError('DW1/DW2 aggregate segment counts disagree')
+                self.wgrad_aggregate_last_segments=len(first)
+                if self._fresh_first_dw_step and first:
+                    _peer(44,[self._wgrad_seen,self._aggregate_first_flags,*[part[2]for part in first]],
+                          [self.e,len(first)])
+                for output,segments in [(dw2,second),(dw1,first)]:
+                    if segments:
+                        left,right,offsets=map(list,zip(*segments))
+                        for start in range(0,len(left),2):
+                            dg._C.k_grouped_bf16_gemm_tn_segments(left[start:start+2],right[start:start+2],output,offsets[start:start+2],self.rows,
+                                accumulate=True,max_continuous_k=10240,
+                                first_flags=self._aggregate_first_flags[start//2]if self._fresh_first_dw_step else None)
+            if self.wgrad_pair_source_overlap and self._aggregate_step_enabled:
+                self._flush_dw_source_pairs(dw1,dw2,force=True)
+                self._join_dw_source_pair()
+                self.wgrad_aggregate_last_segments=len(self._aggregate_dw_lists[dw1.data_ptr()])
+            self._aggregate_step_enabled=False
+            self._aggregate_dw_lists={}
+            if self._fresh_first_dw_step:
+                for output in [dw1,dw2]:_peer(43,[output,self._wgrad_seen],[self.e,output[0].numel()])
+            self._fresh_first_dw_step=False
             self._forward_context_available = self._using_forward_context = False
+            if self._first_dw_outputs:raise RuntimeError('fresh DW was never initialized by its owning window')
             return dx, dw1, dw2, dscores

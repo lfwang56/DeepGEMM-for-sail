@@ -46,11 +46,200 @@ __device__ __forceinline__ float* fp8_input_scale_tile() {
 }
 
 template <PeerOperation Op, uint32_t InputWidth = 0, uint32_t InputBlockM = 0, bool InputWarpRows = false,
-          bool CacheFp8Scales = false, uint32_t InputTopk = 0, uint32_t InputSlices = 1>
+          bool CacheFp8Scales = false, uint32_t InputTopk = 0, uint32_t InputSlices = 1, bool InputBitmap = false, uint32_t InputSubM = 128, uint32_t InputMetadataBM = 0, bool FirstWgradFlags=false, uint32_t InputSourceILP=1>
 __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = -1) {
     if (block_index < 0) block_index = blockIdx.x;
     const int64_t index = block_index * blockDim.x + threadIdx.x;
-    if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantizedTiles || Op == PeerOperation::ExpertLocalGradientsQuantizedTilesCached) {
+    if constexpr(Op==PeerOperation::PackExpertBatch || Op==PeerOperation::GradientExpertBatch) {
+        constexpr bool grad=Op==PeerOperation::GradientExpertBatch;
+        constexpr int width=InputWidth,segments=width/128,Rows=InputSubM;
+        static_assert(Rows==16 || Rows==32 || Rows==64 || Rows==128);
+        const int first=p.dim[5],last=p.dim[6];
+        const int* lengths=peer_pointer<int32_t>(p,grad?6:4);
+        auto* status=peer_pointer<uint32_t>(p,grad?7:3);
+        int prefix=0,rows=0;
+        for(int e=0;e<last;++e) {
+            const int value=__ldg(lengths+e);
+            if(value<0 || value%128){if(index==0)atomicOr(status,2u);return;}
+            if(e<first)prefix+=value;else rows+=value;
+        }
+        if(prefix+rows>p.dim[0]){if(index==0)atomicOr(status,2u);return;}
+        if constexpr(InputMetadataBM!=0) {
+            static_assert(InputMetadataBM==32 || InputMetadataBM==64 || InputMetadataBM==128 || InputMetadataBM==192 || InputMetadataBM==256);
+            // Independent expert batches own disjoint schedule buffers. The
+            // consumer's stream event waits for all quant and metadata stores.
+            if(blockIdx.x==0) {
+                auto* records=reinterpret_cast<uint4*>(peer_pointer<int32_t>(p,grad?11:7));
+                uint32_t block_prefix=0,global_prefix=0;
+                for(int e=0;e<last;++e) {
+                    const uint32_t length=uint32_t(__ldg(lengths+e));
+                    if(e>=first) {
+                        const uint32_t blocks=(length+InputMetadataBM-1)/InputMetadataBM;
+                        for(uint32_t block=threadIdx.x;block<blocks;block+=blockDim.x)
+                            records[1+block_prefix+block]=make_uint4(e,length,block_prefix,global_prefix);
+                        block_prefix+=blocks;
+                    }
+                    global_prefix+=length;
+                }
+                if(threadIdx.x==0)reinterpret_cast<int32_t*>(records)[0]=int32_t(block_prefix);
+            }
+        }
+        __shared__ uint64_t addresses[Rows];
+        __shared__ float row_scores[grad?Rows:1];
+        __shared__ float tile_scales[Rows][segments+1];
+        __shared__ float tile_dots[grad?Rows:1][grad?segments+1:1];
+        const int lane=threadIdx.x&15;
+        const unsigned mask=0xffffu<<((threadIdx.x&31)>=16?16:0);
+        for(int tile=blockIdx.x;tile<rows/Rows;tile+=gridDim.x) {
+            const int base=prefix+tile*Rows;
+            for(int r=threadIdx.x;r<Rows;r+=blockDim.x) {
+                const int route=__ldg(peer_pointer<int32_t>(p,grad?3:1)+base+r);
+                const int64_t stride=int64_t(InputBlockM)*InputTopk;
+                const bool valid=route>=0 && int64_t(route)<int64_t(p.dim[4])*stride;
+                if(route>=0 && !valid)atomicOr(status,2u);
+                const int owner=valid?int64_t(route)/stride:0;
+                const int64_t token=valid?(int64_t(route)%stride)/InputTopk:0;
+                addresses[r]=valid ? peer_pointer<uint64_t>(p,0)[owner]+token*width*sizeof(__ppu_bfloat16) : 0;
+                if constexpr(grad)row_scores[r]=valid ? reinterpret_cast<const float*>(
+                    peer_pointer<uint64_t>(p,1)[owner])[int64_t(route)%stride] : 0.f;
+            }
+            __syncthreads();
+            static_assert(InputSourceILP==1 || InputSourceILP==2 || InputSourceILP==4);
+            // Issue independent remote vectors before consuming any of them.
+            // Each 16-lane segment retains the identical quantization and dot order.
+            for(int first_group=threadIdx.x/16;first_group<Rows*segments;
+                first_group+=(blockDim.x/16)*InputSourceILP) {
+                uint4 fetched[InputSourceILP];
+                uint4 fetched_y[grad?InputSourceILP:1];
+                #pragma unroll
+                for(int j=0;j<InputSourceILP;++j) {
+                    const int group=first_group+j*(blockDim.x/16);
+                    fetched[j]=make_uint4(0,0,0,0);
+                    if constexpr(grad)fetched_y[j]=make_uint4(0,0,0,0);
+                    if(group<Rows*segments) {
+                        const int r=group/segments,segment=group%segments;
+                        const int64_t at=int64_t(base+r)*width+segment*128+lane*8;
+                        if(addresses[r]) {
+                            fetched[j]=*reinterpret_cast<const uint4*>(addresses[r]+(segment*128+lane*8)*sizeof(__ppu_bfloat16));
+                            if constexpr(grad)fetched_y[j]=*reinterpret_cast<const uint4*>(peer_pointer<__ppu_bfloat16>(p,4)+at);
+                        }
+                    }
+                }
+                #pragma unroll
+                for(int j=0;j<InputSourceILP;++j) {
+                    const int group=first_group+j*(blockDim.x/16);
+                    if(group<Rows*segments) {
+                        const int r=group/segments,segment=group%segments,row=base+r;
+                        const int64_t at=int64_t(row)*width+segment*128+lane*8;
+                        uint4 raw=fetched[j];
+                        if constexpr(grad) {
+                            const uint4 raw_y=fetched_y[j];
+                            const auto* dy=reinterpret_cast<const __ppu_bfloat16*>(&raw);
+                            const auto* y=reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+                            uint4 weighted{};auto* value=reinterpret_cast<__ppu_bfloat16*>(&weighted);float dot=0.f;
+                            const float score=row_scores[r];
+                            #pragma unroll
+                            for(int v=0;v<8;++v){const float d=__bfloat162float(dy[v]);value[v]=__float2bfloat16(d*score);dot+=d*__bfloat162float(y[v]);}
+                            #pragma unroll
+                            for(int delta=8;delta>0;delta>>=1)dot+=__shfl_down_sync(mask,dot,delta,16);
+                            if(lane==0)tile_dots[r][segment]=dot;
+                            raw=weighted;
+                        }
+                        *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,grad?5:2)+at)=raw;
+                        float scale;const uint2 q=peer_quantize_eight(raw,scale);
+                        *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,grad?8:5)+at)=q;
+                        if(lane==0)tile_scales[r][segment]=scale;
+                    }
+                }
+            }
+            __syncthreads();
+            // Coalesce the global column-major scales across adjacent rows.
+            for(int at=threadIdx.x;at<segments*(Rows/4);at+=blockDim.x) {
+                const int segment=at/(Rows/4),r=(at%(Rows/4))*4;
+                const uint4 value=make_uint4(__float_as_uint(tile_scales[r][segment]),__float_as_uint(tile_scales[r+1][segment]),
+                    __float_as_uint(tile_scales[r+2][segment]),__float_as_uint(tile_scales[r+3][segment]));
+                *reinterpret_cast<uint4*>(peer_pointer<float>(p,grad?9:6)+int64_t(segment)*p.dim[0]+base+r)=value;
+            }
+            if constexpr(grad) {
+                if constexpr(segments%4==0) {
+                    for(int at=threadIdx.x;at<Rows*(segments/4);at+=blockDim.x) {
+                        const int r=at/(segments/4),c=(at%(segments/4))*4;
+                        const uint4 value=make_uint4(__float_as_uint(tile_dots[r][c]),__float_as_uint(tile_dots[r][c+1]),
+                            __float_as_uint(tile_dots[r][c+2]),__float_as_uint(tile_dots[r][c+3]));
+                        *reinterpret_cast<uint4*>(peer_pointer<float>(p,10)+int64_t(base+r)*segments+c)=value;
+                    }
+                } else {
+                    for(int at=threadIdx.x;at<Rows*segments;at+=blockDim.x)
+                        peer_pointer<float>(p,10)[int64_t(base+at/segments)*segments+at%segments]=tile_dots[at/segments][at%segments];
+                }
+            }
+            __syncthreads();
+        }
+        return;
+    }
+    else if constexpr ((Op == PeerOperation::PackQuantizedInputTiles ||
+                   Op == PeerOperation::GradientQuantizedInputTiles) && InputSubM < 128) {
+        constexpr bool gradient=Op==PeerOperation::GradientQuantizedInputTiles;
+        static_assert(InputSubM==16 || InputSubM==32 || InputSubM==64);
+        constexpr int subtiles=128/InputSubM,width=InputWidth;
+        static_assert(InputBitmap && InputSlices*subtiles<=32 && InputWidth%(128*InputSlices)==0);
+        constexpr int segments=InputWidth/(128*InputSlices);
+        const int blocks=peer_pointer<int32_t>(p,gradient?6:4)[0];
+        auto* status=peer_pointer<uint32_t>(p,gradient?7:3);
+        if(blocks<0 || blocks>p.dim[0]/128){if(index==0)atomicOr(status,2u);return;}
+        const int lane=threadIdx.x&15;
+        const unsigned mask=0xffffu<<((threadIdx.x&31)>=16?16:0);
+        for(int work=block_index;work<blocks*InputSlices*subtiles;work+=gridDim.x) {
+            const int tile=work/(InputSlices*subtiles);
+            const int stripe=(work/subtiles)%InputSlices,subtile=work%subtiles;
+            const int64_t base=int64_t(tile)*128+subtile*InputSubM;
+            for(int group=threadIdx.x/16;group<InputSubM*segments;group+=blockDim.x/16) {
+                const int64_t row=base+group/segments;
+                const int segment=stripe*segments+group%segments;
+                const int route=peer_pointer<int32_t>(p,gradient?3:1)[row];
+                const int64_t token=route>=0?int64_t(route)/InputTopk:0;
+                const int owner=token/InputBlockM;
+                const bool valid=route>=0 && owner<p.dim[4];
+                if(route>=0 && !valid && lane==0)atomicOr(status,2u);
+                const int64_t at=row*width+segment*128+lane*8;
+                uint4 raw{};
+                if(valid) {
+                    const auto* source=reinterpret_cast<const __ppu_bfloat16*>(peer_pointer<uint64_t>(p,0)[owner]);
+                    raw=*reinterpret_cast<const uint4*>(source+(token%InputBlockM)*width+segment*128+lane*8);
+                }
+                uint4 payload=raw;
+                if constexpr(gradient) {
+                    uint4 raw_y{};float score=0.f;
+                    if(valid) {
+                        raw_y=*reinterpret_cast<const uint4*>(peer_pointer<__ppu_bfloat16>(p,4)+at);
+                        score=reinterpret_cast<const float*>(peer_pointer<uint64_t>(p,1)[owner])[
+                            int64_t(route)%(int64_t(InputBlockM)*InputTopk)];
+                    }
+                    const auto* dy=reinterpret_cast<const __ppu_bfloat16*>(&raw);
+                    const auto* y=reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+                    auto* weighted=reinterpret_cast<__ppu_bfloat16*>(&payload);float dot=0.f;
+                    #pragma unroll
+                    for(int j=0;j<8;++j) {
+                        const float value=__bfloat162float(dy[j]);
+                        weighted[j]=__float2bfloat16(value*score);dot+=value*__bfloat162float(y[j]);
+                    }
+                    #pragma unroll
+                    for(int delta=8;delta>0;delta>>=1)dot+=__shfl_down_sync(mask,dot,delta,16);
+                    if(lane==0)peer_pointer<float>(p,10)[row*(width/128)+segment]=dot;
+                }
+                *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,gradient?5:2)+at)=payload;
+                float scale;
+                *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,gradient?8:5)+at)=peer_quantize_eight(payload,scale);
+                if(lane==0)peer_pointer<float>(p,gradient?9:6)[int64_t(segment)*p.dim[0]+row]=scale;
+            }
+            // Every payload writer fences before the single release RMW.
+            // Consumers require every subtask bit of a K stripe.
+            __threadfence();__syncthreads();
+            if(threadIdx.x==0)tix::red_add_rel(peer_pointer<uint32_t>(p,gradient?11:7)+tile,
+                1u<<(stripe*subtiles+subtile));
+            __syncthreads();
+        }
+    } else if constexpr (Op == PeerOperation::ExpertLocalGradientsQuantizedTiles || Op == PeerOperation::ExpertLocalGradientsQuantizedTilesCached) {
         const int64_t rows=int64_t(peer_pointer<int32_t>(p,6)[0])*128;
         if(rows<0 || rows>p.dim[0]) {
             if(index==0)atomicOr(peer_pointer<int32_t>(p,7),2);
@@ -158,6 +347,66 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             __syncthreads();
         }
         __threadfence();
+    } else if constexpr (Op == PeerOperation::GradientQuantizedInputTiles) {
+        static_assert(InputBitmap && InputSlices>=1 && InputSlices<=16 && InputWidth>=128 && InputWidth%(128*InputSlices)==0);
+        const int blocks=peer_pointer<int32_t>(p,6)[0];
+        auto* status=peer_pointer<uint32_t>(p,7);
+        if(blocks<0 || blocks>p.dim[0]/128) { if(index==0)atomicOr(status,2u);return; }
+        constexpr int width=InputWidth,stripe_width=width/InputSlices,segments=stripe_width/128;
+        __shared__ uint64_t addresses[128];
+        __shared__ float scores[128];
+        float* scales=fp8_input_scale_tile<stripe_width>();
+        const int lane=threadIdx.x&15;const unsigned mask=0xffffu<<((threadIdx.x&31)>=16?16:0);
+        for(int work=block_index;work<blocks*InputSlices;work+=gridDim.x) {
+            const int tile=work/InputSlices,stripe=work%InputSlices,column_base=stripe*stripe_width;
+            const int64_t base=int64_t(tile)*128;
+            if(threadIdx.x<128) {
+                const int route=peer_pointer<int32_t>(p,3)[base+threadIdx.x];
+                const int64_t token=route>=0?int64_t(route)/InputTopk:0;
+                const int owner=token/InputBlockM;const bool valid=route>=0 && owner<p.dim[4];
+                if(route>=0 && !valid)atomicOr(status,2u);
+                addresses[threadIdx.x]=valid?peer_pointer<uint64_t>(p,0)[owner]+
+                    uint64_t(token%InputBlockM)*width*sizeof(__ppu_bfloat16):0;
+                scores[threadIdx.x]=valid?reinterpret_cast<const float*>(peer_pointer<uint64_t>(p,1)[owner])[
+                    int64_t(route)%(int64_t(InputBlockM)*InputTopk)]:0.f;
+            }
+            __syncthreads();
+            for(int group=threadIdx.x/16;group<128*segments;group+=16) {
+                const int row=group/segments,segment=group%segments;
+                const int64_t at=(base+row)*width+column_base+segment*128+lane*8;
+                const auto* source=reinterpret_cast<const __ppu_bfloat16*>(addresses[row]);
+                uint4 raw{},raw_y{};
+                if(source) {
+                    raw=*reinterpret_cast<const uint4*>(source+column_base+segment*128+lane*8);
+                    raw_y=*reinterpret_cast<const uint4*>(peer_pointer<__ppu_bfloat16>(p,4)+at);
+                }
+                const auto* dy=reinterpret_cast<const __ppu_bfloat16*>(&raw);
+                const auto* y=reinterpret_cast<const __ppu_bfloat16*>(&raw_y);
+                uint4 weighted_raw{};auto* weighted=reinterpret_cast<__ppu_bfloat16*>(&weighted_raw);float dot=0.f;
+                #pragma unroll
+                for(int j=0;j<8;++j) {
+                    const float value=__bfloat162float(dy[j]);
+                    weighted[j]=__float2bfloat16(value*scores[row]);dot+=value*__bfloat162float(y[j]);
+                }
+                *reinterpret_cast<uint4*>(peer_pointer<__ppu_bfloat16>(p,5)+at)=weighted_raw;
+                float scale;
+                *reinterpret_cast<uint2*>(peer_pointer<uint8_t>(p,8)+at)=peer_quantize_eight(weighted_raw,scale);
+                #pragma unroll
+                for(int delta=8;delta>0;delta>>=1)dot+=__shfl_down_sync(mask,dot,delta,16);
+                if(lane==0) {
+                    scales[row*(segments+1)+segment]=scale;
+                    peer_pointer<float>(p,10)[(base+row)*(width/128)+stripe*segments+segment]=dot;
+                }
+            }
+            __syncthreads();
+            for(int item=threadIdx.x;item<128*segments;item+=blockDim.x) {
+                const int row=item%128,segment=item/128;
+                peer_pointer<float>(p,9)[int64_t(stripe*segments+segment)*p.dim[0]+base+row]=scales[row*(segments+1)+segment];
+            }
+            __threadfence();__syncthreads();
+            if(threadIdx.x==0)tix::red_add_rel(peer_pointer<uint32_t>(p,11)+tile,1u<<stripe);
+            __syncthreads();
+        }
     } else if constexpr (Op == PeerOperation::PackQuantizedInputTiles) {
         static_assert(InputWidth>=128 && InputWidth<=8192 && InputWidth%128==0);
         static_assert(InputBlockM>0 && InputTopk>0);
@@ -206,7 +455,7 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
             // Consumers acquire READY==InputSlices before reading this M tile.
             __threadfence();
             __syncthreads();
-            if(threadIdx.x==0)tix::red_add_rel(peer_pointer<uint32_t>(p,7)+tile,1u);
+            if(threadIdx.x==0)tix::red_add_rel(peer_pointer<uint32_t>(p,7)+tile,InputBitmap ? (1u<<stripe) : 1u);
             __syncthreads();
         }
     } else if constexpr (Op == PeerOperation::PackActiveQuantized) {
@@ -625,7 +874,37 @@ __device__ __forceinline__ void run_peer(const Params& p, int64_t block_index = 
         }
         peer_pointer<int32_t>(p, 3)[row] = index;
         peer_pointer<int32_t>(p, 4)[row] = index / p.dim[2];
+    } else if constexpr(Op==PeerOperation::AggregateFirstWgradFlags) {
+        const int groups=p.dim[0],chunks=p.dim[1];
+        if(index>=groups)return;
+        bool seen=peer_pointer<int32_t>(p,0)[index]!=0;
+        for(int pair=0;pair<(chunks+1)/2;++pair) {
+            int rows=0;
+            for(int part=pair*2;part<min(chunks,pair*2+2);++part) {
+                const auto* offsets=peer_pointer<int32_t>(p,2+part);
+                rows+=__ldg(offsets+index+1)-__ldg(offsets+index);
+            }
+            const bool active=rows>0;
+            peer_pointer<int32_t>(p,1)[pair*groups+index]=int(active && !seen);
+            seen=seen || active;
+        }
+        peer_pointer<int32_t>(p,0)[index]=int(seen);
+    } else if constexpr(Op==PeerOperation::FinalizeEmptyWgrad) {
+        const int groups=p.dim[0],expert=blockIdx.x%groups;
+        if(__ldg(peer_pointer<int32_t>(p,1)+expert))return;
+        const int64_t vectors=p.dim[1]/4;
+        auto* output=reinterpret_cast<float4*>(peer_pointer<float>(p,0)+int64_t(expert)*p.dim[1]);
+        for(int64_t at=int64_t(blockIdx.x/groups)*blockDim.x+threadIdx.x;at<vectors;
+            at+=int64_t(gridDim.x/groups)*blockDim.x)output[at]=make_float4(0,0,0,0);
     } else if constexpr (Op == PeerOperation::BuildWorkInfo) {
+        if constexpr(FirstWgradFlags) {
+            for(int e=index;e<p.dim[0];e+=gridDim.x*blockDim.x) {
+                const bool active=__ldg(peer_pointer<int32_t>(p,1)+e)>0;
+                const bool previous=peer_pointer<int32_t>(p,4)[e]!=0;
+                peer_pointer<int32_t>(p,5)[e]=int(active && !previous);
+                peer_pointer<int32_t>(p,4)[e]=int(previous || active);
+            }
+        }
         // Offsets, lengths, uint4 work records, work count.
         // dims: experts, capacity, block M.
         const auto* offsets = peer_pointer<int32_t>(p, 0);

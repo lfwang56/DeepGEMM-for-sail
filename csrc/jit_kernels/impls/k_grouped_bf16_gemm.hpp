@@ -34,6 +34,8 @@ public:
         bool output_tile_range = false;
         int b_padding_bytes = 0;
         int tsm_load_order = 0;
+        bool accumulate=true;
+        bool first_nonempty=false;
     };
 
     struct Args {
@@ -42,10 +44,11 @@ public:
         KGroupedGemmArgs kernel_params;
         void* cta_probe_ptr = nullptr;
         uint2 output_tile_range{};
+        const int32_t* first_flags=nullptr;
     };
 
     static std::string generate_impl(const Args& args) {
-        return fmt::format(
+        auto source=fmt::format(
             R"(
 #include <deep_gemm/impls/k_grouped_bf16_gemm.cuh>
 
@@ -91,21 +94,34 @@ __global__ void {}(const KGroupedGemmArgs args{}) {{
             args.launch_info.warp_map,
             args.launch_info.aiu_before_tsm,
             args.launch_info.kernel_name,
+            args.launch_info.first_nonempty ? ", const int32_t* first_flags" :
             args.launch_info.cta_probe ? ", unsigned long long* cta_probe"
                 : args.launch_info.output_tile_range ? ", const uint2 tile_range" : "",
             args.launch_info.cta_probe ? "const unsigned long long cta_begin = __ppu_read_clock64();" : "",
-            args.launch_info.tsm_load_order
+            args.launch_info.first_nonempty
+                ? fmt::format(", {}, {}, false, false, true",args.launch_info.b_padding_bytes,args.launch_info.tsm_load_order)
+                : args.launch_info.tsm_load_order
                 ? fmt::format(", {}, {}", args.launch_info.b_padding_bytes, args.launch_info.tsm_load_order)
                 : args.launch_info.b_padding_bytes ? fmt::format(", {}", args.launch_info.b_padding_bytes) : "",
+            args.launch_info.first_nonempty ? ", 0u, ~0u, nullptr, nullptr, nullptr, first_flags" :
             args.launch_info.output_tile_range ? ", tile_range.x, tile_range.y" : "",
             args.launch_info.cta_probe ?
                 "__syncthreads(); if (threadIdx.x == 0) { "
                 "cta_probe[2 * blockIdx.x] = cta_begin; "
                 "cta_probe[2 * blockIdx.x + 1] = __ppu_read_clock64(); }" : "");
+        if(!args.launch_info.accumulate) {
+            const std::string from="BLOCK_SIZE, NUM_STAGES, true,";
+            const auto pos=source.find(from);
+            DG_HOST_ASSERT(pos!=std::string::npos && source.find(from,pos+from.size())==std::string::npos);
+            source.replace(pos,from.size(),"BLOCK_SIZE, NUM_STAGES, false,");
+        }
+        return source;
     }
 
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
-        if (args.launch_info.output_tile_range)
+        if(args.launch_info.first_nonempty)
+            DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel,config,args.kernel_params,args.first_flags));
+        else if (args.launch_info.output_tile_range)
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.output_tile_range));
         else if (args.launch_info.cta_probe)
             DG_HGGC_UNIFIED_CHECK(launch_kernel(kernel, config, args.kernel_params, args.cta_probe_ptr));
@@ -121,7 +137,7 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     const std::vector<int>& ks_cpu, const torch::Tensor& grouped_layout,
     const bool device_lengths = false,
     const std::optional<torch::Tensor>& cta_probe = std::nullopt,
-    const int compute_cus_override = 0) {
+    const int compute_cus_override = 0, const bool accumulate=true, const int32_t* first_flags=nullptr) {
     const auto num_groups = static_cast<int>(ks_cpu.size());
     const int tsm_load_order = get_env<int>("DG_BF16_WGRAD_TSM_LOAD_ORDER", 0);
     DG_HOST_ASSERT(tsm_load_order >= 0 && tsm_load_order <= 2);
@@ -150,12 +166,14 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
     DG_HOST_ASSERT(smem_size <= 256 * 1024);
     std::string kernel_name = tile_chunk ? "bf16_k_grouped_gemm_tile_range"
         : cta_probe.has_value() ? "bf16_k_grouped_gemm_cta_probe" : "bf16_k_grouped_gemm";
+    if (!accumulate) kernel_name += "_overwrite";
+    if(first_flags) {DG_HOST_ASSERT(accumulate && !cta_probe && tile_chunk==0);kernel_name+="_first_nonempty";}
     if (b_padding_bytes) kernel_name += fmt::format("_bpad{}", b_padding_bytes);
     if (tsm_load_order) kernel_name += fmt::format("_tsmorder_v2_{}", tsm_load_order);
 
     auto args = Bf16KGroupedRuntime::Args{
         .launch_info = {m, n, num_groups, block_m, block_n, block_k,
-                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0, b_padding_bytes, tsm_load_order},
+                        warp_m, warp_n, num_stages, warp_map, bool(aiu_before_tsm), kernel_name, cta_probe.has_value(), tile_chunk != 0, b_padding_bytes, tsm_load_order,accumulate,first_flags!=nullptr},
         .launch_args = {get_grid_shape(num_sms), dim3(block_size), smem_size},
         .kernel_params = {
             .a_ptr = a.data_ptr(),
@@ -165,6 +183,7 @@ static void k_grouped_bf16_gemm_tn_contiguous_impl(
         }
     };
 
+    args.first_flags=first_flags;
     const auto& code = Bf16KGroupedRuntime::generate(args);
     const auto& runtime = compiler->build(kernel_name, code);
     const auto& kernel = runtime->kernel;

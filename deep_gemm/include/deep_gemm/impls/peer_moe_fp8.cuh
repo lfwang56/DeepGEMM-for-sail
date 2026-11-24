@@ -3,7 +3,60 @@
 #include <deep_gemm/impls/fp8_gemm.cuh>
 #include <deep_gemm/impls/peer_moe_gemm.cuh>
 
+#if DG_TRAINING_FP8_TILE_PRODUCER
+#include <deep_gemm/impls/peer_moe_fp8_dispatch_mainloop.cuh>
+#endif
+#if DG_TRAINING_FP8_PEER_INPUT && DG_TRAINING_FP8_INPUT_K_SLICE
+#include <deep_gemm/impls/peer_moe_fp8_kready_mainloop.cuh>
+#endif
 namespace deep_gemm {
+
+
+#if DG_TRAINING_FP8_EXPERT_END
+// Native expert-major/two-M swizzle over a range. Global row/weight offsets
+// remain native; only work ordinals restart at zero for this independent batch.
+template<class NativeScheduler>
+struct TrainingFp8ExpertBatchScheduler : NativeScheduler {
+    CUTLASS_DEVICE explicit TrainingFp8ExpertBatchScheduler(typename NativeScheduler::Params const& p):NativeScheduler(p) {
+        static_assert(!NativeScheduler::kIsNoPadPreprocessLayout);
+        this->curr_group_idx=DG_TRAINING_FP8_EXPERT_BEGIN;
+        this->curr_cumsum=this->curr_cumsum_m=0;
+        for(uint32_t e=0;e<DG_TRAINING_FP8_EXPERT_BEGIN;++e)this->curr_cumsum_m+=__ldg(p.grouped_layout+e);
+    }
+    CUTLASS_DEVICE bool fetch_next_work(uint32_t& mi,uint32_t& ni) {
+        constexpr uint32_t columns=(NativeScheduler::SHAPE_N+NativeScheduler::BLOCK_N-1)/NativeScheduler::BLOCK_N;
+        const uint32_t work=(this->current_iter++)*gridDim.x+blockIdx.x;
+        while(this->curr_group_idx<DG_TRAINING_FP8_EXPERT_END) {
+            this->curr_group_m=__ldg(this->params.grouped_layout+this->curr_group_idx);
+            const uint32_t blocks=(this->curr_group_m+NativeScheduler::BLOCK_M-1)/NativeScheduler::BLOCK_M;
+            if(work<(this->curr_cumsum+blocks)*columns) {
+                this->get_swizzled_block_idx(blocks,work-this->curr_cumsum*columns,mi,ni);return true;
+            }
+            this->curr_cumsum+=blocks;this->curr_cumsum_m+=this->curr_group_m;++this->curr_group_idx;
+        }
+        mi=0;ni=columns;return false;
+    }
+};
+#endif
+
+template <class NativeScheduler>
+struct TrainingFp8TileOwnerScheduler : NativeScheduler {
+    uint32_t owned_m = blockIdx.x, next_n = 0;
+    CUTLASS_DEVICE explicit TrainingFp8TileOwnerScheduler(typename NativeScheduler::Params const& p) : NativeScheduler(p) {}
+    CUTLASS_DEVICE bool fetch_next_work(uint32_t& mi, uint32_t& ni) {
+      constexpr uint32_t columns = (NativeScheduler::SHAPE_N + NativeScheduler::BLOCK_N - 1) / NativeScheduler::BLOCK_N;
+      if (next_n == columns) { owned_m += gridDim.x;next_n = 0; }
+      while (this->curr_group_idx < NativeScheduler::kNumGroups) {
+        this->curr_group_m = __ldg(this->params.grouped_layout + this->curr_group_idx);
+        const uint32_t blocks = (this->curr_group_m + NativeScheduler::BLOCK_M - 1) / NativeScheduler::BLOCK_M;
+        if (owned_m < this->curr_cumsum + blocks) {
+          mi = owned_m - this->curr_cumsum;ni = next_n++;return true;
+        }
+        this->curr_cumsum += blocks;this->curr_cumsum_m += this->curr_group_m;++this->curr_group_idx;
+      }
+      return false;
+    }
+};
 
 // Native expert-major/two-M swizzle with a shared atomic work ordinal. Two
 // independently launched worker grids can join/leave without losing tiles.
@@ -47,9 +100,15 @@ template <class ProblemShape_, class CollectiveMainloop_, class CollectiveEpilog
 class TrainingFp8PeerReturn {
 public:
     static_assert(!kEnableSboOverlap && !kUseNStageKernel);
+#if DG_TRAINING_FP8_TILE_PRODUCER
+    using CollectiveMainloop = TrainingFp8DispatchMainloop<CollectiveMainloop_>;
+#elif DG_TRAINING_FP8_PEER_INPUT && DG_TRAINING_FP8_INPUT_K_SLICE
+    using CollectiveMainloop = TrainingFp8KReadyMainloop<CollectiveMainloop_, TileScheduler_::SHAPE_K>;
+#else
     using CollectiveMainloop = CollectiveMainloop_;
+#endif
     using CollectiveEpilogue = CollectiveEpilogue_;
-    using Base = DeepGemmUniversal<ProblemShape_, CollectiveMainloop_, CollectiveEpilogue_, TileScheduler_, false, false>;
+    using Base = DeepGemmUniversal<ProblemShape_, CollectiveMainloop, CollectiveEpilogue_, TileScheduler_, false, false>;
     using ProblemShape = typename Base::ProblemShape;
     using TileShape = typename Base::TileShape;
     using TiledMma = typename Base::TiledMma;
@@ -74,7 +133,7 @@ public:
     CUTLASS_DEVICE void
   operator()(Params const& params, const training::PeerGemmParams& peers,
              const training::PeerDispatchPipeline& input, const training::PeerDispatchPipeline& output,
-             uint32_t* input_work_counter,char* smem_buf) {
+             uint32_t* input_work_counter,const training::PeerFp8ProducerGradient& producer_gradient,char* smem_buf) {
     using namespace cute;
     using X = Underscore;
     int warp_idx = cutlass::canonical_warp_idx_sync();
@@ -88,7 +147,7 @@ public:
       }
     }
 
-#if DG_TRAINING_FP8_RETURN_PIPELINE || DG_TRAINING_FP8_INPUT_DYNAMIC
+#if DG_TRAINING_FP8_RETURN_PIPELINE || DG_TRAINING_FP8_INPUT_DYNAMIC || DG_TRAINING_FP8_TILE_PRODUCER || DG_TRAINING_FP8_INPUT_K_SLICE
     __shared__ int return_layout_bad;
     if(threadIdx.x==0) {
       return_layout_bad=0;int64_t total_rows=0;
@@ -98,11 +157,15 @@ public:
         total_rows+=rows;
       }
       if(total_rows>params.scheduler.shape_m)return_layout_bad=1;
-      if(return_layout_bad)atomicOr(DG_TRAINING_FP8_INPUT_DYNAMIC ? input.status : output.status,2u);
+      if(return_layout_bad)atomicOr((DG_TRAINING_FP8_INPUT_DYNAMIC || DG_TRAINING_FP8_TILE_PRODUCER || DG_TRAINING_FP8_INPUT_K_SLICE) ? input.status : output.status,2u);
     }
     __syncthreads();if(return_layout_bad)return;
 #endif
-#if DG_TRAINING_FP8_INPUT_DYNAMIC
+#if DG_TRAINING_FP8_EXPERT_END
+    TrainingFp8ExpertBatchScheduler<TileScheduler> deep_scheduler{params.scheduler};
+#elif DG_TRAINING_FP8_TILE_PRODUCER
+    TrainingFp8TileOwnerScheduler<TileScheduler> deep_scheduler{params.scheduler};
+#elif DG_TRAINING_FP8_INPUT_DYNAMIC
     TrainingFp8InputWorkScheduler<TileScheduler> deep_scheduler{params.scheduler,input_work_counter};
 #else
     TileScheduler deep_scheduler{params.scheduler};
@@ -143,7 +206,7 @@ public:
       auto offset_scalea = deep_scheduler.curr_offset_scalea();
       auto scale_offset_b = deep_scheduler.curr_offset_b(m_block_idx);
       const auto offset_a = deep_scheduler.curr_offset_a(get<2>(params.mainloop.dA));
-#if DG_TRAINING_FP8_PEER_INPUT
+#if DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_INPUT_K_SLICE
       const uint32_t input_row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
       const uint32_t input_valid_rows = uint32_t(cute::min(int(size<0>(TileShape{})), int(M) - int(m_coord) * int(size<0>(TileShape{}))));
       __shared__ int input_failed;
@@ -193,6 +256,17 @@ public:
 
       auto blk_coord_mnkl = make_coord(m_coord, n_coord, _, l_coord);
       CollectiveMainloop collective_mainloop;
+#if DG_TRAINING_FP8_PEER_INPUT && DG_TRAINING_FP8_INPUT_K_SLICE
+      collective_mainloop.configure(input, uint32_t(offset_a/K)+uint32_t(m_coord)*size<0>(TileShape{}),
+          cute::min(int(size<0>(TileShape{})),int(M)-int(m_coord)*int(size<0>(TileShape{}))),K);
+#endif
+#if DG_TRAINING_FP8_TILE_PRODUCER
+      __shared__ uint64_t producer_addresses[128];
+      __shared__ float producer_scores[128];
+      collective_mainloop.configure(peers, producer_gradient, producer_scores, input.status, producer_addresses,
+          uint32_t(offset_a / K) + uint32_t(m_coord) * 128, uint32_t(m_coord) * 128,
+          params.scheduler.shape_m, K, n_coord == 0);
+#endif
       // update actual global ptr offset
       MainloopParams update_params = {
         ptr_A, params.mainloop.dA, ptr_B, params.mainloop.dB, 4,
@@ -227,6 +301,9 @@ public:
         thread_idx,
         smem_buf
       );
+#if DG_TRAINING_FP8_TILE_PRODUCER
+      if (n_coord == 0) { __threadfence();__syncthreads(); }
+#endif
       auto thread_mma = tiled_mma.get_thread_slice(thread_idx);
       const auto coordinates = thread_mma.partition_C(make_identity_tensor(take<0, 2>(blk_shape)));
       const uint32_t row_base = uint32_t(offset_a / K) + uint32_t(m_coord) * size<0>(TileShape{});
@@ -238,7 +315,7 @@ public:
       training::activation_backward_epilogue<TileScheduler::SHAPE_N,false>(
           accumulators,coordinates,peers,row_base,valid_rows,uint32_t(n_coord)*size<1>(TileShape{}));
 #endif
-#if !DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_RETURN_PIPELINE && !DG_TRAINING_FP8_ACTIVATION_BACKWARD
+#if !DG_TRAINING_FP8_EXPERT_END && !DG_TRAINING_FP8_PEER_INPUT && !DG_TRAINING_FP8_RETURN_PIPELINE && !DG_TRAINING_FP8_ACTIVATION_BACKWARD && !DG_TRAINING_FP8_TILE_PRODUCER
 #if DG_TRAINING_FP8_RETURN_STORE_BYTES == 16
       // The Tensor Cell mainloop is finished. Reuse its TSM for one rounded
       // BF16 tile, then issue contiguous local/peer 128-bit stores. No extra
@@ -347,7 +424,7 @@ public:
     static constexpr int SharedStorageSize=0; // Dynamic TSM; row addresses are static shared.
     static constexpr int MinBlocksPerMultiprocessor=1;
     CUTLASS_DEVICE void operator()(Params const& params,const training::PeerGemmParams& peers,
-        const training::PeerDispatchPipeline&,const training::PeerDispatchPipeline& output,uint32_t*,char*) {
+        const training::PeerDispatchPipeline&,const training::PeerDispatchPipeline& output,uint32_t*,const training::PeerFp8ProducerGradient&,char*) {
         static_assert(TileScheduler::BLOCK_M==128 && TileScheduler::BLOCK_N==256);
         static_assert(TileScheduler::GEMM_TYPE==GemmType::MGroupedNoPad);
         constexpr uint32_t width=TileScheduler::SHAPE_N,stride=DG_TRAINING_FP8_RETURN_STRIDE;

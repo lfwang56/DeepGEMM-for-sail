@@ -195,6 +195,57 @@ __device__ __forceinline__ void pack_producer_input_rows(
     __syncthreads();
 }
 
+// The first dHidden N slice owns the complete M tile. Gather raw DY once,
+// retain weighted BF16 DY for DW2, and run real dHidden/activation/dScore work.
+template <uint32_t BM,uint32_t K,uint32_t Threads,uint32_t CopyILP>
+__device__ __forceinline__ void pack_dhidden_producer_rows(
+        const uint64_t* addresses,const PeerGemmParams& params,
+        const PeerDHiddenScores& scores,uint32_t base) {
+    __shared__ float row_scores[BM];
+    for(uint32_t row=threadIdx.x;row<BM;row+=Threads) {
+        const int route=params.permutation[base+row];float score=0.f;
+        if(route>=0) {
+            const uint32_t owner=uint32_t(route)/params.destination_rows_per_rank;
+            if(owner<params.num_ranks) {
+                score=reinterpret_cast<const float*>(scores.score_peers[owner])[
+                    uint32_t(route)%params.destination_rows_per_rank];
+            } else atomicOr(scores.status,2u);
+        }
+        row_scores[row]=score;
+        const_cast<float*>(scores.row_scores)[base+row]=score;
+    }
+    __syncthreads();
+    auto* raw_out=reinterpret_cast<uint4*>(const_cast<void*>(params.gemm.a_ptr))+uint64_t(base)*(K/8);
+    auto* weighted_out=reinterpret_cast<uint4*>(scores.packed_dy)+uint64_t(base)*(K/8);
+    for(uint32_t item=threadIdx.x;item<BM*(K/8);item+=Threads*CopyILP) {
+        uint4 values[CopyILP];
+        #pragma unroll
+        for(uint32_t j=0;j<CopyILP;++j) {
+            const uint32_t at=item+j*Threads;uint4 value{};
+            if(at<BM*(K/8)) {
+                const uint32_t row=at/(K/8),column=at%(K/8);
+                if(addresses[row])value=reinterpret_cast<const uint4*>(addresses[row])[column];
+            }
+            values[j]=value;
+        }
+        #pragma unroll
+        for(uint32_t j=0;j<CopyILP;++j) {
+            const uint32_t at=item+j*Threads;
+            if(at<BM*(K/8)) {
+                const uint4 raw=values[j];raw_out[at]=raw;
+                const auto* input=reinterpret_cast<const __ppu_bfloat16*>(&raw);
+                uint4 weighted;auto* pairs=reinterpret_cast<uint32_t*>(&weighted);
+                const float score=row_scores[at/(K/8)];
+                #pragma unroll
+                for(int q=0;q<4;++q)pairs[q]=tix::cvt_rte_bf16x2_f32(
+                    __bfloat162float(input[2*q+1])*score,__bfloat162float(input[2*q])*score);
+                weighted_out[at]=weighted;
+            }
+        }
+    }
+    __threadfence();__syncthreads();
+}
+
 template <uint32_t BM, uint32_t K, uint32_t Threads>
 __device__ __forceinline__ void cache_peer_input_rows(
         uint64_t* addresses, const PeerGemmParams& params,
@@ -697,7 +748,7 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
         }
     }
     static_assert(!DHiddenScores || (ActivationBackward && GateUpG8 && !ReplayGradients
-                                    && !PeerRead && !PeerWrite && !DispatchPipeline));
+                                    && (!PeerRead || ProducerInputAiu) && !PeerWrite && !DispatchPipeline));
     const auto& args = params.gemm;
     constexpr uint32_t STRIDE_AM = SHAPE_K;
     constexpr uint32_t STRIDE_BE = SHAPE_N * SHAPE_K;
@@ -931,9 +982,13 @@ training_bf16_peer_gemm_impl(const training::PeerGemmParams params,
             if constexpr (DispatchCacheN != 0)
                 training::cache_peer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE>(cached_source_addresses,
                     params, deep_scheduler.curr_block_m_offset, params.pack_input && n_block_idx == 0);
-            if constexpr (ProducerInputAiu)
-                training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
+            if constexpr (ProducerInputAiu) {
+                if constexpr (DHiddenScores)
+                    training::pack_dhidden_producer_rows<BLOCK_M,SHAPE_K,BLOCK_SIZE,InputCopyILP>(
+                        cached_source_addresses,params,dhidden_scores,deep_scheduler.curr_block_m_offset);
+                else training::pack_producer_input_rows<BLOCK_M, SHAPE_K, BLOCK_SIZE, InputCopyILP>(
                     cached_source_addresses, params, deep_scheduler.curr_block_m_offset);
+            }
           }
           training::peer_compute_sync<SyncThreads>();
           source_addresses = cached_source_addresses;

@@ -85,6 +85,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--eager", action="store_true")
     parser.add_argument("--profile", action="store_true", help="Profiler API brackets only timed iterations")
+    parser.add_argument("--fresh-weight-gradients",action="store_true",help="Use backward fresh F32 DW outputs for every backend; initialization stays inside timing")
     parser.add_argument("--scope", choices=("step", "forward", "backward"), default="step",
                         help="Backward retains full replay and FP32 gradient zero/accumulation")
     parser.add_argument("--topology", default="unspecified")
@@ -209,7 +210,7 @@ def main():
     scores = torch.randn(t, k, device=device).softmax(-1)
     dy = (torch.randn_like(x) * 0.1).bfloat16()
     valid = torch.full((), t, device=device, dtype=torch.int32)
-    accumulators = (torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
+    accumulators = None if args.fresh_weight_gradients else (torch.zeros_like(w1, dtype=torch.float32), torch.zeros_like(w2, dtype=torch.float32))
     stream = torch.cuda.Stream(device)
     stream.wait_stream(torch.cuda.current_stream())
     if args.deepep_scaleup:
@@ -336,7 +337,8 @@ def main():
 
             def step():
                 plan.reset_errors()
-                for gradient in accumulators: gradient.zero_()
+                if accumulators is not None:
+                    for gradient in accumulators: gradient.zero_()
                 output = plan.forward(x, ids, scores, w1, w2, valid)
                 dx, dw1, dw2, ds = plan.backward(dy, x, ids, scores, w1, w2, valid, accumulators)
                 return output, dx, dw1, dw2, ds
@@ -347,8 +349,8 @@ def main():
                 plan.reset_errors()
                 if args.scope == "forward":
                     return (plan.forward(x, ids, scores, w1, w2, valid),)
-                for gradient in accumulators:
-                    gradient.zero_()
+                if accumulators is not None:
+                    for gradient in accumulators:gradient.zero_()
                 return plan.backward(dy, x, ids, scores, w1, w2, valid, accumulators)
 
             for _ in range(args.warmup):
@@ -513,6 +515,8 @@ def main():
                     "fp8_mn_major_scales": getattr(plan, "fp8_mn_major_scales", None),
                     "communication_dtype": getattr(plan, "communication_dtype", "bf16"),
                     "wgrad_recipe": "bf16_inputs_fp32_accumulation",
+                    "gradient_initialization_policy":"fresh_backward_outputs"if args.fresh_weight_gradients else"external_zero_then_accumulate",
+                    "peer_wgrad_first_overwrite":getattr(plan,"wgrad_first_overwrite",False),
                     "weight_quantization_in_timing": args.compute == "fp8",
                     "peer_input_helper_threads": getattr(plan, "input_helper_threads", None),
                     "peer_input_helper_block_m": getattr(plan, "input_helper_block_m", None),

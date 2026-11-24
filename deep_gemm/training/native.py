@@ -539,6 +539,12 @@ class NativeMoEPlan:
             _launch(4, [self.packed_output, self.permutation, self.route_values], [self.rows, self.h, self.routes])
         self._return_routes()
 
+    def _combine_local_routes(self, values, scores, output, start, weighted):
+        tensors = [values, scores, output]
+        if getattr(self, 'skip_masked_route_zero', False):
+            tensors.append(self.local_ids)
+        _launch(6, tensors, [self.chunk_tokens, self.h, self.k, scores.shape[0], start, int(weighted)])
+
     @torch.no_grad()
     def forward(self, x, ids, scores, w1, w2, valid_tokens, *, _chunk_output_callback=None):
         if _chunk_output_callback is not None:
@@ -555,8 +561,7 @@ class NativeMoEPlan:
             for start in range(0, self.max_tokens, self.chunk_tokens):
                 self._route_chunk(x, ids, valid_tokens, start)
                 self._chunk_forward(w1, w2)
-                _launch(6, [self.local_values, scores, output],
-                        [self.chunk_tokens, self.h, self.k, x.shape[0], start, 1])
+                self._combine_local_routes(self.local_values, scores, output, start, True)
                 if _chunk_output_callback is not None:
                     _chunk_output_callback(output,start,max(0,min(self.chunk_tokens,x.shape[0]-start)))
             if self.check_errors and not torch.cuda.is_current_stream_capturing():

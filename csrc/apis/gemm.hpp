@@ -20,6 +20,7 @@
 #include "../jit_kernels/impls/m_grouped_fp4_gemm.hpp"
 #include "../jit_kernels/impls/fused_moe_gemm.hpp"
 #include "../jit_kernels/impls/k_grouped_bf16_gemm.hpp"
+#include "../jit_kernels/impls/k_grouped_bf16_segmented.hpp"
 #include "../jit_kernels/impls/moe_align.hpp"
 #include "../jit_kernels/impls/m_grouped_w4a16_gemm.hpp"
 #include "../jit_kernels/impls/m_grouped_w4a8_gemm.hpp"
@@ -964,7 +965,7 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
                                         const torch::Tensor& grouped_layout,
                                         const int max_group_k,
                                         const std::optional<torch::Tensor>& cta_probe = std::nullopt,
-                                        const int compute_cus = 0) {
+                                        const int compute_cus = 0, const bool accumulate = true, const std::optional<torch::Tensor>& first_flags=std::nullopt) {
     DG_HOST_ASSERT(a.is_cuda() && a.dim() == 2 && a.is_contiguous());
     DG_HOST_ASSERT(b.is_cuda() && b.dim() == 2 && b.is_contiguous());
     DG_HOST_ASSERT(d.is_cuda() && d.dim() == 3 && d.is_contiguous());
@@ -997,8 +998,50 @@ static void k_grouped_bf16_gemm_tn_device(const torch::Tensor& a,
         DG_HOST_ASSERT(!overlaps(*cta_probe, a) && !overlaps(*cta_probe, b)
                        && !overlaps(*cta_probe, d) && !overlaps(*cta_probe, grouped_layout));
     }
+    if(first_flags) {
+        const auto& flags=*first_flags;
+        DG_HOST_ASSERT(accumulate && !cta_probe && flags.device()==d.device() && flags.dim()==1 && flags.numel()==groups);
+        DG_HOST_ASSERT(flags.is_contiguous() && flags.scalar_type()==torch::kInt32);
+        DG_HOST_ASSERT(!overlaps(flags,d) && !overlaps(flags,a) && !overlaps(flags,b) && !overlaps(flags,grouped_layout));
+    }
     k_grouped_bf16_gemm_tn_contiguous_impl(
-        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true, cta_probe, compute_cus);
+        a, b, d, d, m, n, capacity, std::vector<int>(groups, max_group_k), grouped_layout, true, cta_probe, compute_cus,accumulate,first_flags?first_flags->data_ptr<int32_t>():nullptr);
+}
+
+
+// Each segment stores row-major BF16 A/B with GPU 128-aligned prefix offsets.
+// Offsets must be monotonic, begin at0, and end within each segment's capacity.
+static void k_grouped_bf16_gemm_tn_segments(
+        const std::vector<torch::Tensor>& a,const std::vector<torch::Tensor>& b,
+        const torch::Tensor& d,const std::vector<torch::Tensor>& offsets,
+        int config_k,bool accumulate=true,int max_continuous_k=0,const std::optional<torch::Tensor>& first_flags=std::nullopt) {
+    DG_HOST_ASSERT(a.size()>0 && a.size()<=8 && b.size()==a.size() && offsets.size()==a.size());
+    DG_HOST_ASSERT(d.is_cuda() && d.dim()==3 && d.is_contiguous() && d.scalar_type()==torch::kFloat);
+    const auto [g,m,n]=get_shape<3>(d);DG_HOST_ASSERT(g>0 && m>0 && n>0 && d.numel()<=INT32_MAX);
+    DG_HOST_ASSERT(config_k>0 && config_k%128==0);
+    const auto overlap=[](const torch::Tensor& x,const torch::Tensor& y) {
+        const auto p=reinterpret_cast<uintptr_t>(x.data_ptr()),q=reinterpret_cast<uintptr_t>(y.data_ptr());
+        return x.numel() && y.numel() && p<q+y.numel()*y.element_size() && q<p+x.numel()*x.element_size();
+    };
+    for(size_t j=0;j<a.size();++j) {
+        DG_HOST_ASSERT(a[j].is_cuda() && b[j].is_cuda() && offsets[j].is_cuda());
+        DG_HOST_ASSERT(a[j].device()==d.device() && b[j].device()==d.device() && offsets[j].device()==d.device());
+        DG_HOST_ASSERT(a[j].dim()==2 && b[j].dim()==2 && a[j].is_contiguous() && b[j].is_contiguous());
+        DG_HOST_ASSERT(a[j].scalar_type()==torch::kBFloat16 && b[j].scalar_type()==torch::kBFloat16);
+        DG_HOST_ASSERT(a[j].size(0)==b[j].size(0) && a[j].size(0)%128==0 && a[j].size(1)==m && b[j].size(1)==n);
+        DG_HOST_ASSERT(a[j].numel()<=INT32_MAX && b[j].numel()<=INT32_MAX);
+        DG_HOST_ASSERT(offsets[j].dim()==1 && offsets[j].is_contiguous() && offsets[j].scalar_type()==torch::kInt32 && offsets[j].numel()==g+1);
+        DG_HOST_ASSERT(!overlap(d,a[j]) && !overlap(d,b[j]) && !overlap(d,offsets[j]));
+    }
+    const c10::cuda::CUDAGuard guard(d.device());DG_HOST_ASSERT(get_ppu_arch()==AC_PPU0015);
+    DG_HOST_ASSERT(max_continuous_k==0 || max_continuous_k==5120 || max_continuous_k==10240);
+    if(first_flags) {
+        const auto& flags=*first_flags;
+        DG_HOST_ASSERT(accumulate && flags.device()==d.device() && flags.dim()==1 && flags.numel()==g);
+        DG_HOST_ASSERT(flags.is_contiguous() && flags.scalar_type()==torch::kInt32 && !overlap(flags,d));
+        for(size_t j=0;j<a.size();++j)DG_HOST_ASSERT(!overlap(flags,a[j]) && !overlap(flags,b[j]) && !overlap(flags,offsets[j]));
+    }
+    k_grouped_bf16_segmented_impl_host(a,b,offsets,d,config_k,accumulate,max_continuous_k,first_flags?first_flags->data_ptr<int32_t>():nullptr);
 }
 
 void m_grouped_bf16_gemm_nt_contiguous(const torch::Tensor& lhs, const torch::Tensor& rhs,
@@ -2028,7 +2071,9 @@ static void register_apis(pybind11::module_& m) {
     });
     m.def("k_grouped_bf16_gemm_tn_device", &k_grouped_bf16_gemm_tn_device,
           py::arg("a"), py::arg("b"), py::arg("d"), py::arg("grouped_layout"), py::arg("max_group_k"),
-          py::arg("cta_probe") = std::nullopt, py::arg("compute_cus") = 0);
+          py::arg("cta_probe") = std::nullopt, py::arg("compute_cus") = 0,py::arg("accumulate")=true,py::arg("first_flags")=std::nullopt);
+    m.def("k_grouped_bf16_gemm_tn_segments",&k_grouped_bf16_gemm_tn_segments,
+          py::arg("a"),py::arg("b"),py::arg("d"),py::arg("offsets"),py::arg("config_k"),py::arg("accumulate")=true,py::arg("max_continuous_k")=0,py::arg("first_flags")=std::nullopt);
     // BF16 GEMMs
     m.def("gemm_fp32_fp32_fp32_nt", &gemm_fp32_fp32_fp32_nt,
           py::arg("a"), py::arg("b"), py::arg("d"));

@@ -10,7 +10,7 @@ template <GemmType kGemmType,
           uint32_t BLOCK_M_, uint32_t BLOCK_N_,
           uint32_t kNumGroups_,
           uint32_t kNumNBlocks = math::ceil_div(SHAPE_N_, BLOCK_N_),
-          uint32_t kNum1DBlocksPerGroup = 2>
+          uint32_t kNum1DBlocksPerGroup = 2, bool VisitEmptyGroups=false>
 struct KGroupedScheduler {
     static_assert(is_k_grouped_contiguous(kGemmType), "KGroupedScheduler requires a K-grouped GEMM type");
 
@@ -76,7 +76,7 @@ struct KGroupedScheduler {
             group_idx = next_block_idx / blocks_per_group;
             load_group_bounds(group_idx);
             // beta=1: empty groups keep the existing output and have no work.
-            if (current_shape_k == 0) {
+            if (!VisitEmptyGroups && current_shape_k == 0) {
                 continue;
             }
 

@@ -22,13 +22,12 @@ template <class _SrcT, class _DstT, GemmType kGemmType,
           uint32_t BLOCK_M, uint32_t BLOCK_N, uint32_t BLOCK_K,
           uint32_t WARP_M, uint32_t WARP_N,
           uint32_t BLOCK_SIZE, int kNumStages, bool kWithAccumulation,
-          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0, bool PerFeatureScales = false, bool FeatureMajorPanels = false>
+          uint32_t WarpMap = 0, bool AiuBeforeTsm = true, uint32_t BPadBytes = 0, uint32_t TsmLoadOrder = 0, bool PerFeatureScales = false, bool FeatureMajorPanels = false, bool FirstNonemptyOverwrite=false>
 __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs args,
         uint32_t first_output_tile = 0, uint32_t end_output_tile = ~0u,
         const float* feature_scales_a = nullptr, const float* feature_scales_b = nullptr,
-        const int32_t* external_offsets = nullptr) {
+        const int32_t* external_offsets = nullptr, const int32_t* first_flags=nullptr) {
     static_assert(is_k_grouped_contiguous(kGemmType), "K-grouped GEMM type required");
-    static_assert(kWithAccumulation, "K-grouped wgrad requires beta=1");
     static_assert(SHAPE_M > 0 and SHAPE_N > 0 and kNumGroups > 0, "M, N and groups must be positive");
     static_assert(kNumStages >= 2, "The multistage pipeline requires at least two stages");
     static_assert(BLOCK_K > 0 && 128 % BLOCK_K == 0,
@@ -55,7 +54,7 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
         cute::Layout<Shape<Int<BLOCK_M / WARP_M>, Int<BLOCK_N / WARP_N>, _1>>>;
     static_assert(BLOCK_SIZE == 32 * (BLOCK_M / WARP_M) * (BLOCK_N / WARP_N));
     static_assert(BLOCK_SIZE >= 64, "Split A/B AIU copy requires at least two warps");
-    using TileScheduler = KGroupedScheduler<kGemmType, SHAPE_N, BLOCK_M, BLOCK_N, kNumGroups>;
+    using TileScheduler = KGroupedScheduler<kGemmType, SHAPE_N, BLOCK_M, BLOCK_N, kNumGroups,math::ceil_div(SHAPE_N,BLOCK_N),2,!kWithAccumulation>;
 
     constexpr uint32_t kSmemASize = smem_a_size(sizeof(SrcT), kNumStages, BLOCK_M, BLOCK_K);
     extern __shared__ __align__(128) uint8_t smem_buffer[];
@@ -179,6 +178,16 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
         const uint32_t blk_n_offset = n_block_idx * BLOCK_N;
         DstT* c_group = reinterpret_cast<DstT*>(args.c_ptr) + static_cast<size_t>(curr_group_idx) * STRIDE_CG;
 
+        // Overwrite mode owns every output tile, including empty experts.
+        // No atomics, split-K partials, inter-CTA dependency, or read of old D.
+        if constexpr(!kWithAccumulation) {
+            if(group_k==0) {
+                clear(accum);
+                epilogue_no_tsm<AccT,DstT,SHAPE_N,BLOCK_N,STRIDE_CM,false,false>(
+                    accum,tCcC,c_group,c_row_base,num_valid_rows,blk_n_offset);
+                continue;
+            }
+        }
         // Bind A/B to the current group's base and current M/N tile.
         auto blk_coord_mnkl = make_coord(m_block_idx, n_block_idx, _, _1{});
         const uint32_t k_begin = PerFeatureScales ? uint32_t(external_offsets[curr_group_idx]) : scheduler.current_k_start;
@@ -304,21 +313,45 @@ __device__ __forceinline__ void bf16_k_grouped_gemm_impl(const KGroupedGemmArgs 
                 }
             }
         }
-        // Epilogue: reuse fused MoE's no-TSM store with FP32 beta=1.
-        using TCcC = decltype(tCcC);
-        if constexpr (cute::is_same_v<AccT, float> && cute::is_same_v<DstT, float> &&
-                      SHAPE_M % BLOCK_M == 0 && SHAPE_N % BLOCK_N == 0 &&
-                      SHAPE_N % 4 == 0 && size<0,2>(TCcC{}) == 2) {
-            if ((reinterpret_cast<uintptr_t>(c_group) & 15) == 0) {
-                epilogue_no_tsm_float4<SHAPE_N>(
-                    accum, tCcC, c_group, c_row_base, blk_n_offset);
+        if constexpr(FirstNonemptyOverwrite) {
+            if(__ldg(first_flags+curr_group_idx)!=0) {
+                epilogue_no_tsm<AccT,DstT,SHAPE_N,BLOCK_N,STRIDE_CM,false,false>(
+                    accum,tCcC,c_group,c_row_base,num_valid_rows,blk_n_offset);
+            } else {
+            // Epilogue: reuse fused MoE's no-TSM store with FP32 beta=1.
+            using TCcC = decltype(tCcC);
+            if constexpr (kWithAccumulation && cute::is_same_v<AccT, float> && cute::is_same_v<DstT, float> &&
+                          SHAPE_M % BLOCK_M == 0 && SHAPE_N % BLOCK_N == 0 &&
+                          SHAPE_N % 4 == 0 && size<0,2>(TCcC{}) == 2) {
+                if ((reinterpret_cast<uintptr_t>(c_group) & 15) == 0) {
+                    epilogue_no_tsm_float4<SHAPE_N>(
+                        accum, tCcC, c_group, c_row_base, blk_n_offset);
+                } else {
+                    epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM, kWithAccumulation, false>(
+                        accum, tCcC, c_group, c_row_base, num_valid_rows, blk_n_offset);
+                }
             } else {
                 epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM, kWithAccumulation, false>(
                     accum, tCcC, c_group, c_row_base, num_valid_rows, blk_n_offset);
             }
+            }
         } else {
-            epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM, kWithAccumulation, false>(
-                accum, tCcC, c_group, c_row_base, num_valid_rows, blk_n_offset);
+            // Epilogue: reuse fused MoE's no-TSM store with FP32 beta=1.
+            using TCcC = decltype(tCcC);
+            if constexpr (kWithAccumulation && cute::is_same_v<AccT, float> && cute::is_same_v<DstT, float> &&
+                          SHAPE_M % BLOCK_M == 0 && SHAPE_N % BLOCK_N == 0 &&
+                          SHAPE_N % 4 == 0 && size<0,2>(TCcC{}) == 2) {
+                if ((reinterpret_cast<uintptr_t>(c_group) & 15) == 0) {
+                    epilogue_no_tsm_float4<SHAPE_N>(
+                        accum, tCcC, c_group, c_row_base, blk_n_offset);
+                } else {
+                    epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM, kWithAccumulation, false>(
+                        accum, tCcC, c_group, c_row_base, num_valid_rows, blk_n_offset);
+                }
+            } else {
+                epilogue_no_tsm<AccT, DstT, SHAPE_N, BLOCK_N, STRIDE_CM, kWithAccumulation, false>(
+                    accum, tCcC, c_group, c_row_base, num_valid_rows, blk_n_offset);
+            }
         }
     }
 }

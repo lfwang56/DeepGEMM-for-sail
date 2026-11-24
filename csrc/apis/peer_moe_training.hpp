@@ -30,8 +30,13 @@ public:
         const bool assist = args.operation == int(PeerOperation::AssistInputTiles) && specialize;
         const bool tiled_quant=args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTiles) ||
                                args.operation==int(PeerOperation::ExpertLocalGradientsQuantizedTilesCached);
-        const bool input_tiles = args.operation == int(PeerOperation::PackQuantizedInputTiles);
-        const bool fused_quant = input_tiles || args.operation == int(PeerOperation::ReturnGemmTiles) || args.operation == int(PeerOperation::PackActiveQuantized) ||
+        const bool gradient_input = args.operation == int(PeerOperation::GradientQuantizedInputTiles);
+        const bool input_tiles = args.operation == int(PeerOperation::PackQuantizedInputTiles) || gradient_input;
+        const bool first_flags=args.operation==int(PeerOperation::BuildWorkInfo) && args.params.ptr[4]!=nullptr;
+        const bool expert_batch=args.operation==int(PeerOperation::PackExpertBatch) || args.operation==int(PeerOperation::GradientExpertBatch);
+        const int source_ilp=get_env<int>("DG_MOE_FP8_EXPERT_SOURCE_ILP",1);
+        DG_HOST_ASSERT(source_ilp==1 || source_ilp==2 || source_ilp==4);
+        const bool fused_quant = expert_batch || input_tiles || args.operation == int(PeerOperation::ReturnGemmTiles) || args.operation == int(PeerOperation::PackActiveQuantized) ||
                                  args.operation == int(PeerOperation::ExpertLocalGradientsQuantized) ||
                                  tiled_quant;
         const bool cache_fp8_scales = args.operation == int(PeerOperation::StageFp8InputTiles) && args.params.dim[7];
@@ -42,9 +47,12 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
     deep_gemm::training::run_peer<static_cast<deep_gemm::training::PeerOperation>({}), {}, {}, {}{}>(params);
 }}
 )", args.launch_args.block_dim.x, args.operation, args.operation,
-       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : (tiled_quant || input_tiles) ? args.params.dim[2] : 0,
+       fused_quant || assist || cache_fp8_scales || (args.operation == int(PeerOperation::StageFp8InputTiles) && specialize) ? args.params.dim[1] : 0, assist ? args.params.dim[4] : (expert_batch || tiled_quant || input_tiles) ? args.params.dim[2] : 0,
        args.operation == int(PeerOperation::AssistInputTiles) && warp_rows ? "true" : "false",
-       input_tiles ? fmt::format(", false, {}, {}",args.params.dim[3],args.params.dim[8] ? args.params.dim[8] : 1) :
+       first_flags ? ", false, 0, 1, false, 128, 0, true" :
+       input_tiles ? fmt::format(", false, {}, {}, {}, {}",args.params.dim[3],args.params.dim[8] ? args.params.dim[8] : 1,gradient_input || args.params.dim[9] ? "true" : "false",
+           gradient_input ? (args.params.dim[9] ? args.params.dim[9] : 128) : (args.params.dim[10] ? args.params.dim[10] : 128)) :
+       expert_batch ? fmt::format(", false, {}, 1, false, {}, {}, false, {}",args.params.dim[3],args.params.dim[8] ? args.params.dim[8] : 16,args.params.dim[9],source_ilp) :
        tiled_quant ? fmt::format(", false, {}",args.params.dim[3]) : cache_fp8_scales ? ", true" : "");
     }
     static void launch_impl(const KernelHandle& kernel, const LaunchConfigHandle& config, Args args) {
@@ -54,7 +62,7 @@ __global__ void moe_training_peer_{}(const deep_gemm::training::Params params) {
 
 static void launch_peer(const int operation, const std::vector<torch::Tensor>& tensors,
                         const std::vector<int64_t>& dims, bool compile_only) {
-    DG_HOST_ASSERT(operation >= 0 && operation <= int(PeerOperation::ReturnGemmTiles));
+    DG_HOST_ASSERT((operation >= 0 && operation <= int(PeerOperation::GradientExpertBatch)) || operation==int(PeerOperation::FinalizeEmptyWgrad) || operation==int(PeerOperation::AggregateFirstWgradFlags));
     DG_HOST_ASSERT(!tensors.empty() && tensors.size() <= 12 && dims.size() <= 12);
     DG_HOST_ASSERT(tensors[0].is_cuda());
     const c10::cuda::CUDAGuard guard(tensors[0].device());
@@ -71,6 +79,35 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
     int64_t work = 0, blocks = -1;
     int threads = 256;
     switch (static_cast<PeerOperation>(operation)) {
+        case PeerOperation::PackExpertBatch:
+        case PeerOperation::GradientExpertBatch: {
+            const bool grad=operation==int(PeerOperation::GradientExpertBatch);
+            DG_HOST_ASSERT((dims.size()==8 || dims.size()==9 || dims.size()==10) && tensors.size()==(grad?11:7)+(dims.size()==10?1:0));
+            if(dims.size()>=9)DG_HOST_ASSERT(dims[8]==16 || dims[8]==32 || dims[8]==64 || dims[8]==128);
+            if(dims.size()==10) {
+                DG_HOST_ASSERT(dims[9]==32 || dims[9]==64 || dims[9]==128 || dims[9]==192 || dims[9]==256);
+                const auto& metadata=tensors[grad?11:7];
+                DG_HOST_ASSERT(metadata.scalar_type()==i32 && metadata.dim()==1 && metadata.numel()>=
+                    std::max<int64_t>(128,4*(1+ceil_div(dims[0],dims[9])+tensors[grad?6:4].numel())));
+            }
+            DG_HOST_ASSERT(dims[0]>0 && dims[0]%128==0 && dims[1]>=128 && dims[1]<=8192
+                && dims[1]%128==0 && dims[2]>0 && dims[3]>0 && dims[4]>0 && dims[4]<=64
+                && dims[5]<dims[6] && dims[6]<=tensors[grad?6:4].numel()
+                && dims[7]>0 && dims[7]<=16*get_num_sms() && dims[0]*dims[1]<=INT32_MAX);
+            expect(0,dims[4],i64);expect(grad?3:1,dims[0],i32);
+            expect(grad?5:2,dims[0]*dims[1],bf);expect(grad?7:3,1,i32);
+            DG_HOST_ASSERT(tensors[grad?6:4].dim()==1 && tensors[grad?6:4].scalar_type()==i32);
+            expect(grad?8:5,dims[0]*dims[1],torch::kFloat8_e4m3fn);
+            expect(grad?9:6,dims[0]*(dims[1]/128),torch::kFloat32);
+            if(grad) {
+                expect(1,dims[4],i64);expect(2,dims[4],i64);expect(4,dims[0]*dims[1],bf);
+                expect(10,dims[0]*(dims[1]/128),torch::kFloat32);
+            }
+            DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[grad?5:2].data_ptr())%16==0
+                && reinterpret_cast<uintptr_t>(tensors[grad?8:5].data_ptr())%8==0);
+            blocks=dims[7];break;
+        }
+
         case PeerOperation::ExpertLocalGradientsQuantizedTilesCached:
         case PeerOperation::ExpertLocalGradientsQuantizedTiles:
             schema(11,6);
@@ -249,8 +286,24 @@ static void launch_peer(const int operation, const std::vector<torch::Tensor>& t
             expect(3, dims[1], i32); expect(4, dims[1], i32); expect(5, 1, i32);
             work = dims[0];
             break;
+        case PeerOperation::AggregateFirstWgradFlags:
+            DG_HOST_ASSERT(dims.size()==2 && dims[0]>0 && dims[0]<=512 && dims[1]>0 && dims[1]<=8);
+            DG_HOST_ASSERT(tensors.size()==size_t(2+dims[1]));
+            expect(0,dims[0],i32);expect(1,ceil_div(dims[1],int64_t(2))*dims[0],i32);
+            DG_HOST_ASSERT(!tensors[0].is_alias_of(tensors[1]));
+            for(int part=0;part<dims[1];++part)expect(2+part,dims[0]+1,i32);
+            threads=128;blocks=ceil_div(dims[0],int64_t(threads));break;
+        case PeerOperation::FinalizeEmptyWgrad:
+            schema(2,2);DG_HOST_ASSERT(dims[0]>0 && dims[0]<=512 && dims[1]>0 && dims[1]%4==0);
+            expect(0,dims[0]*dims[1],torch::kFloat32);expect(1,dims[0],i32);
+            DG_HOST_ASSERT(reinterpret_cast<uintptr_t>(tensors[0].data_ptr())%16==0);
+            blocks=std::max<int64_t>(dims[0],(16*get_num_sms()/dims[0])*dims[0]);break;
         case PeerOperation::BuildWorkInfo:
-            schema(4, 3);
+            DG_HOST_ASSERT(dims.size()==3 && (tensors.size()==4 || tensors.size()==6));
+            if(tensors.size()==6) {
+                expect(4,dims[0],i32);expect(5,dims[0],i32);
+                DG_HOST_ASSERT(!tensors[4].is_alias_of(tensors[5]));
+            }
             DG_HOST_ASSERT(dims[0] > 0 && dims[2] > 0 && dims[1] % dims[2] == 0);
             expect(0, dims[0] + 1, i32); expect(1, dims[0], i32);
             expect(2, (dims[1] / dims[2]) * 4, i32); expect(3, 1, i32);
@@ -649,20 +702,23 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
     args.keep_gate_up = keep_gate_up;
     args.input_copy_ilp = input_copy_ilp;
     args.external_input = external_input;
-    DG_HOST_ASSERT(!weight_kn || (!read_peer && !fc1_activation && !pack_input
+    const bool dhidden_producer=dhidden_score_tensors.size()==6;
+    const bool dhidden_local_slice=dhidden_score_tensors.size()==3 && first_n_tile==1 && num_n_tiles==0 && local_input_aiu;
+    DG_HOST_ASSERT(!weight_kn || ((!read_peer && !fc1_activation && !pack_input
                    && !dispatch_cache_n && !pipeline_ready.has_value()
                    && replay_gradient_tensors.empty() && !local_input_aiu && !producer_input_aiu
-                   && !first_n_tile && !num_n_tiles && !staged_return));
+                   && !first_n_tile && !num_n_tiles && !staged_return) || dhidden_producer || dhidden_local_slice));
     args.weight_kn = weight_kn;
     args.fc1_helper_threads = fc1_helper_threads;
     if (fc1_helper_threads) args.params.gemm.shape_m = m;
     if (!dhidden_score_tensors.empty()) {
         const auto& g = dhidden_score_tensors;
-        DG_HOST_ASSERT(g.size() == 3 && replay_gradient_tensors.empty()
-                       && args.activation_backward && interleaved_gate_up && !read_peer && !write_peer
-                       && !pipeline_ready.has_value() && !dispatch_cache_n && !pack_input
-                       && !local_input_aiu && !producer_input_aiu && !first_n_tile
-                       && !num_n_tiles && !staged_return && !fc1_activation);
+        DG_HOST_ASSERT((g.size()==3 || g.size()==6) && replay_gradient_tensors.empty()
+                       && args.activation_backward && interleaved_gate_up && !write_peer
+                       && !pipeline_ready.has_value() && !dispatch_cache_n && !staged_return && !fc1_activation);
+        DG_HOST_ASSERT(dhidden_producer ? (read_peer && pack_input && producer_input_aiu && !local_input_aiu && first_n_tile==0 && num_n_tiles==1)
+                       : (!read_peer && !pack_input && !producer_input_aiu &&
+                          ((!local_input_aiu && !first_n_tile && !num_n_tiles) || dhidden_local_slice)));
         for (const auto& tensor : g)
             DG_HOST_ASSERT(tensor.device() == a.device() && tensor.is_contiguous());
         const uint32_t ntiles = (n + bn - 1) / bn;
@@ -675,6 +731,13 @@ static int peer_gemm(const torch::Tensor& a, const torch::Tensor& weight, const 
         DG_HOST_ASSERT(!a.is_alias_of(g[0]) && !g[2].is_alias_of(g[1]));
         args.dhidden_scores = true;
         args.scores = {g[0].data_ptr(), g[1].data_ptr<float>(), g[2].data_ptr<float>(), ntiles};
+        if(dhidden_producer) {
+            DG_HOST_ASSERT(g[3].scalar_type()==torch::kInt64 && g[3].numel()==ranks);
+            DG_HOST_ASSERT(g[4].scalar_type()==torch::kBFloat16 && g[4].sizes()==a.sizes() && !g[4].is_alias_of(a));
+            DG_HOST_ASSERT(g[5].scalar_type()==torch::kInt32 && g[5].numel()==1);
+            args.scores.score_peers=reinterpret_cast<const uint64_t*>(g[3].data_ptr<int64_t>());
+            args.scores.packed_dy=g[4].data_ptr();args.scores.status=reinterpret_cast<uint32_t*>(g[5].data_ptr<int32_t>());
+        }
     }
     if (!replay_gradient_tensors.empty()) {
         const auto& g = replay_gradient_tensors;

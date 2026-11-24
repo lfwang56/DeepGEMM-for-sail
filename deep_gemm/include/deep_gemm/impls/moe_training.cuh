@@ -572,6 +572,7 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
             // Keep slot accumulation order, sharing each score/address across
             // eight features and issuing aligned 16-byte memory operations.
             for (int slot = 0; slot < p.dim[2]; ++slot) {
+                if (p.ptr[3] && pointer<int64_t>(p, 3)[token * p.dim[2] + slot] < 0) continue;
                 const float score = p.dim[5] ? pointer<float>(p, 1)[source_token * p.dim[2] + slot] : 1.f;
                 const uint4 raw = *reinterpret_cast<const uint4*>(pointer<Bf16>(p, 0) +
                     (token * p.dim[2] + slot) * p.dim[1] + column);
@@ -592,6 +593,7 @@ __device__ __forceinline__ void run(const Params& p, int64_t block_index = -1) {
         if (token >= p.dim[0] || source_token >= p.dim[3]) return;
         float value = 0;
         for (int slot = 0; slot < p.dim[2]; ++slot) {
+            if (p.ptr[3] && pointer<int64_t>(p, 3)[token * p.dim[2] + slot] < 0) continue;
             const float score = p.dim[5] ? pointer<float>(p, 1)[source_token * p.dim[2] + slot] : 1.f;
             value += __bfloat162float(pointer<Bf16>(p, 0)[(token * p.dim[2] + slot) * p.dim[1] + column]) * score;
         }

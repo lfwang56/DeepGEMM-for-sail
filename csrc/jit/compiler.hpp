@@ -147,7 +147,8 @@ public:
         // Each calling thread owns its lookup table; hits need no shared-map mutation.
         // The underlying runtime cache already retains every loaded kernel for its lifetime.
         static thread_local std::map<Key, std::shared_ptr<KernelRuntime>> cache;
-        const auto key = std::make_tuple(this, name, Runtime::compile_key(args));
+        const auto key = std::make_tuple(this, name+"$$training_fp8="+std::to_string(training_fp8_mma_flags(name))
+            +"$$bf16_mma="+bf16_gemm_rs_mma_reuse_flag(name), Runtime::compile_key(args));
         if (const auto it = cache.find(key); it != cache.end())
             return it->second;
 
@@ -156,12 +157,24 @@ public:
         return runtime;
     }
 
+    static bool training_fp8_mma_flags(const std::string& name) {
+        const int enabled=get_env<int>("DG_JIT_FP8_TRAINING_MMA_FLAGS",0);
+        DG_HOST_ASSERT(enabled==0 || enabled==1);
+        const bool eligible=name=="fp8_training_peer_return" || name=="fp8_training_peer_return_wide16"
+            || name.rfind("fp8_training_peer_return_register16",0)==0 || name=="fp8_training_peer_expertbatch";
+        return get_ppu_arch()==AC_PPU0015 && enabled && eligible;
+    }
     static std::string bf16_gemm_rs_mma_reuse_flag(const std::string& name) {
-        return get_ppu_arch() == AC_PPU0015 && name == "bf16_gemm_rs" ? "-ppu-pref-mma-reuse=true" : "";
+        const int enabled=get_env<int>("DG_JIT_BF16_TRAINING_MMA_REUSE",0);
+        DG_HOST_ASSERT(enabled==0 || enabled==1);
+        const bool training=enabled && name.rfind("bf16_peer_",0)==0;
+        return get_ppu_arch() == AC_PPU0015 && (name == "bf16_gemm_rs" || training)
+            ? "-ppu-pref-mma-reuse=true" : "";
     }
 
     std::shared_ptr<KernelRuntime> build(const std::string& name, const std::string& code) const {
         auto kernel_signature = fmt::format("{}$${}$${}$${}", name, signature, flags, code);
+        if(training_fp8_mma_flags(name))kernel_signature+="$$training_fp8_native_mma=1";
         // Include the applied fused BF16 policy so older cubins cannot bypass it.
         if (const auto option = bf16_gemm_rs_mma_reuse_flag(name); !option.empty())
             kernel_signature += "$$" + option;
@@ -305,7 +318,7 @@ public:
             per_kernel_flags = " -Xllvm -ppu-patch-fence-ppu=false -Xllvm -wno-loop-miss-transform"
                                " -Xllvm -ppu-cg-to-kp1=true -Xllvm -ppu-fix-uninit=true";
             const bool is_blockwise_scatter = name.find("fp8_blockwise_mega_moe_scatter") != std::string::npos;
-            const bool use_warp_interleaving =
+            const bool use_warp_interleaving = training_fp8_mma_flags(name) ||
                 (name.find("fp8_grouped_deep_gemm") != std::string::npos) ||
                 (name.find("fp8_deep_gemm") != std::string::npos) ||
                 (name == "fp8_blockwise_gemm_rs") ||
@@ -429,7 +442,7 @@ public:
                 });
 
                 const bool is_blockwise_scatter = name.find("fp8_blockwise_mega_moe_scatter") != std::string::npos;
-                const bool use_warp_interleaving =
+                const bool use_warp_interleaving = training_fp8_mma_flags(name) ||
                     (name.find("fp8_grouped_deep_gemm") != std::string::npos) ||
                     (name.find("fp8_deep_gemm") != std::string::npos) ||
                     (name == "fp8_blockwise_gemm_rs") ||

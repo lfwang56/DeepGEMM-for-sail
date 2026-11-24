@@ -33,6 +33,11 @@ enum class PeerOperation : int {
     ExpertLocalGradientsQuantizedTilesCached,
     PackQuantizedInputTiles,
     ReturnGemmTiles,
+    GradientQuantizedInputTiles,
+    PackExpertBatch,
+    GradientExpertBatch,
+    FinalizeEmptyWgrad=43,
+    AggregateFirstWgradFlags=44,
 };
 
 struct PeerGemmParams {
@@ -46,6 +51,13 @@ struct PeerGemmParams {
     bool pack_input;
     void* activation_gate_up = nullptr;
     void* dispatch_scratch = nullptr;
+};
+
+// Optional FP8 gradient producer state; existing GPU argument structs stay unchanged.
+struct PeerFp8ProducerGradient {
+    const uint64_t* score_peers = nullptr;
+    const void* unweighted_y = nullptr;
+    float* score_partials = nullptr;
 };
 
 // Separate launch argument preserves the existing PeerGemmParams ABI.
@@ -78,6 +90,9 @@ struct PeerDHiddenScores {
     const float* row_scores = nullptr;
     float* score_partials = nullptr;
     uint32_t num_n_tiles = 0;
+    const uint64_t* score_peers = nullptr;
+    void* packed_dy = nullptr;
+    uint32_t* status = nullptr;
 };
 
 }  // namespace deep_gemm::training

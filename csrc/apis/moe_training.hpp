@@ -183,7 +183,9 @@ static void launch(const int operation, const std::vector<torch::Tensor>& tensor
             break;
         }
         case Operation::Combine:
-            schema(3, 6);
+            DG_HOST_ASSERT(tensors.size() == 3 || tensors.size() == 4);
+            schema(tensors.size(), 6);
+            if (tensors.size() == 4) expect(3, dims[0] * dims[2], i64);
             DG_HOST_ASSERT(dims[1] > 0 && dims[2] > 0 && dims[5] <= 1);
             expect(0, dims[0] * dims[1] * dims[2], bf);
             expect(1, dims[3] * dims[2], fp); expect(2, dims[3] * dims[1], bf);
